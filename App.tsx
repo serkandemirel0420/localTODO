@@ -59,6 +59,11 @@ type SelectedFilters = Record<FilterKey, string[]>;
 
 type MenuRow =
   | {
+      id: string;
+      label: string;
+      type: 'clearFilters';
+    }
+  | {
       count?: number;
       id: string;
       label: string;
@@ -561,6 +566,11 @@ export default function App() {
         menuMode: 'filters',
         type: 'menu',
       },
+      {
+        id: 'main-clear-filters',
+        label: 'Clear filters',
+        type: 'clearFilters',
+      },
     ];
   }, [activeFilterCount, menuMode, selectedFilters, visibleListMenuItems]);
 
@@ -583,6 +593,15 @@ export default function App() {
     setSelectedFilters((current) => {
       const nextValues = current[filterKey].filter((item) => item !== value);
       return { ...current, [filterKey]: nextValues };
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setSelectedFilters({
+      date: [],
+      list: [],
+      priority: [],
     });
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
@@ -663,6 +682,27 @@ export default function App() {
                       overScrollMode="never"
                       renderItem={({ item }) => {
                         if ('type' in item) {
+                          if (item.type === 'clearFilters') {
+                            return (
+                              <Pressable
+                                accessibilityRole="button"
+                                onPress={clearFilters}
+                                style={({ pressed }) => [
+                                  styles.listMenuRow,
+                                  styles.clearFiltersRow,
+                                  pressed && styles.listMenuRowPressed,
+                                ]}
+                              >
+                                <View style={styles.listMenuRowTextWrap}>
+                                  <Text style={styles.clearFiltersText}>{item.label}</Text>
+                                </View>
+                                {activeFilterCount ? (
+                                  <Text style={styles.listMenuChildCount}>{activeFilterCount}</Text>
+                                ) : null}
+                              </Pressable>
+                            );
+                          }
+
                           if (item.type === 'filter') {
                             return (
                               <Pressable
@@ -991,6 +1031,16 @@ const styles = StyleSheet.create({
   },
   listMenuRowSelected: {
     backgroundColor: '#EDF4F0',
+  },
+  clearFiltersRow: {
+    marginTop: 2,
+  },
+  clearFiltersText: {
+    color: '#8F4D46',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    letterSpacing: 0.1,
   },
   filterTypeText: {
     color: '#A79F96',

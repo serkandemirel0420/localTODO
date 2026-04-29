@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Local Todo",
+    "slug": "local-todo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#F7F4EF"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.localtodo.app"
+    },
+    "android": {
+      "package": "com.localtodo.app",
+      "edgeToEdgeEnabled": true
+    }
+  }
+}

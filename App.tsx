@@ -17,6 +17,13 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import {
+  GestureHandlerRootView,
+  PanGestureHandler,
+  State,
+  type PanGestureHandlerGestureEvent,
+  type PanGestureHandlerStateChangeEvent,
+} from 'react-native-gesture-handler';
 
 import { createTodoSearchIndex, searchTodos } from './src/search/todoSearch';
 import { localTodoStore } from './src/storage/todoStore';
@@ -42,10 +49,39 @@ type VisibleListMenuItem = {
   path: string;
 };
 
+type BottomMenuItem = MenuRow | VisibleListMenuItem;
+
+type FilterKey = 'list' | 'date' | 'priority';
+
+type MenuMode = 'date' | 'filters' | 'lists' | 'main' | 'priority';
+
+type SelectedFilters = Record<FilterKey, string[]>;
+
+type MenuRow =
+  | {
+      count?: number;
+      id: string;
+      label: string;
+      menuMode: MenuMode;
+      type: 'menu';
+    }
+  | {
+      filterKey: FilterKey;
+      id: string;
+      label: string;
+      type: 'filter';
+    }
+  | {
+      filterKey: FilterKey;
+      id: string;
+      label: string;
+      type: 'value';
+    };
+
 const SWIPE_LIMIT = 112;
 const SWIPE_TRIGGER = 74;
-const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 14 : 18;
-const HORIZONTAL_PADDING = 18;
+const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 16 : 20;
+const HORIZONTAL_PADDING = 20;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
@@ -53,7 +89,7 @@ const PULL_MAX = 178;
 const PULL_RELEASE = 34;
 const PULL_STAGES = [
   { label: 'Focus search', threshold: 38 },
-  { label: 'Lists', threshold: 88 },
+  { label: 'Menu', threshold: 88 },
   { label: 'Clear text', threshold: 136 },
 ] as const;
 const LIST_MENU_TREE: ListMenuNode[] = [
@@ -79,6 +115,13 @@ const LIST_MENU_TREE: ListMenuNode[] = [
   { label: 'Settings' },
 ];
 const LIST_MENU_ROW_HEIGHT = 52;
+const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
+const DATE_MENU_ITEMS = ['Today', 'Tomorrow', 'This week', 'Next week', 'Someday'];
+const EMPTY_SELECTED_FILTERS: SelectedFilters = {
+  date: [],
+  list: [],
+  priority: [],
+};
 const INITIAL_TODOS = Array.from({ length: 50 }, (_, index) => ({
   id: `seed-${index + 1}`,
   text: `Todo item ${index + 1}`,
@@ -175,10 +218,12 @@ function SwipeTodoItem({ item, onDelete, onToggle }: SwipeTodoItemProps) {
     <View style={styles.swipeShell}>
       <View style={styles.actionClip}>
         <View style={[styles.actionSide, styles.actionLeft]}>
+          <Text style={styles.actionIcon}>{item.done ? '↩' : '✓'}</Text>
           <Text style={styles.actionText}>{item.done ? 'Active' : 'Done'}</Text>
         </View>
         <View style={[styles.actionSide, styles.actionRight]}>
           <Text style={styles.actionText}>Delete</Text>
+          <Text style={styles.actionIcon}>✕</Text>
         </View>
       </View>
 
@@ -190,7 +235,9 @@ function SwipeTodoItem({ item, onDelete, onToggle }: SwipeTodoItemProps) {
           { transform: [{ translateX }] },
         ]}
       >
-        <View style={[styles.statusDot, item.done && styles.statusDotDone]} />
+        <View style={[styles.checkbox, item.done && styles.checkboxDone]}>
+          {item.done && <Text style={styles.checkmark}>✓</Text>}
+        </View>
         <Text
           numberOfLines={3}
           style={[styles.todoText, item.done && styles.todoTextDone]}
@@ -208,7 +255,11 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [pullStage, setPullStage] = useState(0);
-  const [listMenuOpen, setListMenuOpen] = useState(false);
+  const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
+  const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
+    EMPTY_SELECTED_FILTERS,
+  );
+  const [isListAtTop, setIsListAtTop] = useState(true);
   const [expandedListMenuPaths, setExpandedListMenuPaths] = useState<Set<string>>(
     () => new Set(),
   );
@@ -217,6 +268,7 @@ export default function App() {
   const selectedPullStage = useRef(0);
   const hapticPullStage = useRef(0);
   const pullDistanceRef = useRef(0);
+  const listMenuOpen = menuMode !== null;
 
   useEffect(() => {
     let alive = true;
@@ -348,7 +400,7 @@ export default function App() {
 
       if (stage === 2) {
         Keyboard.dismiss();
-        setListMenuOpen(true);
+        setMenuMode('main');
         return;
       }
 
@@ -360,40 +412,77 @@ export default function App() {
     [],
   );
 
-  const pullResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponderCapture: () =>
-          !listMenuOpen && scrollOffsetY.current <= 0,
-        onMoveShouldSetPanResponder: (_, gesture) =>
-          !listMenuOpen &&
-          scrollOffsetY.current <= 0 &&
-          gesture.dy > 4 &&
-          Math.abs(gesture.dy) > Math.abs(gesture.dx),
-        onPanResponderMove: (_, gesture) => {
-          if (!listMenuOpen && scrollOffsetY.current <= 0 && gesture.dy > 0) {
-            updatePull(gesture.dy);
-          }
-        },
-        onPanResponderRelease: () => {
-          const selectedStage = selectedPullStage.current;
+  const releasePull = useCallback(() => {
+    const selectedStage = selectedPullStage.current;
 
-          if (pullDistanceRef.current > PULL_RELEASE && selectedStage > 0) {
-            runPullAction(selectedStage);
-          }
+    if (pullDistanceRef.current > PULL_RELEASE && selectedStage > 0) {
+      runPullAction(selectedStage);
+    }
 
-          resetPull();
-        },
-        onPanResponderTerminate: resetPull,
-      }),
-    [listMenuOpen, resetPull, runPullAction, updatePull],
+    resetPull();
+  }, [resetPull, runPullAction]);
+
+  const handleTopPullGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      const { translationX, translationY } = event.nativeEvent;
+
+      if (
+        listMenuOpen ||
+        !isListAtTop ||
+        translationY <= 0 ||
+        Math.abs(translationY) <= Math.abs(translationX)
+      ) {
+        return;
+      }
+
+      updatePull(translationY);
+    },
+    [isListAtTop, listMenuOpen, updatePull],
+  );
+
+  const handleTopPullStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state } = event.nativeEvent;
+
+      if (
+        state === State.END ||
+        state === State.CANCELLED ||
+        state === State.FAILED
+      ) {
+        releasePull();
+      }
+    },
+    [releasePull],
+  );
+
+  const handleMenuBackStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if (
+        state === State.END &&
+        menuMode !== null &&
+        menuMode !== 'main' &&
+        (translationX > 64 || velocityX > 650)
+      ) {
+        setMenuMode('main');
+        Haptics.selectionAsync().catch(() => undefined);
+      }
+    },
+    [menuMode],
   );
 
   const handleListScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      scrollOffsetY.current = Math.max(0, event.nativeEvent.contentOffset.y);
+      const offsetY = event.nativeEvent.contentOffset.y;
+      scrollOffsetY.current = Math.max(0, offsetY);
+      setIsListAtTop(offsetY <= 1);
+
+      if (!listMenuOpen && offsetY < 0) {
+        updatePull(Math.abs(offsetY));
+      }
     },
-    [],
+    [listMenuOpen, updatePull],
   );
 
   const pullMenuOpacity = Math.min(1, pullDistance / PULL_STAGES[0].threshold);
@@ -401,22 +490,114 @@ export default function App() {
   const pullMenuScale = 0.94 + Math.min(0.06, pullDistance / 900);
   const listTranslateY = Math.min(116, pullDistance * 0.62);
   const hasSearchText = query.trim().length > 0;
-  const pullHandlers = listMenuOpen ? {} : pullResponder.panHandlers;
   const sortedListMenuTree = useMemo(() => sortListMenuTree(LIST_MENU_TREE), []);
   const visibleListMenuItems = useMemo(
     () => flattenListMenuItems(sortedListMenuTree, expandedListMenuPaths),
     [expandedListMenuPaths, sortedListMenuTree],
   );
+  const activeFilterCount = Object.values(selectedFilters).reduce(
+    (count, values) => count + values.length,
+    0,
+  );
+  const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
+    if (menuMode === 'lists') {
+      return visibleListMenuItems;
+    }
+
+    if (menuMode === 'priority') {
+      return PRIORITY_MENU_ITEMS.map((label) => ({
+        filterKey: 'priority',
+        id: `priority-${label}`,
+        label,
+        type: 'value',
+      }));
+    }
+
+    if (menuMode === 'date') {
+      return DATE_MENU_ITEMS.map((label) => ({
+        filterKey: 'date',
+        id: `date-${label}`,
+        label,
+        type: 'value',
+      }));
+    }
+
+    if (menuMode === 'filters') {
+      return (Object.entries(selectedFilters) as Array<[FilterKey, string[]]>)
+        .flatMap(([filterKey, values]) => values.map((label) => ({
+          filterKey,
+          id: `filter-${filterKey}-${label}`,
+          label,
+          type: 'filter',
+        })));
+    }
+
+    return [
+      {
+        count: selectedFilters.list.length || undefined,
+        id: 'main-lists',
+        label: 'Lists',
+        menuMode: 'lists',
+        type: 'menu',
+      },
+      {
+        count: selectedFilters.priority.length || undefined,
+        id: 'main-priority',
+        label: 'Priority',
+        menuMode: 'priority',
+        type: 'menu',
+      },
+      {
+        count: selectedFilters.date.length || undefined,
+        id: 'main-date',
+        label: 'Date',
+        menuMode: 'date',
+        type: 'menu',
+      },
+      {
+        count: activeFilterCount || undefined,
+        id: 'main-filters',
+        label: 'Filters',
+        menuMode: 'filters',
+        type: 'menu',
+      },
+    ];
+  }, [activeFilterCount, menuMode, selectedFilters, visibleListMenuItems]);
+
+  const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
+    setSelectedFilters((current) => {
+      const currentValues = current[filterKey];
+      const hasValue = currentValues.includes(value);
+
+      return {
+        ...current,
+        [filterKey]: hasValue
+          ? currentValues.filter((item) => item !== value)
+          : [...currentValues, value],
+      };
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
+    setSelectedFilters((current) => {
+      const nextValues = current[filterKey].filter((item) => item !== value);
+      return { ...current, [filterKey]: nextValues };
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.screen}
-      >
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.screen}
+        >
         <View style={styles.topBar}>
           <View style={styles.searchBox}>
+            <Text style={styles.searchIcon}>⌕</Text>
             <TextInput
               ref={searchInputRef}
               autoCapitalize="sentences"
@@ -424,8 +605,8 @@ export default function App() {
               clearButtonMode="while-editing"
               onChangeText={setQuery}
               onSubmitEditing={addTodo}
-              placeholder="Search or add a todo"
-              placeholderTextColor="#989188"
+              placeholder="Search or add a todo…"
+              placeholderTextColor="#A9A19A"
               returnKeyType="done"
               selectionColor="#2F6F62"
               style={styles.searchInput}
@@ -445,90 +626,169 @@ export default function App() {
           </View>
         </View>
 
-        <View style={styles.listShell} {...pullHandlers}>
+        <View style={styles.listShell}>
           {listMenuOpen ? (
             <>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Close lists menu"
-                onPress={() => setListMenuOpen(false)}
+                onPress={() => setMenuMode(null)}
                 style={styles.listMenuBackdrop}
               />
-              <View style={styles.listMenu}>
-                <FlatList
-                  data={visibleListMenuItems}
-                  decelerationRate="fast"
-                  directionalLockEnabled
-                  getItemLayout={(_, index) => ({
-                    length: LIST_MENU_ROW_HEIGHT,
-                    offset: LIST_MENU_ROW_HEIGHT * index,
-                    index,
-                  })}
-                  keyExtractor={(item) => item.id}
-                  keyboardShouldPersistTaps="handled"
-                  nestedScrollEnabled
-                  overScrollMode="never"
-                  renderItem={({ item }) => {
-                    const isExpanded = expandedListMenuPaths.has(item.path);
-                    const toggleSubmenu = () => {
-                      setExpandedListMenuPaths((current) => {
-                        const next = new Set(current);
-                        if (next.has(item.path)) {
-                          next.delete(item.path);
-                        } else {
-                          next.add(item.path);
+              <View pointerEvents="box-none" style={styles.listMenuLayer}>
+                <PanGestureHandler
+                  activeOffsetX={32}
+                  enabled={menuMode !== null && menuMode !== 'main'}
+                  failOffsetY={[-18, 18]}
+                  onHandlerStateChange={handleMenuBackStateChange}
+                >
+                  <View collapsable={false} style={styles.listMenu}>
+                    <FlatList
+                      data={bottomMenuItems}
+                      decelerationRate="fast"
+                      directionalLockEnabled
+                      getItemLayout={(_, index) => ({
+                        length: LIST_MENU_ROW_HEIGHT,
+                        offset: LIST_MENU_ROW_HEIGHT * index,
+                        index,
+                      })}
+                      keyExtractor={(item) => item.id}
+                      keyboardShouldPersistTaps="handled"
+                      ListEmptyComponent={
+                        <View style={styles.menuEmptyState}>
+                          <Text style={styles.menuEmptyText}>No active filters</Text>
+                        </View>
+                      }
+                      nestedScrollEnabled
+                      overScrollMode="never"
+                      renderItem={({ item }) => {
+                        if ('type' in item) {
+                          if (item.type === 'filter') {
+                            return (
+                              <Pressable
+                                accessibilityRole="button"
+                                onPress={() => removeFilter(item.filterKey, item.label)}
+                                style={({ pressed }) => [
+                                  styles.listMenuRow,
+                                  pressed && styles.listMenuRowPressed,
+                                ]}
+                              >
+                                <View style={styles.listMenuRowTextWrap}>
+                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                </View>
+                                <Text style={styles.filterTypeText}>{item.filterKey}</Text>
+                              </Pressable>
+                            );
+                          }
+
+                          if (item.type === 'menu') {
+                            return (
+                              <Pressable
+                                accessibilityRole="button"
+                                onPress={() => setMenuMode(item.menuMode)}
+                                style={({ pressed }) => [
+                                  styles.listMenuRow,
+                                  pressed && styles.listMenuRowPressed,
+                                ]}
+                              >
+                                <View style={styles.listMenuRowTextWrap}>
+                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                </View>
+                                <View style={styles.listMenuSubmenuZone}>
+                                  {item.count ? (
+                                    <Text style={styles.listMenuChildCount}>{item.count}</Text>
+                                  ) : null}
+                                  <Text style={styles.listMenuArrow}>›</Text>
+                                </View>
+                              </Pressable>
+                            );
+                          }
+
+                          const isSelected = selectedFilters[item.filterKey].includes(item.label);
+
+                          return (
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => toggleFilterValue(item.filterKey, item.label)}
+                              style={({ pressed }) => [
+                                styles.listMenuRow,
+                                isSelected && styles.listMenuRowSelected,
+                                pressed && styles.listMenuRowPressed,
+                              ]}
+                            >
+                              <View style={styles.listMenuRowTextWrap}>
+                                <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                              </View>
+                              {isSelected ? <Text style={styles.listMenuCheck}>✓</Text> : null}
+                            </Pressable>
+                          );
                         }
 
-                        return next;
-                      });
-                      Haptics.selectionAsync().catch(() => undefined);
-                    };
+                        const isExpanded = expandedListMenuPaths.has(item.path);
+                        const isSelected = selectedFilters.list.includes(item.label);
+                        const toggleSubmenu = () => {
+                          setExpandedListMenuPaths((current) => {
+                            const next = new Set(current);
+                            if (next.has(item.path)) {
+                              next.delete(item.path);
+                            } else {
+                              next.add(item.path);
+                            }
 
-                    return (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={() => {
-                          setQuery(item.label);
-                          setListMenuOpen(false);
-                          requestAnimationFrame(() => searchInputRef.current?.focus());
-                        }}
-                        style={({ pressed }) => [
-                          styles.listMenuRow,
-                          pressed && !item.hasChildren && styles.listMenuRowPressed,
-                        ]}
-                      >
-                        <View
-                          style={[
-                            styles.listMenuRowTextWrap,
-                            item.depth > 0 && { marginLeft: item.depth * 18 },
-                          ]}
-                        >
-                          <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-                        </View>
-                        {item.hasChildren ? (
+                            return next;
+                          });
+                          Haptics.selectionAsync().catch(() => undefined);
+                        };
+
+                        return (
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel={`${isExpanded ? 'Collapse' : 'Expand'} ${item.label}`}
-                            hitSlop={{ top: 8, right: 4, bottom: 8, left: 0 }}
-                            onPress={toggleSubmenu}
+                            onPress={() => {
+                              toggleFilterValue('list', item.label);
+                            }}
                             style={({ pressed }) => [
-                              styles.listMenuSubmenuZone,
-                              pressed && styles.listMenuArrowButtonPressed,
+                              styles.listMenuRow,
+                              isSelected && styles.listMenuRowSelected,
+                              pressed && !item.hasChildren && styles.listMenuRowPressed,
                             ]}
                           >
-                            <Text style={styles.listMenuChildCount}>{item.childCount}</Text>
-                            <Text style={styles.listMenuArrow}>
-                              {isExpanded ? 'v' : '>'}
-                            </Text>
+                            <View
+                              style={[
+                                styles.listMenuRowTextWrap,
+                                item.depth > 0 && { marginLeft: item.depth * 18 },
+                              ]}
+                            >
+                              <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                            </View>
+                            {item.hasChildren ? (
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`${isExpanded ? 'Collapse' : 'Expand'} ${item.label}`}
+                                hitSlop={{ top: 8, right: 4, bottom: 8, left: 0 }}
+                                onPress={toggleSubmenu}
+                                style={({ pressed }) => [
+                                  styles.listMenuSubmenuZone,
+                                  pressed && styles.listMenuArrowButtonPressed,
+                                ]}
+                              >
+                                {isSelected ? <Text style={styles.listMenuInlineCheck}>✓</Text> : null}
+                                <Text style={styles.listMenuChildCount}>{item.childCount}</Text>
+                                <Text style={[styles.listMenuArrow, isExpanded && styles.listMenuArrowExpanded]}>
+                                  ›
+                                </Text>
+                              </Pressable>
+                            ) : isSelected ? (
+                              <Text style={styles.listMenuCheck}>✓</Text>
+                            ) : null}
                           </Pressable>
-                        ) : null}
-                      </Pressable>
-                    );
-                  }}
-                  showsVerticalScrollIndicator={false}
-                  snapToAlignment="start"
-                  snapToInterval={LIST_MENU_ROW_HEIGHT}
-                />
+                        );
+                      }}
+                      showsVerticalScrollIndicator={false}
+                      snapToAlignment="start"
+                      snapToInterval={LIST_MENU_ROW_HEIGHT}
+                    />
+                  </View>
+                </PanGestureHandler>
               </View>
             </>
           ) : null}
@@ -573,7 +833,7 @@ export default function App() {
                     style={[
                       styles.pullStageMark,
                       isActive && styles.pullStageMarkActive,
-                      isDisabled && styles.pullStageTextDisabled,
+                      isDisabled && styles.pullStageMarkDisabled,
                     ]}
                   >
                     {stageNumber === 2 ? '>' : stageNumber}
@@ -583,8 +843,20 @@ export default function App() {
             })}
           </Animated.View>
 
-          <View style={{ flex: 1, transform: [{ translateY: listTranslateY }] }}>
+          <PanGestureHandler
+            activeOffsetY={8}
+            enabled={isListAtTop && !listMenuOpen}
+            failOffsetX={[-24, 24]}
+            onGestureEvent={handleTopPullGesture}
+            onHandlerStateChange={handleTopPullStateChange}
+          >
+          <Animated.View
+            collapsable={false}
+            style={[styles.todoListFrame, { transform: [{ translateY: listTranslateY }] }]}
+          >
             <FlatList
+              alwaysBounceVertical
+              bounces
               contentContainerStyle={[
                 styles.listContent,
                 filteredTodos.length === 0 && styles.emptyListContent,
@@ -595,6 +867,9 @@ export default function App() {
               keyExtractor={(item) => item.id}
               ListEmptyComponent={
                 <View style={styles.emptyState}>
+                  <Text style={styles.emptyIcon}>
+                    {query.trim() ? '⌕' : '✎'}
+                  </Text>
                   <Text style={styles.emptyTitle}>
                     {query.trim() ? 'No matching items' : 'No items yet'}
                   </Text>
@@ -606,133 +881,194 @@ export default function App() {
                 </View>
               }
               onScroll={handleListScroll}
+              onScrollEndDrag={releasePull}
               renderItem={({ item }) => (
                 <SwipeTodoItem item={item} onDelete={deleteTodo} onToggle={toggleTodo} />
               )}
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
             />
-          </View>
+          </Animated.View>
+          </PanGestureHandler>
         </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: '#F7F4EF',
+    backgroundColor: '#F8F6F2',
   },
   screen: {
     flex: 1,
-    backgroundColor: '#F7F4EF',
+    backgroundColor: '#F8F6F2',
   },
   topBar: {
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingTop: TOP_SAFE_GAP,
-    paddingBottom: 14,
+    paddingBottom: 16,
   },
   searchBox: {
-    minHeight: 56,
-    borderRadius: 16,
+    minHeight: 52,
+    borderRadius: 14,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#ECE6DE',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
     alignItems: 'center',
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    shadowColor: '#4F463B',
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 3,
+    paddingHorizontal: 14,
+    shadowColor: '#3D3428',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
+  searchIcon: {
+    fontSize: 18,
+    color: '#B5ADA5',
+    marginRight: 10,
   },
   searchInput: {
     flex: 1,
-    color: '#24211E',
-    fontSize: 16,
+    color: '#1E1B18',
+    fontSize: 15,
     fontWeight: FONT_REGULAR,
-    lineHeight: 22,
-    paddingVertical: 12,
+    lineHeight: 20,
+    paddingVertical: 14,
+    letterSpacing: 0.1,
   },
   listShell: {
+    flex: 1,
+  },
+  todoListFrame: {
     flex: 1,
   },
   listMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 19,
+    backgroundColor: 'rgba(0,0,0,0.04)',
   },
-  listMenu: {
+  listMenuLayer: {
     position: 'absolute',
-    bottom: 18,
+    bottom: 24,
     left: HORIZONTAL_PADDING,
     right: HORIZONTAL_PADDING,
     zIndex: 20,
-    height: 260,
-    borderRadius: 16,
+    elevation: 7,
+  },
+  listMenu: {
+    height: 280,
+    borderRadius: 18,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EAE2D8',
-    paddingHorizontal: 6,
-    paddingVertical: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4DDD4',
+    paddingHorizontal: 8,
+    paddingVertical: 10,
     shadowColor: '#000000',
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 14 },
     elevation: 6,
   },
   listMenuRow: {
     height: LIST_MENU_ROW_HEIGHT,
-    borderRadius: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0E9E0',
+    borderRadius: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F2EBE3',
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
   },
   listMenuRowPressed: {
-    backgroundColor: '#F7F4EF',
+    backgroundColor: '#F5F2ED',
+  },
+  listMenuRowSelected: {
+    backgroundColor: '#EDF4F0',
+  },
+  filterTypeText: {
+    color: '#A79F96',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    letterSpacing: 0.1,
+    textTransform: 'capitalize',
+  },
+  menuEmptyState: {
+    height: LIST_MENU_ROW_HEIGHT * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuEmptyText: {
+    color: '#8F877F',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
   },
   listMenuRowTextWrap: {
     flex: 1,
     minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   listMenuRowTitle: {
-    color: '#2E2924',
+    color: '#2A2520',
     fontSize: 15,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_REGULAR,
     lineHeight: 20,
-    letterSpacing: 0,
+    letterSpacing: 0.1,
   },
   listMenuArrow: {
-    color: '#8C8378',
+    color: '#9B9289',
+    fontSize: 20,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+  },
+  listMenuCheck: {
+    color: '#1C5A4E',
     fontSize: 16,
     fontWeight: FONT_MEDIUM,
     lineHeight: 20,
-    letterSpacing: 0,
+    marginLeft: 12,
+  },
+  listMenuInlineCheck: {
+    color: '#1C5A4E',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    marginRight: 12,
+  },
+  listMenuArrowExpanded: {
+    transform: [{ rotate: '90deg' }],
   },
   listMenuSubmenuZone: {
     width: '30%',
-    minWidth: 78,
+    minWidth: 86,
     height: 36,
     borderRadius: 10,
     alignItems: 'center',
     flexDirection: 'row',
-    justifyContent: 'center',
-    marginLeft: 8,
+    justifyContent: 'flex-end',
+    marginLeft: 10,
+    paddingRight: 2,
   },
   listMenuArrowButtonPressed: {
-    backgroundColor: '#EEF5F1',
+    backgroundColor: '#EDF4F0',
   },
   listMenuChildCount: {
-    color: '#A79F96',
+    color: '#B5ADA5',
     fontSize: 12,
     fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    letterSpacing: 0,
-    marginRight: 8,
+    lineHeight: 16,
+    letterSpacing: 0.2,
+    marginRight: 10,
   },
   pullMenu: {
     position: 'absolute',
@@ -741,176 +1077,207 @@ const styles = StyleSheet.create({
     right: HORIZONTAL_PADDING,
     zIndex: 10,
     minHeight: 140,
-    borderRadius: 14,
+    borderRadius: 16,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EAE2D8',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4DDD4',
     gap: 4,
-    padding: 6,
+    padding: 8,
     shadowColor: '#000000',
-    shadowOpacity: 0.1,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
     elevation: 5,
   },
   pullStage: {
-    minHeight: 38,
+    minHeight: 40,
     borderRadius: 10,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
   },
   pullStageActive: {
-    backgroundColor: '#EEF5F1',
+    backgroundColor: '#EDF4F0',
   },
   pullStageDisabled: {
-    opacity: 0.55,
+    opacity: 0.45,
   },
   pullStageText: {
-    color: '#6F675E',
+    color: '#706860',
     fontSize: 13,
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
-    letterSpacing: 0,
+    letterSpacing: 0.2,
   },
   pullStageTextActive: {
-    color: '#1F5E52',
+    color: '#1C5A4E',
   },
   pullStageTextDisabled: {
-    color: '#A79F96',
+    color: '#B5ADA5',
   },
   pullStageMark: {
-    color: '#B1A89D',
+    color: '#C4BCB3',
     fontSize: 12,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_SEMIBOLD,
     lineHeight: 18,
-    letterSpacing: 0,
+    letterSpacing: 0.2,
   },
   pullStageMarkActive: {
     color: '#2F6F62',
   },
+  pullStageMarkDisabled: {
+    color: '#C4BCB3',
+  },
   addButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#2F6F62',
-    marginLeft: 8,
+    marginLeft: 10,
   },
   addButtonPressed: {
-    opacity: 0.72,
+    opacity: 0.7,
+    transform: [{ scale: 0.95 }],
   },
   addButtonText: {
     color: '#FFFFFF',
-    fontSize: 24,
-    lineHeight: 28,
-    marginTop: -2,
+    fontSize: 22,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 24,
   },
   listContent: {
     paddingHorizontal: HORIZONTAL_PADDING,
-    paddingBottom: 96,
-    gap: 10,
+    paddingBottom: 100,
+    paddingTop: 4,
+    gap: 8,
   },
   emptyListContent: {
     flexGrow: 1,
     justifyContent: 'center',
   },
   swipeShell: {
-    minHeight: 64,
-    borderRadius: 16,
+    minHeight: 60,
+    borderRadius: 14,
     backgroundColor: 'transparent',
   },
   actionClip: {
     position: 'absolute',
-    top: 2,
-    right: 2,
-    bottom: 2,
-    left: 2,
-    borderRadius: 14,
+    top: 1,
+    right: 1,
+    bottom: 1,
+    left: 1,
+    borderRadius: 13,
     overflow: 'hidden',
     backgroundColor: '#C95449',
   },
   actionSide: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    paddingHorizontal: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    gap: 6,
   },
   actionLeft: {
-    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
     backgroundColor: '#2F6F62',
   },
   actionRight: {
-    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
     backgroundColor: '#C95449',
+  },
+  actionIcon: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 14,
+    lineHeight: 18,
   },
   actionText: {
     color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    letterSpacing: 0,
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 16,
+    letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
   todoRow: {
-    minHeight: 68,
-    borderRadius: 16,
+    minHeight: 60,
+    borderRadius: 14,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EEE7DE',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
     alignItems: 'center',
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    shadowColor: '#544A3F',
-    shadowOpacity: 0.06,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 2,
+    paddingVertical: 16,
+    shadowColor: '#3D3428',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1,
   },
   todoRowDone: {
-    backgroundColor: '#FBFAF7',
+    backgroundColor: '#FAF9F6',
+    borderColor: '#EEEAE4',
   },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#D8CFC3',
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: '#D4CCC2',
     marginRight: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FAF8F5',
   },
-  statusDotDone: {
+  checkboxDone: {
     backgroundColor: '#2F6F62',
+    borderColor: '#2F6F62',
+  },
+  checkmark: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 14,
+    marginTop: 1,
   },
   todoText: {
     flex: 1,
-    color: '#24211E',
-    fontSize: 16,
+    color: '#1E1B18',
+    fontSize: 15,
     fontWeight: FONT_REGULAR,
     lineHeight: 22,
-    letterSpacing: 0,
+    letterSpacing: 0.1,
   },
   todoTextDone: {
-    color: '#948D84',
+    color: '#A9A19A',
     textDecorationLine: 'line-through',
+    textDecorationColor: '#C4BCB3',
   },
   emptyState: {
     alignItems: 'center',
-    paddingHorizontal: 28,
+    paddingHorizontal: 32,
+    gap: 6,
   },
-  emptyTitle: {
-    color: '#36312D',
-    fontSize: 18,
-    fontWeight: FONT_SEMIBOLD,
-    letterSpacing: 0,
+  emptyIcon: {
+    fontSize: 32,
+    color: '#C4BCB3',
     marginBottom: 8,
   },
+  emptyTitle: {
+    color: '#3A3530',
+    fontSize: 17,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: -0.2,
+  },
   emptyText: {
-    color: '#827A72',
+    color: '#8C847C',
     fontSize: 14,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
-    letterSpacing: 0,
+    letterSpacing: 0.1,
     textAlign: 'center',
   },
 });

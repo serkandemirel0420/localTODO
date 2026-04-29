@@ -6,13 +6,28 @@ A minimal native React Native todo app built with Expo.
 
 ```sh
 make install
-make ios
+make start
 ```
 
-or:
+Scan the QR code with Expo Go while your phone and computer are on the same
+Wi-Fi network.
+
+If Expo Go still shows an SDK compatibility error after package changes:
 
 ```sh
-make android
+make start-clear
+```
+
+For simulator-only local development:
+
+```sh
+make start-local
+```
+
+For a physical phone on a different network:
+
+```sh
+make start-tunnel
 ```
 
 The default Metro port is `8083`. Override it with `make start PORT=8090`.

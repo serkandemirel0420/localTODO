@@ -2,6 +2,7 @@ import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  BackHandler,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -92,6 +93,7 @@ const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
 const PULL_MAX = 178;
 const PULL_RELEASE = 34;
+const EDGE_BACK_WIDTH = 28;
 const PULL_STAGES = [
   { label: 'Focus search', threshold: 38 },
   { label: 'Menu', threshold: 88 },
@@ -274,6 +276,7 @@ export default function App() {
   const hapticPullStage = useRef(0);
   const pullDistanceRef = useRef(0);
   const listMenuOpen = menuMode !== null;
+  const submenuOpen = menuMode !== null && menuMode !== 'main';
 
   useEffect(() => {
     let alive = true;
@@ -306,6 +309,31 @@ export default function App() {
 
     localTodoStore.save(todos).catch(() => undefined);
   }, [loaded, todos]);
+
+  const goBackInMenu = useCallback(() => {
+    if (submenuOpen) {
+      setMenuMode('main');
+      Haptics.selectionAsync().catch(() => undefined);
+      return true;
+    }
+
+    if (menuMode === 'main') {
+      setMenuMode(null);
+      Haptics.selectionAsync().catch(() => undefined);
+      return true;
+    }
+
+    return false;
+  }, [menuMode, submenuOpen]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      goBackInMenu,
+    );
+
+    return () => subscription.remove();
+  }, [goBackInMenu]);
 
   const searchIndex = useMemo(() => createTodoSearchIndex(todos), [todos]);
 
@@ -466,15 +494,35 @@ export default function App() {
 
       if (
         state === State.END &&
-        menuMode !== null &&
-        menuMode !== 'main' &&
-        (translationX > 64 || velocityX > 650)
+        submenuOpen &&
+        (Math.abs(translationX) > 64 || Math.abs(velocityX) > 650)
       ) {
-        setMenuMode('main');
-        Haptics.selectionAsync().catch(() => undefined);
+        goBackInMenu();
       }
     },
-    [menuMode],
+    [goBackInMenu, submenuOpen],
+  );
+
+  const handleLeftEdgeBackStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if (state === State.END && submenuOpen && (translationX > 42 || velocityX > 520)) {
+        goBackInMenu();
+      }
+    },
+    [goBackInMenu, submenuOpen],
+  );
+
+  const handleRightEdgeBackStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if (state === State.END && submenuOpen && (translationX < -42 || velocityX < -520)) {
+        goBackInMenu();
+      }
+    },
+    [goBackInMenu, submenuOpen],
   );
 
   const handleListScroll = useCallback(
@@ -830,6 +878,32 @@ export default function App() {
                   </View>
                 </PanGestureHandler>
               </View>
+              {submenuOpen ? (
+                <>
+                  <PanGestureHandler
+                    activeOffsetX={[-8, 8]}
+                    failOffsetY={[-18, 18]}
+                    onHandlerStateChange={handleLeftEdgeBackStateChange}
+                  >
+                    <View
+                      collapsable={false}
+                      pointerEvents="box-only"
+                      style={[styles.edgeBackZone, styles.edgeBackZoneLeft]}
+                    />
+                  </PanGestureHandler>
+                  <PanGestureHandler
+                    activeOffsetX={[-8, 8]}
+                    failOffsetY={[-18, 18]}
+                    onHandlerStateChange={handleRightEdgeBackStateChange}
+                  >
+                    <View
+                      collapsable={false}
+                      pointerEvents="box-only"
+                      style={[styles.edgeBackZone, styles.edgeBackZoneRight]}
+                    />
+                  </PanGestureHandler>
+                </>
+              ) : null}
             </>
           ) : null}
 
@@ -993,6 +1067,20 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 19,
     backgroundColor: 'rgba(0,0,0,0.04)',
+  },
+  edgeBackZone: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: EDGE_BACK_WIDTH,
+    zIndex: 30,
+    elevation: 9,
+  },
+  edgeBackZoneLeft: {
+    left: 0,
+  },
+  edgeBackZoneRight: {
+    right: 0,
   },
   listMenuLayer: {
     position: 'absolute',

@@ -6,6 +6,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  type GestureResponderEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
   PanResponder,
@@ -16,6 +17,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -33,6 +35,7 @@ import { makeTodo, normalizeTodoText, type Todo } from './src/todos';
 type SwipeTodoItemProps = {
   item: Todo;
   onDelete: (id: string) => void;
+  onOpenMenu: () => void;
   onToggle: (id: string) => void;
 };
 
@@ -84,8 +87,11 @@ type MenuRow =
       type: 'value';
     };
 
-const SWIPE_LIMIT = 112;
-const SWIPE_TRIGGER = 74;
+const TODO_ACTION_WIDTH = 68;
+const TODO_LEFT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH * 2;
+const TODO_RIGHT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH;
+const SWIPE_LIMIT = TODO_LEFT_ACTION_MENU_WIDTH;
+const SWIPE_TRIGGER = 62;
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 16 : 20;
 const HORIZONTAL_PADDING = 20;
 const FONT_REGULAR = '400' as const;
@@ -93,7 +99,9 @@ const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
 const PULL_MAX = 178;
 const PULL_RELEASE = 34;
+const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
+const LEFT_PANEL_MAX_WIDTH = 360;
 const PULL_STAGES = [
   { label: 'Focus search', threshold: 38 },
   { label: 'Menu', threshold: 88 },
@@ -179,59 +187,189 @@ const flattenListMenuItems = (
     ];
   });
 
-function SwipeTodoItem({ item, onDelete, onToggle }: SwipeTodoItemProps) {
+function SwipeTodoItem({ item, onDelete, onOpenMenu, onToggle }: SwipeTodoItemProps) {
+  const { width: screenWidth } = useWindowDimensions();
   const translateX = useRef(new Animated.Value(0)).current;
+  const [actionMenuSide, setActionMenuSide] = useState<'left' | 'right' | null>(null);
+  const actionMenuOpen = actionMenuSide !== null;
+  const swipeRowWidth = Math.max(1, screenWidth - HORIZONTAL_PADDING * 2);
+  const swipeStartMinX = swipeRowWidth * 0.2;
+  const swipeStartMaxX = swipeRowWidth * 0.8;
 
-  const resetPosition = useCallback(() => {
+  const animateRow = useCallback((toValue: number) => {
     Animated.spring(translateX, {
-      toValue: 0,
+      toValue,
       friction: 7,
       tension: 90,
       useNativeDriver: true,
     }).start();
   }, [translateX]);
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gesture) =>
-        Math.abs(gesture.dx) > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+  const closeActionMenu = useCallback(() => {
+    setActionMenuSide(null);
+    animateRow(0);
+  }, [animateRow]);
+
+  const openLeftActionMenu = useCallback(() => {
+    setActionMenuSide('left');
+    animateRow(TODO_LEFT_ACTION_MENU_WIDTH);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [animateRow]);
+
+  const openRightActionMenu = useCallback(() => {
+    setActionMenuSide('right');
+    animateRow(-TODO_RIGHT_ACTION_MENU_WIDTH);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [animateRow]);
+
+  const toggleSelection = useCallback(() => {
+    onToggle(item.id);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [item.id, onToggle]);
+
+  const toggleFromMenu = useCallback(() => {
+    toggleSelection();
+    closeActionMenu();
+  }, [closeActionMenu, toggleSelection]);
+
+  const deleteFromMenu = useCallback(() => {
+    closeActionMenu();
+    requestAnimationFrame(() => onDelete(item.id));
+  }, [closeActionMenu, item.id, onDelete]);
+
+  const openMenuFromAction = useCallback(() => {
+    closeActionMenu();
+    onOpenMenu();
+  }, [closeActionMenu, onOpenMenu]);
+
+  const handleTodoPress = useCallback(() => {
+    if (actionMenuOpen) {
+      closeActionMenu();
+    }
+  }, [actionMenuOpen, closeActionMenu]);
+
+  const panResponder = useMemo(
+    () => PanResponder.create({
+      onMoveShouldSetPanResponder: (event, gesture) => {
+        const startX = event.nativeEvent.locationX;
+        const startedInsideSwipeBand = startX >= swipeStartMinX && startX <= swipeStartMaxX;
+
+        return (
+          startedInsideSwipeBand &&
+          Math.abs(gesture.dx) > 8 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy)
+        );
+      },
       onPanResponderMove: (_, gesture) => {
-        const nextX = Math.max(-SWIPE_LIMIT, Math.min(SWIPE_LIMIT, gesture.dx));
+        const baseX =
+          actionMenuSide === 'left'
+            ? TODO_LEFT_ACTION_MENU_WIDTH
+            : actionMenuSide === 'right'
+              ? -TODO_RIGHT_ACTION_MENU_WIDTH
+              : 0;
+        const nextX = Math.max(-TODO_RIGHT_ACTION_MENU_WIDTH, Math.min(SWIPE_LIMIT, baseX + gesture.dx));
         translateX.setValue(nextX);
       },
       onPanResponderRelease: (_, gesture) => {
+        if (actionMenuSide === 'right' && gesture.dx > SWIPE_TRIGGER) {
+          closeActionMenu();
+          return;
+        }
+
+        if (actionMenuSide === 'left' && gesture.dx < -SWIPE_TRIGGER) {
+          closeActionMenu();
+          return;
+        }
+
         if (gesture.dx > SWIPE_TRIGGER) {
-          onToggle(item.id);
-          resetPosition();
+          openLeftActionMenu();
           return;
         }
 
         if (gesture.dx < -SWIPE_TRIGGER) {
-          Animated.timing(translateX, {
-            toValue: -420,
-            duration: 190,
-            useNativeDriver: true,
-          }).start(() => onDelete(item.id));
+          openRightActionMenu();
           return;
         }
 
-        resetPosition();
+        if (actionMenuSide === 'left') {
+          animateRow(TODO_LEFT_ACTION_MENU_WIDTH);
+          return;
+        }
+
+        if (actionMenuSide === 'right') {
+          animateRow(-TODO_RIGHT_ACTION_MENU_WIDTH);
+          return;
+        }
+
+        closeActionMenu();
       },
-      onPanResponderTerminate: resetPosition,
+      onPanResponderTerminate: () => {
+        if (actionMenuSide === 'left') {
+          animateRow(TODO_LEFT_ACTION_MENU_WIDTH);
+          return;
+        }
+
+        if (actionMenuSide === 'right') {
+          animateRow(-TODO_RIGHT_ACTION_MENU_WIDTH);
+          return;
+        }
+
+        closeActionMenu();
+      },
     }),
-  ).current;
+    [
+      actionMenuSide,
+      animateRow,
+      closeActionMenu,
+      openLeftActionMenu,
+      openRightActionMenu,
+      swipeStartMaxX,
+      swipeStartMinX,
+      translateX,
+    ],
+  );
 
   return (
     <View style={styles.swipeShell}>
-      <View style={styles.actionClip}>
-        <View style={[styles.actionSide, styles.actionLeft]}>
-          <Text style={styles.actionIcon}>{item.done ? '↩' : '✓'}</Text>
-          <Text style={styles.actionText}>{item.done ? 'Active' : 'Done'}</Text>
-        </View>
-        <View style={[styles.actionSide, styles.actionRight]}>
-          <Text style={styles.actionText}>Delete</Text>
-          <Text style={styles.actionIcon}>✕</Text>
-        </View>
+      <View style={styles.todoLeftActionMenu}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
+          onPress={toggleFromMenu}
+          style={({ pressed }) => [
+            styles.todoActionButton,
+            styles.todoActionDone,
+            pressed && styles.todoActionPressed,
+          ]}
+        >
+          <Text style={styles.todoActionIcon}>{item.done ? '↩' : '✓'}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Delete todo"
+          onPress={deleteFromMenu}
+          style={({ pressed }) => [
+            styles.todoActionButton,
+            styles.todoActionDelete,
+            pressed && styles.todoActionPressed,
+          ]}
+        >
+          <Text style={styles.todoActionIcon}>⌫</Text>
+        </Pressable>
+      </View>
+      <View style={styles.todoRightActionMenu}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open menu"
+          onPress={openMenuFromAction}
+          style={({ pressed }) => [
+            styles.todoActionButton,
+            styles.todoActionMore,
+            pressed && styles.todoActionPressed,
+          ]}
+        >
+          <Text style={styles.todoActionIcon}>□</Text>
+        </Pressable>
       </View>
 
       <Animated.View
@@ -242,27 +380,45 @@ function SwipeTodoItem({ item, onDelete, onToggle }: SwipeTodoItemProps) {
           { transform: [{ translateX }] },
         ]}
       >
-        <View style={[styles.checkbox, item.done && styles.checkboxDone]}>
-          {item.done && <Text style={styles.checkmark}>✓</Text>}
-        </View>
-        <Text
-          numberOfLines={3}
-          style={[styles.todoText, item.done && styles.todoTextDone]}
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: item.done }}
+          hitSlop={8}
+          onPress={actionMenuOpen ? closeActionMenu : toggleSelection}
+          style={[styles.checkbox, item.done && styles.checkboxDone]}
         >
-          {item.text}
-        </Text>
+          {item.done && <Text style={styles.checkmark}>✓</Text>}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={!actionMenuOpen}
+          onPress={handleTodoPress}
+          style={styles.todoTextPressable}
+        >
+          <Text
+            numberOfLines={3}
+            style={[styles.todoText, item.done && styles.todoTextDone]}
+          >
+            {item.text}
+          </Text>
+        </Pressable>
       </Animated.View>
     </View>
   );
 }
 
 export default function App() {
+  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [query, setQuery] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [pullStage, setPullStage] = useState(0);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
+  const [leftPanelVisible, setLeftPanelVisible] = useState(false);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
+  const [rightPanelVisible, setRightPanelVisible] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
@@ -275,8 +431,25 @@ export default function App() {
   const selectedPullStage = useRef(0);
   const hapticPullStage = useRef(0);
   const pullDistanceRef = useRef(0);
+  const pullTapStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const leftPanelTranslateX = useRef(new Animated.Value(-LEFT_PANEL_MAX_WIDTH)).current;
+  const rightPanelTranslateX = useRef(new Animated.Value(LEFT_PANEL_MAX_WIDTH)).current;
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
+  const leftPanelWidth = Math.min(LEFT_PANEL_MAX_WIDTH, Math.max(300, screenWidth * 0.86));
+  const leftPanelGestureStyle = {
+    height: screenHeight * 0.35,
+    left: screenWidth * 0.05,
+    top: screenHeight * 0.325,
+    width: screenWidth * 0.1,
+  };
+  const rightPanelGestureStyle = {
+    height: screenHeight * 0.35,
+    right: screenWidth * 0.05,
+    top: screenHeight * 0.325,
+    width: screenWidth * 0.1,
+  };
 
   useEffect(() => {
     let alive = true;
@@ -310,7 +483,96 @@ export default function App() {
     localTodoStore.save(todos).catch(() => undefined);
   }, [loaded, todos]);
 
+  useEffect(() => {
+    if (!leftPanelVisible && !leftPanelOpen) {
+      leftPanelTranslateX.setValue(-leftPanelWidth);
+    }
+    if (!rightPanelVisible && !rightPanelOpen) {
+      rightPanelTranslateX.setValue(leftPanelWidth);
+    }
+  }, [
+    leftPanelOpen,
+    leftPanelTranslateX,
+    leftPanelVisible,
+    leftPanelWidth,
+    rightPanelOpen,
+    rightPanelTranslateX,
+    rightPanelVisible,
+  ]);
+
+  const animateLeftPanel = useCallback(
+    (toValue: number, onComplete?: () => void) => {
+      Animated.spring(leftPanelTranslateX, {
+        toValue,
+        damping: 22,
+        stiffness: 230,
+        mass: 0.9,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) {
+          onComplete?.();
+        }
+      });
+    },
+    [leftPanelTranslateX],
+  );
+
+  const animateRightPanel = useCallback(
+    (toValue: number, onComplete?: () => void) => {
+      Animated.spring(rightPanelTranslateX, {
+        toValue,
+        damping: 22,
+        stiffness: 230,
+        mass: 0.9,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) {
+          onComplete?.();
+        }
+      });
+    },
+    [rightPanelTranslateX],
+  );
+
+  const openLeftPanel = useCallback(() => {
+    Keyboard.dismiss();
+    setLeftPanelVisible(true);
+    setLeftPanelOpen(true);
+    animateLeftPanel(0);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [animateLeftPanel]);
+
+  const openRightPanel = useCallback(() => {
+    Keyboard.dismiss();
+    setRightPanelVisible(true);
+    setRightPanelOpen(true);
+    animateRightPanel(0);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [animateRightPanel]);
+
+  const closeLeftPanel = useCallback(() => {
+    setLeftPanelOpen(false);
+    animateLeftPanel(-leftPanelWidth, () => setLeftPanelVisible(false));
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [animateLeftPanel, leftPanelWidth]);
+
+  const closeRightPanel = useCallback(() => {
+    setRightPanelOpen(false);
+    animateRightPanel(leftPanelWidth, () => setRightPanelVisible(false));
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [animateRightPanel, leftPanelWidth]);
+
   const goBackInMenu = useCallback(() => {
+    if (leftPanelVisible) {
+      closeLeftPanel();
+      return true;
+    }
+
+    if (rightPanelVisible) {
+      closeRightPanel();
+      return true;
+    }
+
     if (submenuOpen) {
       setMenuMode('main');
       Haptics.selectionAsync().catch(() => undefined);
@@ -324,7 +586,14 @@ export default function App() {
     }
 
     return false;
-  }, [menuMode, submenuOpen]);
+  }, [
+    closeLeftPanel,
+    closeRightPanel,
+    leftPanelVisible,
+    menuMode,
+    rightPanelVisible,
+    submenuOpen,
+  ]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
@@ -423,6 +692,52 @@ export default function App() {
     setPullDistance(0);
     setPullStage(0);
   }, []);
+
+  const handlePullTapStart = useCallback((event: GestureResponderEvent) => {
+    const { pageX, pageY, timestamp } = event.nativeEvent;
+    pullTapStartRef.current = { pageX, pageY, timestamp };
+  }, []);
+
+  const handlePullTapEnd = useCallback(
+    (event: GestureResponderEvent) => {
+      if (
+        listMenuOpen ||
+        leftPanelVisible ||
+        rightPanelVisible
+      ) {
+        return;
+      }
+
+      const { pageX, pageY, timestamp } = event.nativeEvent;
+      const start = pullTapStartRef.current;
+      const moveX = Math.abs(pageX - start.pageX);
+      const moveY = Math.abs(pageY - start.pageY);
+      const elapsed = timestamp - start.timestamp;
+
+      if (moveX > 8 || moveY > 8 || elapsed > 280) {
+        return;
+      }
+
+      const lastTap = lastListTapRef.current;
+      const sinceLastTap = timestamp - lastTap.timestamp;
+      const distanceFromLastTap = Math.hypot(pageX - lastTap.pageX, pageY - lastTap.pageY);
+
+      if (sinceLastTap <= DOUBLE_TAP_DELAY && distanceFromLastTap <= 28) {
+        lastListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
+        Keyboard.dismiss();
+        setMenuMode('main');
+        Haptics.selectionAsync().catch(() => undefined);
+        return;
+      }
+
+      lastListTapRef.current = { pageX, pageY, timestamp };
+    },
+    [
+      leftPanelVisible,
+      listMenuOpen,
+      rightPanelVisible,
+    ],
+  );
 
   const runPullAction = useCallback(
     (stage: number) => {
@@ -523,6 +838,156 @@ export default function App() {
       }
     },
     [goBackInMenu, submenuOpen],
+  );
+
+  const handleLeftPanelOpenGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      if (listMenuOpen || leftPanelOpen) {
+        return;
+      }
+
+      const nextX = Math.min(0, -leftPanelWidth + Math.max(0, event.nativeEvent.translationX));
+      leftPanelTranslateX.setValue(nextX);
+    },
+    [leftPanelOpen, leftPanelTranslateX, leftPanelWidth, listMenuOpen],
+  );
+
+  const handleLeftPanelOpenStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if ((state === State.BEGAN || state === State.ACTIVE) && !leftPanelOpen && !listMenuOpen) {
+        Keyboard.dismiss();
+        setLeftPanelVisible(true);
+        leftPanelTranslateX.setValue(-leftPanelWidth);
+      }
+
+      if (
+        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
+        !listMenuOpen &&
+        !leftPanelOpen
+      ) {
+        if (translationX > leftPanelWidth * 0.36 || velocityX > 650) {
+          openLeftPanel();
+        } else {
+          setLeftPanelOpen(false);
+          animateLeftPanel(-leftPanelWidth, () => setLeftPanelVisible(false));
+        }
+      }
+    },
+    [
+      animateLeftPanel,
+      leftPanelOpen,
+      leftPanelTranslateX,
+      leftPanelWidth,
+      listMenuOpen,
+      openLeftPanel,
+    ],
+  );
+
+  const handleLeftPanelCloseGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      if (!leftPanelOpen) {
+        return;
+      }
+
+      const nextX = Math.max(-leftPanelWidth, Math.min(0, event.nativeEvent.translationX));
+      leftPanelTranslateX.setValue(nextX);
+    },
+    [leftPanelOpen, leftPanelTranslateX, leftPanelWidth],
+  );
+
+  const handleLeftPanelCloseStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if (
+        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
+        leftPanelOpen
+      ) {
+        if (translationX < -leftPanelWidth * 0.28 || velocityX < -650) {
+          closeLeftPanel();
+        } else {
+          animateLeftPanel(0);
+        }
+      }
+    },
+    [animateLeftPanel, closeLeftPanel, leftPanelOpen, leftPanelWidth],
+  );
+
+  const handleRightPanelOpenGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      if (listMenuOpen || rightPanelOpen) {
+        return;
+      }
+
+      const nextX = Math.max(0, leftPanelWidth + Math.min(0, event.nativeEvent.translationX));
+      rightPanelTranslateX.setValue(nextX);
+    },
+    [leftPanelWidth, listMenuOpen, rightPanelOpen, rightPanelTranslateX],
+  );
+
+  const handleRightPanelOpenStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if ((state === State.BEGAN || state === State.ACTIVE) && !rightPanelOpen && !listMenuOpen) {
+        Keyboard.dismiss();
+        setRightPanelVisible(true);
+        rightPanelTranslateX.setValue(leftPanelWidth);
+      }
+
+      if (
+        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
+        !listMenuOpen &&
+        !rightPanelOpen
+      ) {
+        if (translationX < -leftPanelWidth * 0.36 || velocityX < -650) {
+          openRightPanel();
+        } else {
+          setRightPanelOpen(false);
+          animateRightPanel(leftPanelWidth, () => setRightPanelVisible(false));
+        }
+      }
+    },
+    [
+      animateRightPanel,
+      leftPanelWidth,
+      listMenuOpen,
+      openRightPanel,
+      rightPanelOpen,
+      rightPanelTranslateX,
+    ],
+  );
+
+  const handleRightPanelCloseGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      if (!rightPanelOpen) {
+        return;
+      }
+
+      const nextX = Math.min(leftPanelWidth, Math.max(0, event.nativeEvent.translationX));
+      rightPanelTranslateX.setValue(nextX);
+    },
+    [leftPanelWidth, rightPanelOpen, rightPanelTranslateX],
+  );
+
+  const handleRightPanelCloseStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationX, velocityX } = event.nativeEvent;
+
+      if (
+        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
+        rightPanelOpen
+      ) {
+        if (translationX > leftPanelWidth * 0.28 || velocityX > 650) {
+          closeRightPanel();
+        } else {
+          animateRightPanel(0);
+        }
+      }
+    },
+    [animateRightPanel, closeRightPanel, leftPanelWidth, rightPanelOpen],
   );
 
   const handleListScroll = useCallback(
@@ -694,6 +1159,169 @@ export default function App() {
         </View>
 
         <View style={styles.listShell}>
+          {!leftPanelOpen && !rightPanelVisible && !listMenuOpen ? (
+            <PanGestureHandler
+              activeOffsetX={[-2, 2]}
+              failOffsetY={[-18, 18]}
+              onGestureEvent={handleLeftPanelOpenGesture}
+              onHandlerStateChange={handleLeftPanelOpenStateChange}
+            >
+              <View
+                collapsable={false}
+                pointerEvents="box-only"
+                style={[styles.leftPanelOpenZone, leftPanelGestureStyle]}
+              />
+            </PanGestureHandler>
+          ) : null}
+
+          {!rightPanelOpen && !leftPanelVisible && !listMenuOpen ? (
+            <PanGestureHandler
+              activeOffsetX={[-2, 2]}
+              failOffsetY={[-18, 18]}
+              onGestureEvent={handleRightPanelOpenGesture}
+              onHandlerStateChange={handleRightPanelOpenStateChange}
+            >
+              <View
+                collapsable={false}
+                pointerEvents="box-only"
+                style={[styles.leftPanelOpenZone, rightPanelGestureStyle]}
+              />
+            </PanGestureHandler>
+          ) : null}
+
+          {leftPanelVisible ? (
+            <>
+              {leftPanelOpen ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close left panel"
+                  onPress={closeLeftPanel}
+                  style={styles.leftPanelBackdrop}
+                />
+              ) : null}
+              <PanGestureHandler
+                activeOffsetX={[-8, 8]}
+                failOffsetY={[-20, 20]}
+                onGestureEvent={handleLeftPanelCloseGesture}
+                onHandlerStateChange={handleLeftPanelCloseStateChange}
+              >
+                <Animated.View
+                  collapsable={false}
+                  style={[
+                    styles.leftPanel,
+                    {
+                      transform: [{ translateX: leftPanelTranslateX }],
+                      width: leftPanelWidth,
+                    },
+                  ]}
+                >
+                  <Text style={styles.leftPanelTitle}>Todo</Text>
+                  <Text style={styles.leftPanelSubtitle}>
+                    {todos.length} items · {todos.filter((todo) => !todo.done).length} active
+                  </Text>
+
+                  <View style={styles.leftPanelSection}>
+                    <Text style={styles.leftPanelSectionTitle}>Filters</Text>
+                    <View style={styles.leftPanelMetricRow}>
+                      <Text style={styles.leftPanelMetricLabel}>Lists</Text>
+                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.list.length}</Text>
+                    </View>
+                    <View style={styles.leftPanelMetricRow}>
+                      <Text style={styles.leftPanelMetricLabel}>Priority</Text>
+                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.priority.length}</Text>
+                    </View>
+                    <View style={styles.leftPanelMetricRow}>
+                      <Text style={styles.leftPanelMetricLabel}>Date</Text>
+                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.date.length}</Text>
+                    </View>
+                  </View>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setMenuMode('main');
+                      closeLeftPanel();
+                    }}
+                    style={({ pressed }) => [
+                      styles.leftPanelAction,
+                      pressed && styles.leftPanelActionPressed,
+                    ]}
+                  >
+                    <Text style={styles.leftPanelActionText}>Open menu</Text>
+                    <Text style={styles.leftPanelActionIcon}>›</Text>
+                  </Pressable>
+                </Animated.View>
+              </PanGestureHandler>
+            </>
+          ) : null}
+
+          {rightPanelVisible ? (
+            <>
+              {rightPanelOpen ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close right panel"
+                  onPress={closeRightPanel}
+                  style={styles.leftPanelBackdrop}
+                />
+              ) : null}
+              <PanGestureHandler
+                activeOffsetX={[-8, 8]}
+                failOffsetY={[-20, 20]}
+                onGestureEvent={handleRightPanelCloseGesture}
+                onHandlerStateChange={handleRightPanelCloseStateChange}
+              >
+                <Animated.View
+                  collapsable={false}
+                  style={[
+                    styles.leftPanel,
+                    styles.rightPanel,
+                    {
+                      transform: [{ translateX: rightPanelTranslateX }],
+                      width: leftPanelWidth,
+                    },
+                  ]}
+                >
+                  <Text style={styles.leftPanelTitle}>Todo</Text>
+                  <Text style={styles.leftPanelSubtitle}>
+                    {todos.length} items · {todos.filter((todo) => !todo.done).length} active
+                  </Text>
+
+                  <View style={styles.leftPanelSection}>
+                    <Text style={styles.leftPanelSectionTitle}>Filters</Text>
+                    <View style={styles.leftPanelMetricRow}>
+                      <Text style={styles.leftPanelMetricLabel}>Lists</Text>
+                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.list.length}</Text>
+                    </View>
+                    <View style={styles.leftPanelMetricRow}>
+                      <Text style={styles.leftPanelMetricLabel}>Priority</Text>
+                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.priority.length}</Text>
+                    </View>
+                    <View style={styles.leftPanelMetricRow}>
+                      <Text style={styles.leftPanelMetricLabel}>Date</Text>
+                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.date.length}</Text>
+                    </View>
+                  </View>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setMenuMode('main');
+                      closeRightPanel();
+                    }}
+                    style={({ pressed }) => [
+                      styles.leftPanelAction,
+                      pressed && styles.leftPanelActionPressed,
+                    ]}
+                  >
+                    <Text style={styles.leftPanelActionText}>Open menu</Text>
+                    <Text style={styles.leftPanelActionIcon}>›</Text>
+                  </Pressable>
+                </Animated.View>
+              </PanGestureHandler>
+            </>
+          ) : null}
+
           {listMenuOpen ? (
             <>
               <Pressable
@@ -959,13 +1587,15 @@ export default function App() {
 
           <PanGestureHandler
             activeOffsetY={8}
-            enabled={isListAtTop && !listMenuOpen}
+            enabled={false}
             failOffsetX={[-24, 24]}
             onGestureEvent={handleTopPullGesture}
             onHandlerStateChange={handleTopPullStateChange}
           >
           <Animated.View
             collapsable={false}
+            onTouchEnd={handlePullTapEnd}
+            onTouchStart={handlePullTapStart}
             style={[styles.todoListFrame, { transform: [{ translateY: listTranslateY }] }]}
           >
             <FlatList
@@ -997,7 +1627,16 @@ export default function App() {
               onScroll={handleListScroll}
               onScrollEndDrag={releasePull}
               renderItem={({ item }) => (
-                <SwipeTodoItem item={item} onDelete={deleteTodo} onToggle={toggleTodo} />
+                <SwipeTodoItem
+                  item={item}
+                  onDelete={deleteTodo}
+                  onOpenMenu={() => {
+                    Keyboard.dismiss();
+                    setMenuMode('main');
+                    Haptics.selectionAsync().catch(() => undefined);
+                  }}
+                  onToggle={toggleTodo}
+                />
               )}
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
@@ -1062,6 +1701,120 @@ const styles = StyleSheet.create({
   },
   todoListFrame: {
     flex: 1,
+  },
+  leftPanelOpenZone: {
+    position: 'absolute',
+    zIndex: 12,
+    elevation: 4,
+    backgroundColor: 'transparent',
+  },
+  leftPanelBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 34,
+    backgroundColor: 'rgba(31, 27, 22, 0.14)',
+  },
+  leftPanel: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 35,
+    elevation: 10,
+    backgroundColor: '#FFFFFF',
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: '#E4DDD4',
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    shadowColor: '#000000',
+    shadowOpacity: 0.12,
+    shadowRadius: 22,
+    shadowOffset: { width: 8, height: 0 },
+  },
+  rightPanel: {
+    left: undefined,
+    right: 0,
+    borderRightWidth: 0,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: '#E4DDD4',
+    shadowOffset: { width: -8, height: 0 },
+  },
+  leftPanelTitle: {
+    color: '#1E1B18',
+    fontSize: 22,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 28,
+    letterSpacing: 0,
+  },
+  leftPanelSubtitle: {
+    color: '#8C847C',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+    marginTop: 4,
+  },
+  leftPanelSection: {
+    marginTop: 28,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#EEE8E0',
+    paddingTop: 16,
+  },
+  leftPanelSectionTitle: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.2,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
+  leftPanelMetricRow: {
+    minHeight: 38,
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F2EBE3',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  leftPanelMetricLabel: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  leftPanelMetricValue: {
+    color: '#2F6F62',
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+  },
+  leftPanelAction: {
+    minHeight: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: '#EDF4F0',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 22,
+    paddingHorizontal: 14,
+  },
+  leftPanelActionPressed: {
+    opacity: 0.75,
+  },
+  leftPanelActionText: {
+    color: '#1C5A4E',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  leftPanelActionIcon: {
+    color: '#2F6F62',
+    fontSize: 22,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 24,
   },
   listMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -1301,43 +2054,52 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: 'transparent',
   },
-  actionClip: {
+  todoLeftActionMenu: {
+    position: 'absolute',
+    top: 1,
+    left: 1,
+    bottom: 1,
+    width: TODO_LEFT_ACTION_MENU_WIDTH,
+    borderRadius: 13,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    backgroundColor: '#CF413A',
+  },
+  todoRightActionMenu: {
     position: 'absolute',
     top: 1,
     right: 1,
     bottom: 1,
-    left: 1,
+    width: TODO_RIGHT_ACTION_MENU_WIDTH,
     borderRadius: 13,
     overflow: 'hidden',
-    backgroundColor: '#C95449',
-  },
-  actionSide: {
-    ...StyleSheet.absoluteFillObject,
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    gap: 6,
+    justifyContent: 'flex-end',
+    backgroundColor: '#F19A38',
   },
-  actionLeft: {
-    justifyContent: 'flex-start',
+  todoActionButton: {
+    width: TODO_ACTION_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todoActionDone: {
     backgroundColor: '#2F6F62',
   },
-  actionRight: {
-    justifyContent: 'flex-end',
-    backgroundColor: '#C95449',
+  todoActionDelete: {
+    backgroundColor: '#CF413A',
   },
-  actionIcon: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 14,
-    lineHeight: 18,
+  todoActionMore: {
+    backgroundColor: '#F19A38',
   },
-  actionText: {
+  todoActionPressed: {
+    opacity: 0.78,
+  },
+  todoActionIcon: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 24,
     fontWeight: FONT_SEMIBOLD,
-    lineHeight: 16,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
+    lineHeight: 28,
   },
   todoRow: {
     minHeight: 60,
@@ -1354,6 +2116,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 1,
+  },
+  todoTextPressable: {
+    flex: 1,
+    minWidth: 0,
   },
   todoRowDone: {
     backgroundColor: '#FAF9F6',

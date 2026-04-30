@@ -1,6 +1,6 @@
 # Local Todo
 
-A minimal native React Native todo app built with Expo.
+Mobile todo app built with Expo and React Native.
 
 ## Run
 
@@ -36,8 +36,11 @@ The default Metro port is `8083`. Override it with `make start PORT=8090`.
 
 - Type in the top field to search existing items.
 - Press return while typing to add a new todo.
-- Swipe right on an item to mark it done or active.
-- Swipe left on an item to delete it.
+- Double tap the todo list to open the menu.
+- Tap a checkbox to mark a todo done or active.
+- Swipe right on a todo to reveal done/delete actions.
+- Swipe left on a todo to reveal the menu action.
+- Open the left drawer to tune drawer and todo swipe settings.
 
 ## Search
 

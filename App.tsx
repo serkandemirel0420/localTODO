@@ -1,4 +1,5 @@
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -13,6 +14,7 @@ import {
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -33,10 +35,30 @@ import { localTodoStore } from './src/storage/todoStore';
 import { makeTodo, normalizeTodoText, type Todo } from './src/todos';
 
 type SwipeTodoItemProps = {
+  gestureSettings: GestureSettings;
   item: Todo;
   onDelete: (id: string) => void;
   onOpenMenu: () => void;
   onToggle: (id: string) => void;
+};
+
+type GestureSettings = {
+  drawerEdgeOffsetPercent: number;
+  drawerTriggerWidthPercent: number;
+  drawerVerticalCoveragePercent: number;
+  todoSwipeAreaPercent: number;
+  todoSwipeOpenDistance: number;
+};
+
+type SettingsSliderProps = {
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  onSlidingChange?: (sliding: boolean) => void;
+  step: number;
+  suffix?: string;
+  value: number;
 };
 
 type ListMenuNode = {
@@ -91,7 +113,6 @@ const TODO_ACTION_WIDTH = 68;
 const TODO_LEFT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH * 2;
 const TODO_RIGHT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH;
 const SWIPE_LIMIT = TODO_LEFT_ACTION_MENU_WIDTH;
-const SWIPE_TRIGGER = 62;
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 16 : 20;
 const HORIZONTAL_PADDING = 20;
 const FONT_REGULAR = '400' as const;
@@ -102,6 +123,14 @@ const PULL_RELEASE = 34;
 const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
 const LEFT_PANEL_MAX_WIDTH = 360;
+const GESTURE_SETTINGS_STORAGE_KEY = 'local-todo.gesture-settings.v1';
+const DEFAULT_GESTURE_SETTINGS: GestureSettings = {
+  drawerEdgeOffsetPercent: 5,
+  drawerTriggerWidthPercent: 10,
+  drawerVerticalCoveragePercent: 35,
+  todoSwipeAreaPercent: 60,
+  todoSwipeOpenDistance: 62,
+};
 const PULL_STAGES = [
   { label: 'Focus search', threshold: 38 },
   { label: 'Menu', threshold: 88 },
@@ -151,6 +180,42 @@ const withInitialTodos = (storedTodos: Todo[]) => {
   return [...storedTodos, ...missingSeeds];
 };
 
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const normalizeGestureSettings = (
+  value: Partial<GestureSettings>,
+): GestureSettings => ({
+  drawerEdgeOffsetPercent: clamp(
+    Number(value.drawerEdgeOffsetPercent ?? DEFAULT_GESTURE_SETTINGS.drawerEdgeOffsetPercent),
+    0,
+    20,
+  ),
+  drawerTriggerWidthPercent: clamp(
+    Number(value.drawerTriggerWidthPercent ?? DEFAULT_GESTURE_SETTINGS.drawerTriggerWidthPercent),
+    5,
+    25,
+  ),
+  drawerVerticalCoveragePercent: clamp(
+    Number(value.drawerVerticalCoveragePercent ?? DEFAULT_GESTURE_SETTINGS.drawerVerticalCoveragePercent),
+    20,
+    80,
+  ),
+  todoSwipeAreaPercent: clamp(
+    Number(value.todoSwipeAreaPercent ?? DEFAULT_GESTURE_SETTINGS.todoSwipeAreaPercent),
+    30,
+    100,
+  ),
+  todoSwipeOpenDistance: clamp(
+    Number(value.todoSwipeOpenDistance ?? DEFAULT_GESTURE_SETTINGS.todoSwipeOpenDistance),
+    28,
+    120,
+  ),
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
 const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
   [...nodes]
     .sort((first, second) => first.label.localeCompare(second.label))
@@ -187,14 +252,81 @@ const flattenListMenuItems = (
     ];
   });
 
-function SwipeTodoItem({ item, onDelete, onOpenMenu, onToggle }: SwipeTodoItemProps) {
+function SettingsSlider({
+  label,
+  max,
+  min,
+  onChange,
+  onSlidingChange,
+  step,
+  suffix = '',
+  value,
+}: SettingsSliderProps) {
+  const [trackWidth, setTrackWidth] = useState(1);
+  const valueRange = max - min;
+  const progress = valueRange <= 0 ? 0 : (value - min) / valueRange;
+
+  const updateFromX = useCallback(
+    (locationX: number) => {
+      const rawValue = min + clamp(locationX / trackWidth, 0, 1) * valueRange;
+      const steppedValue = Math.round(rawValue / step) * step;
+      onChange(clamp(steppedValue, min, max));
+    },
+    [max, min, onChange, step, trackWidth, valueRange],
+  );
+
+  const panResponder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2,
+      onPanResponderGrant: (event) => {
+        onSlidingChange?.(true);
+        updateFromX(event.nativeEvent.locationX);
+      },
+      onPanResponderMove: (event) => {
+        updateFromX(event.nativeEvent.locationX);
+      },
+      onPanResponderRelease: () => {
+        onSlidingChange?.(false);
+        Haptics.selectionAsync().catch(() => undefined);
+      },
+      onPanResponderTerminate: () => onSlidingChange?.(false),
+    }),
+    [onSlidingChange, updateFromX],
+  );
+
+  return (
+    <View style={styles.settingsSlider}>
+      <View style={styles.settingsSliderHeader}>
+        <Text style={styles.settingsSliderLabel}>{label}</Text>
+        <Text style={styles.settingsSliderValue}>
+          {value}
+          {suffix}
+        </Text>
+      </View>
+      <View
+        {...panResponder.panHandlers}
+        onLayout={(event) => setTrackWidth(Math.max(1, event.nativeEvent.layout.width))}
+        style={styles.settingsSliderTrack}
+      >
+        <View style={[styles.settingsSliderFill, { width: `${progress * 100}%` }]} />
+        <View style={[styles.settingsSliderThumb, { left: `${progress * 100}%` }]} />
+      </View>
+    </View>
+  );
+}
+
+function SwipeTodoItem({ gestureSettings, item, onDelete, onOpenMenu, onToggle }: SwipeTodoItemProps) {
   const { width: screenWidth } = useWindowDimensions();
   const translateX = useRef(new Animated.Value(0)).current;
   const [actionMenuSide, setActionMenuSide] = useState<'left' | 'right' | null>(null);
   const actionMenuOpen = actionMenuSide !== null;
   const swipeRowWidth = Math.max(1, screenWidth - HORIZONTAL_PADDING * 2);
-  const swipeStartMinX = swipeRowWidth * 0.2;
-  const swipeStartMaxX = swipeRowWidth * 0.8;
+  const swipeSidePadding = (100 - gestureSettings.todoSwipeAreaPercent) / 200;
+  const swipeStartMinX = swipeRowWidth * swipeSidePadding;
+  const swipeStartMaxX = swipeRowWidth * (1 - swipeSidePadding);
+  const todoSwipeOpenDistance = gestureSettings.todoSwipeOpenDistance;
 
   const animateRow = useCallback((toValue: number) => {
     Animated.spring(translateX, {
@@ -271,22 +403,22 @@ function SwipeTodoItem({ item, onDelete, onOpenMenu, onToggle }: SwipeTodoItemPr
         translateX.setValue(nextX);
       },
       onPanResponderRelease: (_, gesture) => {
-        if (actionMenuSide === 'right' && gesture.dx > SWIPE_TRIGGER) {
+        if (actionMenuSide === 'right' && gesture.dx > todoSwipeOpenDistance) {
           closeActionMenu();
           return;
         }
 
-        if (actionMenuSide === 'left' && gesture.dx < -SWIPE_TRIGGER) {
+        if (actionMenuSide === 'left' && gesture.dx < -todoSwipeOpenDistance) {
           closeActionMenu();
           return;
         }
 
-        if (gesture.dx > SWIPE_TRIGGER) {
+        if (gesture.dx > todoSwipeOpenDistance) {
           openLeftActionMenu();
           return;
         }
 
-        if (gesture.dx < -SWIPE_TRIGGER) {
+        if (gesture.dx < -todoSwipeOpenDistance) {
           openRightActionMenu();
           return;
         }
@@ -326,6 +458,7 @@ function SwipeTodoItem({ item, onDelete, onOpenMenu, onToggle }: SwipeTodoItemPr
       swipeStartMaxX,
       swipeStartMinX,
       translateX,
+      todoSwipeOpenDistance,
     ],
   );
 
@@ -419,6 +552,11 @@ export default function App() {
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [rightPanelVisible, setRightPanelVisible] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsSliderActive, setSettingsSliderActive] = useState(false);
+  const [gestureSettings, setGestureSettings] = useState<GestureSettings>(
+    DEFAULT_GESTURE_SETTINGS,
+  );
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
@@ -438,17 +576,18 @@ export default function App() {
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
   const leftPanelWidth = Math.min(LEFT_PANEL_MAX_WIDTH, Math.max(300, screenWidth * 0.86));
+  const drawerVerticalCoverage = gestureSettings.drawerVerticalCoveragePercent / 100;
   const leftPanelGestureStyle = {
-    height: screenHeight * 0.35,
-    left: screenWidth * 0.05,
-    top: screenHeight * 0.325,
-    width: screenWidth * 0.1,
+    height: screenHeight * drawerVerticalCoverage,
+    left: screenWidth * (gestureSettings.drawerEdgeOffsetPercent / 100),
+    top: screenHeight * ((1 - drawerVerticalCoverage) / 2),
+    width: screenWidth * (gestureSettings.drawerTriggerWidthPercent / 100),
   };
   const rightPanelGestureStyle = {
-    height: screenHeight * 0.35,
-    right: screenWidth * 0.05,
-    top: screenHeight * 0.325,
-    width: screenWidth * 0.1,
+    height: screenHeight * drawerVerticalCoverage,
+    right: screenWidth * (gestureSettings.drawerEdgeOffsetPercent / 100),
+    top: screenHeight * ((1 - drawerVerticalCoverage) / 2),
+    width: screenWidth * (gestureSettings.drawerTriggerWidthPercent / 100),
   };
 
   useEffect(() => {
@@ -482,6 +621,52 @@ export default function App() {
 
     localTodoStore.save(todos).catch(() => undefined);
   }, [loaded, todos]);
+
+  useEffect(() => {
+    let alive = true;
+
+    AsyncStorage.getItem(GESTURE_SETTINGS_STORAGE_KEY)
+      .then((storedSettings) => {
+        if (!alive || !storedSettings) {
+          return;
+        }
+
+        const parsed = JSON.parse(storedSettings) as unknown;
+        if (isRecord(parsed)) {
+          setGestureSettings(normalizeGestureSettings(parsed));
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (alive) {
+          setSettingsLoaded(true);
+        }
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
+
+    AsyncStorage.setItem(
+      GESTURE_SETTINGS_STORAGE_KEY,
+      JSON.stringify(gestureSettings),
+    ).catch(() => undefined);
+  }, [gestureSettings, settingsLoaded]);
+
+  const updateGestureSetting = useCallback(
+    (key: keyof GestureSettings, value: number) => {
+      setGestureSettings((current) =>
+        normalizeGestureSettings({ ...current, [key]: value }),
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!leftPanelVisible && !leftPanelOpen) {
@@ -1200,6 +1385,7 @@ export default function App() {
                 />
               ) : null}
               <PanGestureHandler
+                enabled={!settingsSliderActive}
                 activeOffsetX={[-8, 8]}
                 failOffsetY={[-20, 20]}
                 onGestureEvent={handleLeftPanelCloseGesture}
@@ -1215,41 +1401,99 @@ export default function App() {
                     },
                   ]}
                 >
-                  <Text style={styles.leftPanelTitle}>Todo</Text>
-                  <Text style={styles.leftPanelSubtitle}>
-                    {todos.length} items · {todos.filter((todo) => !todo.done).length} active
-                  </Text>
-
-                  <View style={styles.leftPanelSection}>
-                    <Text style={styles.leftPanelSectionTitle}>Filters</Text>
-                    <View style={styles.leftPanelMetricRow}>
-                      <Text style={styles.leftPanelMetricLabel}>Lists</Text>
-                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.list.length}</Text>
-                    </View>
-                    <View style={styles.leftPanelMetricRow}>
-                      <Text style={styles.leftPanelMetricLabel}>Priority</Text>
-                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.priority.length}</Text>
-                    </View>
-                    <View style={styles.leftPanelMetricRow}>
-                      <Text style={styles.leftPanelMetricLabel}>Date</Text>
-                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.date.length}</Text>
-                    </View>
-                  </View>
-
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setMenuMode('main');
-                      closeLeftPanel();
-                    }}
-                    style={({ pressed }) => [
-                      styles.leftPanelAction,
-                      pressed && styles.leftPanelActionPressed,
-                    ]}
+                  <ScrollView
+                    contentContainerStyle={styles.leftPanelScrollContent}
+                    showsVerticalScrollIndicator={false}
                   >
-                    <Text style={styles.leftPanelActionText}>Open menu</Text>
-                    <Text style={styles.leftPanelActionIcon}>›</Text>
-                  </Pressable>
+                    <Text style={styles.leftPanelTitle}>Todo</Text>
+                    <Text style={styles.leftPanelSubtitle}>
+                      {todos.length} items · {todos.filter((todo) => !todo.done).length} active
+                    </Text>
+
+                    <View style={styles.leftPanelSection}>
+                      <Text style={styles.leftPanelSectionTitle}>Filters</Text>
+                      <View style={styles.leftPanelMetricRow}>
+                        <Text style={styles.leftPanelMetricLabel}>Lists</Text>
+                        <Text style={styles.leftPanelMetricValue}>{selectedFilters.list.length}</Text>
+                      </View>
+                      <View style={styles.leftPanelMetricRow}>
+                        <Text style={styles.leftPanelMetricLabel}>Priority</Text>
+                        <Text style={styles.leftPanelMetricValue}>{selectedFilters.priority.length}</Text>
+                      </View>
+                      <View style={styles.leftPanelMetricRow}>
+                        <Text style={styles.leftPanelMetricLabel}>Date</Text>
+                        <Text style={styles.leftPanelMetricValue}>{selectedFilters.date.length}</Text>
+                      </View>
+                    </View>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setMenuMode('main');
+                        closeLeftPanel();
+                      }}
+                      style={({ pressed }) => [
+                        styles.leftPanelAction,
+                        pressed && styles.leftPanelActionPressed,
+                      ]}
+                    >
+                      <Text style={styles.leftPanelActionText}>Open menu</Text>
+                      <Text style={styles.leftPanelActionIcon}>›</Text>
+                    </Pressable>
+
+                    <View style={styles.leftPanelSection}>
+                      <Text style={styles.leftPanelSectionTitle}>Swipe settings</Text>
+                      <SettingsSlider
+                        label="Drawer edge offset"
+                        min={0}
+                        max={20}
+                        onChange={(value) => updateGestureSetting('drawerEdgeOffsetPercent', value)}
+                        onSlidingChange={setSettingsSliderActive}
+                        step={1}
+                        suffix="%"
+                        value={gestureSettings.drawerEdgeOffsetPercent}
+                      />
+                      <SettingsSlider
+                        label="Drawer trigger width"
+                        min={5}
+                        max={25}
+                        onChange={(value) => updateGestureSetting('drawerTriggerWidthPercent', value)}
+                        onSlidingChange={setSettingsSliderActive}
+                        step={1}
+                        suffix="%"
+                        value={gestureSettings.drawerTriggerWidthPercent}
+                      />
+                      <SettingsSlider
+                        label="Drawer vertical area"
+                        min={20}
+                        max={80}
+                        onChange={(value) => updateGestureSetting('drawerVerticalCoveragePercent', value)}
+                        onSlidingChange={setSettingsSliderActive}
+                        step={5}
+                        suffix="%"
+                        value={gestureSettings.drawerVerticalCoveragePercent}
+                      />
+                      <SettingsSlider
+                        label="Todo swipe area"
+                        min={30}
+                        max={100}
+                        onChange={(value) => updateGestureSetting('todoSwipeAreaPercent', value)}
+                        onSlidingChange={setSettingsSliderActive}
+                        step={5}
+                        suffix="%"
+                        value={gestureSettings.todoSwipeAreaPercent}
+                      />
+                      <SettingsSlider
+                        label="Todo reveal distance"
+                        min={28}
+                        max={120}
+                        onChange={(value) => updateGestureSetting('todoSwipeOpenDistance', value)}
+                        onSlidingChange={setSettingsSliderActive}
+                        step={4}
+                        value={gestureSettings.todoSwipeOpenDistance}
+                      />
+                    </View>
+                  </ScrollView>
                 </Animated.View>
               </PanGestureHandler>
             </>
@@ -1628,6 +1872,7 @@ export default function App() {
               onScrollEndDrag={releasePull}
               renderItem={({ item }) => (
                 <SwipeTodoItem
+                  gestureSettings={gestureSettings}
                   item={item}
                   onDelete={deleteTodo}
                   onOpenMenu={() => {
@@ -1730,6 +1975,9 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 8, height: 0 },
   },
+  leftPanelScrollContent: {
+    paddingBottom: 28,
+  },
   rightPanel: {
     left: undefined,
     right: 0,
@@ -1815,6 +2063,57 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: FONT_REGULAR,
     lineHeight: 24,
+  },
+  settingsSlider: {
+    paddingVertical: 12,
+  },
+  settingsSliderHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  settingsSliderLabel: {
+    color: '#2A2520',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+  },
+  settingsSliderValue: {
+    color: '#2F6F62',
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+  },
+  settingsSliderTrack: {
+    height: 28,
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: '#F3EEE7',
+  },
+  settingsSliderFill: {
+    position: 'absolute',
+    left: 0,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#2F6F62',
+  },
+  settingsSliderThumb: {
+    position: 'absolute',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#2F6F62',
+    marginLeft: -11,
+    shadowColor: '#000000',
+    shadowOpacity: 0.12,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
   listMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,

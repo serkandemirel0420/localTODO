@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { isTodo, type Todo } from '../todos';
+import { normalizeTodo, type Todo } from '../todos';
 
 const STORAGE_KEY = 'local-todo.items.v1';
 
@@ -18,7 +18,9 @@ export const localTodoStore: TodoStore = {
     }
 
     const parsed = JSON.parse(stored) as unknown;
-    return Array.isArray(parsed) ? parsed.filter(isTodo) : [];
+    return Array.isArray(parsed)
+      ? parsed.map(normalizeTodo).filter((todo): todo is Todo => Boolean(todo))
+      : [];
   },
 
   async save(todos) {

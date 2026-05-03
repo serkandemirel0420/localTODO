@@ -1,73 +1,71 @@
 import * as Haptics from 'expo-haptics';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { TokenResponse } from 'expo-auth-session';
+import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
   BackHandler,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   type GestureResponderEvent,
+  NativeModules,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import {
   GestureHandlerRootView,
   PanGestureHandler,
   State,
+  Swipeable,
+  TouchableOpacity as GHTouchableOpacity,
   type PanGestureHandlerGestureEvent,
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
 import { createTodoSearchIndex, searchTodos } from './src/search/todoSearch';
 import { localTodoStore } from './src/storage/todoStore';
-import { makeTodo, normalizeTodoText, type Todo } from './src/todos';
+import {
+  cloneTodoFilters,
+  makeTodo,
+  normalizeTodoFilters,
+  normalizeTodoText,
+  type Todo,
+  type TodoFilters,
+} from './src/todos';
+import {
+  createBackupPayload,
+  downloadDriveBackup,
+  GOOGLE_AUTH_SCOPES,
+  uploadDriveBackup,
+} from './src/google/driveBackup';
+import {
+  googleAuthStore,
+  type StoredGoogleAuth,
+} from './src/google/googleAuthStore';
+import {
+  appSettingsStore,
+  type AppSettings,
+} from './src/storage/appSettingsStore';
+
+WebBrowser.maybeCompleteAuthSession();
 
 type SwipeTodoItemProps = {
-  actionMenuCloseSignal: number;
-  gestureSettings: GestureSettings;
-  isSelected: boolean;
   item: Todo;
+  isMenuTarget: boolean;
   onDelete: (id: string) => void;
-  onLongSelect: (id: string) => void;
-  onOpenMenu: () => void;
-  onToggle: (id: string) => void;
-};
-
-type GestureSettings = {
-  drawerEdgeOffsetPercent: number;
-  drawerTriggerWidthPercent: number;
-  drawerVerticalCoveragePercent: number;
-  todoSwipeAreaPercent: number;
-  todoSwipeOpenDistance: number;
-};
-
-type SettingsSliderProps = {
-  description: string;
-  label: string;
-  max: number;
-  min: number;
-  onChange: (value: number) => void;
-  onSlidingChange?: (sliding: boolean) => void;
-  step: number;
-  suffix?: string;
-  value: number;
-};
-
-type GestureSettingsOverlayProps = {
-  activeSetting: keyof GestureSettings;
-  settings: GestureSettings;
+  onListTap: (event: GestureResponderEvent) => boolean;
+  onOpenMenu: (id: string) => void;
+  onSetDone: (id: string, done: boolean) => void;
 };
 
 type ListMenuNode = {
@@ -90,7 +88,17 @@ type FilterKey = 'list' | 'date' | 'priority';
 
 type MenuMode = 'date' | 'filters' | 'lists' | 'main' | 'priority';
 
-type SelectedFilters = Record<FilterKey, string[]>;
+type SelectedFilters = TodoFilters;
+
+type GoogleDriveAction = 'backup' | 'restore';
+
+type NativeGoogleSignIn = typeof import('@react-native-google-signin/google-signin');
+
+type ScrollToIndexFailedInfo = {
+  averageItemLength: number;
+  highestMeasuredFrameIndex: number;
+  index: number;
+};
 
 type MenuRow =
   | {
@@ -121,31 +129,22 @@ type MenuRow =
 const TODO_ACTION_WIDTH = 68;
 const TODO_LEFT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH * 2;
 const TODO_RIGHT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH;
-const SWIPE_LIMIT = TODO_LEFT_ACTION_MENU_WIDTH;
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 16 : 20;
 const HORIZONTAL_PADDING = 20;
-const DRAWER_VERTICAL_OVERLAP = TOP_SAFE_GAP + 68;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
 const PULL_MAX = 178;
 const PULL_RELEASE = 34;
-const PULL_ARM_TIMEOUT = 1800;
 const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
-const LEFT_PANEL_MAX_WIDTH = 360;
-const GESTURE_SETTINGS_STORAGE_KEY = 'local-todo.gesture-settings.v1';
-const DEFAULT_GESTURE_SETTINGS: GestureSettings = {
-  drawerEdgeOffsetPercent: 5,
-  drawerTriggerWidthPercent: 10,
-  drawerVerticalCoveragePercent: 35,
-  todoSwipeAreaPercent: 60,
-  todoSwipeOpenDistance: 62,
-};
-const PULL_STAGES = [
-  { label: 'Focus search', threshold: 38 },
-  { label: 'Menu', threshold: 88 },
-] as const;
+const TODO_SWIPE_OPEN_DISTANCE = 62;
+const LIST_MENU_HEIGHT = 280;
+const LIST_MENU_BOTTOM_OFFSET = 24;
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
+const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
 const LIST_MENU_TREE: ListMenuNode[] = [
   { label: 'Inbox', children: [{ label: 'Quick capture' }, { label: 'Unsorted' }] },
   { label: 'Today', children: [{ label: 'Morning' }, { label: 'Afternoon' }, { label: 'Evening' }] },
@@ -166,7 +165,6 @@ const LIST_MENU_TREE: ListMenuNode[] = [
   { label: 'Finance', children: [{ label: 'Bills' }, { label: 'Budget' }] },
   { label: 'Travel' },
   { label: 'Archive' },
-  { label: 'Settings' },
 ];
 const LIST_MENU_ROW_HEIGHT = 52;
 const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
@@ -181,6 +179,7 @@ const INITIAL_TODOS = Array.from({ length: 50 }, (_, index) => ({
   text: `Todo item ${index + 1}`,
   done: false,
   createdAt: Date.now() - index,
+  filters: cloneTodoFilters(),
 }));
 
 const withInitialTodos = (storedTodos: Todo[]) => {
@@ -190,41 +189,70 @@ const withInitialTodos = (storedTodos: Todo[]) => {
   return [...storedTodos, ...missingSeeds];
 };
 
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
+const getGoogleClientIdForPlatform = () => {
+  if (Platform.OS === 'ios') {
+    return GOOGLE_IOS_CLIENT_ID;
+  }
 
-const normalizeGestureSettings = (
-  value: Partial<GestureSettings>,
-): GestureSettings => ({
-  drawerEdgeOffsetPercent: clamp(
-    Number(value.drawerEdgeOffsetPercent ?? DEFAULT_GESTURE_SETTINGS.drawerEdgeOffsetPercent),
-    0,
-    20,
-  ),
-  drawerTriggerWidthPercent: clamp(
-    Number(value.drawerTriggerWidthPercent ?? DEFAULT_GESTURE_SETTINGS.drawerTriggerWidthPercent),
-    5,
-    25,
-  ),
-  drawerVerticalCoveragePercent: clamp(
-    Number(value.drawerVerticalCoveragePercent ?? DEFAULT_GESTURE_SETTINGS.drawerVerticalCoveragePercent),
-    20,
-    80,
-  ),
-  todoSwipeAreaPercent: clamp(
-    Number(value.todoSwipeAreaPercent ?? DEFAULT_GESTURE_SETTINGS.todoSwipeAreaPercent),
-    30,
-    100,
-  ),
-  todoSwipeOpenDistance: clamp(
-    Number(value.todoSwipeOpenDistance ?? DEFAULT_GESTURE_SETTINGS.todoSwipeOpenDistance),
-    28,
-    120,
-  ),
+  if (Platform.OS === 'android') {
+    return GOOGLE_ANDROID_CLIENT_ID;
+  }
+
+  return GOOGLE_WEB_CLIENT_ID;
+};
+
+const isGoogleOAuthConfigured = () => Boolean(getGoogleClientIdForPlatform());
+
+const formatBackupTime = (value: string | null) =>
+  value ? new Date(value).toLocaleString() : null;
+
+const googleAuthToStoredAuth = (auth: TokenResponse): StoredGoogleAuth => ({
+  accessToken: auth.accessToken,
+  expiresIn: auth.expiresIn,
+  idToken: auth.idToken,
+  issuedAt: auth.issuedAt,
+  refreshToken: auth.refreshToken,
+  scope: auth.scope,
+  tokenType: auth.tokenType,
 });
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
+const googleNativeTokenToStoredAuth = (
+  accessToken: string,
+  idToken?: string | null,
+): StoredGoogleAuth => ({
+  accessToken,
+  expiresIn: 3500,
+  idToken: idToken ?? undefined,
+  issuedAt: Math.floor(Date.now() / 1000),
+  scope: GOOGLE_AUTH_SCOPES.join(' '),
+  tokenType: 'bearer',
+});
+
+const normalizeNativeGoogleSignInError = (error: unknown, stage = 'Google sign-in') => {
+  const message = error instanceof Error ? error.message : String(error);
+  const stagePrefix = stage ? `${stage}: ` : '';
+
+  if (
+    message.includes('RNGoogleSignin') ||
+    message.includes('TurboModuleRegistry') ||
+    message.includes('NativeModule') ||
+    message.includes('not implemented')
+  ) {
+    return new Error(`${stagePrefix}Android Google sign-in needs a development build. Expo Go cannot run this native Google module.`);
+  }
+
+  if (message.includes('DEVELOPER_ERROR')) {
+    return new Error(`${stagePrefix}Google Android OAuth setup does not match this build. Check package name com.localtodo.app and the SHA-1 certificate fingerprint.`);
+  }
+
+  return error instanceof Error ? new Error(`${stagePrefix}${error.message}`) : new Error(`${stagePrefix}${message}`);
+};
+
+const assertNativeGoogleSignInAvailable = () => {
+  if (!NativeModules.RNGoogleSignin) {
+    throw new Error('Install the new Android development APK first. The current app does not include Google Sign-In yet.');
+  }
+};
 
 const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
   [...nodes]
@@ -262,513 +290,208 @@ const flattenListMenuItems = (
     ];
   });
 
-function SettingsSlider({
-  description,
-  label,
-  max,
-  min,
-  onChange,
-  onSlidingChange,
-  step,
-  suffix = '',
-  value,
-}: SettingsSliderProps) {
-  const trackRef = useRef<View>(null);
-  const [trackWidth, setTrackWidth] = useState(1);
-  const [helpVisible, setHelpVisible] = useState(false);
-  const trackPageXRef = useRef(0);
-  const valueRange = max - min;
-  const progress = valueRange <= 0 ? 0 : (value - min) / valueRange;
+const countFilters = (filters: SelectedFilters) =>
+  filters.date.length + filters.list.length + filters.priority.length;
 
-  const updateFromX = useCallback(
-    (pageX: number) => {
-      const localX = pageX - trackPageXRef.current;
-      const rawValue = min + clamp(localX / trackWidth, 0, 1) * valueRange;
-      const steppedValue = Math.round(rawValue / step) * step;
-      onChange(clamp(steppedValue, min, max));
-    },
-    [max, min, onChange, step, trackWidth, valueRange],
-  );
-
-  const measureTrack = useCallback(
-    (onMeasured?: () => void) => {
-      trackRef.current?.measure((_, __, width, ___, pageX) => {
-        trackPageXRef.current = pageX;
-        setTrackWidth(Math.max(1, width));
-        onMeasured?.();
-      });
-    },
-    [],
-  );
-
-  const panResponder = useMemo(
-    () => PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gesture) =>
-        Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2,
-      onPanResponderGrant: (event) => {
-        onSlidingChange?.(true);
-        const pageX = event.nativeEvent.pageX;
-        measureTrack(() => updateFromX(pageX));
-      },
-      onPanResponderMove: (event) => {
-        updateFromX(event.nativeEvent.pageX);
-      },
-      onPanResponderRelease: () => {
-        onSlidingChange?.(false);
-        Haptics.selectionAsync().catch(() => undefined);
-      },
-      onPanResponderTerminate: () => onSlidingChange?.(false),
-    }),
-    [measureTrack, onSlidingChange, updateFromX],
-  );
-
-  return (
-    <View style={styles.settingsSlider}>
-      <View style={styles.settingsSliderHeader}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Explain ${label}`}
-          hitSlop={8}
-          onPress={() => setHelpVisible((current) => !current)}
-          style={styles.settingsSliderHelpButton}
-        >
-          <Text style={styles.settingsSliderLabel}>{label}</Text>
-          <Text style={styles.settingsSliderHelpIcon}>?</Text>
-        </Pressable>
-        <View style={styles.settingsSliderValuePill}>
-          <Text style={styles.settingsSliderValue}>
-            {value}
-            {suffix}
-          </Text>
-        </View>
-      </View>
-      {helpVisible ? (
-        <Text style={styles.settingsSliderHelpText}>{description}</Text>
-      ) : null}
-      <View style={styles.settingsSliderTrackWrap}>
-        <View
-          ref={trackRef}
-          {...panResponder.panHandlers}
-          onLayout={() => measureTrack()}
-          style={styles.settingsSliderTrack}
-        >
-          <View style={[styles.settingsSliderFill, { width: `${progress * 100}%` }]} />
-          <View style={[styles.settingsSliderThumb, { left: `${progress * 100}%` }]} />
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function GestureSettingsOverlay({ activeSetting, settings }: GestureSettingsOverlayProps) {
-  const drawerTop = (100 - settings.drawerVerticalCoveragePercent) / 2;
-  const todoPadding = (100 - settings.todoSwipeAreaPercent) / 2;
-  const showDrawer = activeSetting.startsWith('drawer');
-  const showTodo = activeSetting.startsWith('todo');
-
-  return (
-    <View pointerEvents="none" style={styles.gestureSettingsOverlay}>
-      <View style={styles.gestureSettingsOverlayWash} />
-      {showDrawer ? (
-        <>
-          <View
-            style={[
-              styles.gestureSettingsOverlayZone,
-              {
-                height: `${settings.drawerVerticalCoveragePercent}%`,
-                left: `${settings.drawerEdgeOffsetPercent}%`,
-                top: `${drawerTop}%`,
-                width: `${settings.drawerTriggerWidthPercent}%`,
-              },
-            ]}
-          />
-          <View
-            style={[
-              styles.gestureSettingsOverlayZone,
-              {
-                height: `${settings.drawerVerticalCoveragePercent}%`,
-                right: `${settings.drawerEdgeOffsetPercent}%`,
-                top: `${drawerTop}%`,
-                width: `${settings.drawerTriggerWidthPercent}%`,
-              },
-            ]}
-          />
-        </>
-      ) : null}
-      {showTodo ? (
-        <View style={styles.gestureSettingsTodoSample}>
-          <View
-            style={[
-              styles.gestureSettingsTodoZone,
-              {
-                left: `${todoPadding}%`,
-                width: `${settings.todoSwipeAreaPercent}%`,
-              },
-            ]}
-          />
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-function GesturePreview({ settings }: { settings: GestureSettings }) {
-  const drawerTop = (100 - settings.drawerVerticalCoveragePercent) / 2;
-  const todoPadding = (100 - settings.todoSwipeAreaPercent) / 2;
-
-  return (
-    <View style={styles.gesturePreview}>
-      <View style={styles.gesturePreviewPhone}>
-        <View
-          style={[
-            styles.gesturePreviewDrawerZone,
-            {
-              height: `${settings.drawerVerticalCoveragePercent}%`,
-              left: `${settings.drawerEdgeOffsetPercent}%`,
-              top: `${drawerTop}%`,
-              width: `${settings.drawerTriggerWidthPercent}%`,
-            },
-          ]}
-        />
-        <View
-          style={[
-            styles.gesturePreviewDrawerZone,
-            {
-              height: `${settings.drawerVerticalCoveragePercent}%`,
-              right: `${settings.drawerEdgeOffsetPercent}%`,
-              top: `${drawerTop}%`,
-              width: `${settings.drawerTriggerWidthPercent}%`,
-            },
-          ]}
-        />
-        <View style={styles.gesturePreviewTodoRow}>
-          <View
-            style={[
-              styles.gesturePreviewTodoActive,
-              {
-                left: `${todoPadding}%`,
-                width: `${settings.todoSwipeAreaPercent}%`,
-              },
-            ]}
-          />
-        </View>
-      </View>
-    </View>
-  );
-}
+const todoMatchesFilters = (todo: Todo, filters: SelectedFilters) =>
+  (Object.entries(filters) as Array<[FilterKey, string[]]>).every(([filterKey, values]) => (
+    values.length === 0 ||
+    values.some((value) => todo.filters[filterKey].includes(value))
+  ));
 
 function SwipeTodoItem({
-  actionMenuCloseSignal,
-  gestureSettings,
-  isSelected,
   item,
+  isMenuTarget,
   onDelete,
-  onLongSelect,
+  onListTap,
   onOpenMenu,
-  onToggle,
+  onSetDone,
 }: SwipeTodoItemProps) {
-  const { width: screenWidth } = useWindowDimensions();
-  const translateX = useRef(new Animated.Value(0)).current;
-  const [actionMenuSide, setActionMenuSide] = useState<'left' | 'right' | null>(null);
-  const actionMenuOpen = actionMenuSide !== null;
-  const swipeRowWidth = Math.max(1, screenWidth - HORIZONTAL_PADDING * 2);
-  const swipeSidePadding = (100 - gestureSettings.todoSwipeAreaPercent) / 200;
-  const swipeStartMinX = swipeRowWidth * swipeSidePadding;
-  const swipeStartMaxX = swipeRowWidth * (1 - swipeSidePadding);
-  const todoSwipeOpenDistance = gestureSettings.todoSwipeOpenDistance;
-
-  const animateRow = useCallback((toValue: number) => {
-    Animated.spring(translateX, {
-      toValue,
-      friction: 7,
-      tension: 90,
-      useNativeDriver: true,
-    }).start();
-  }, [translateX]);
+  const swipeableRef = useRef<Swipeable | null>(null);
+  const [isSwipeOpen, setIsSwipeOpen] = useState(false);
 
   const closeActionMenu = useCallback(() => {
-    setActionMenuSide(null);
-    animateRow(0);
-  }, [animateRow]);
+    swipeableRef.current?.close();
+    setIsSwipeOpen(false);
+  }, []);
 
-  useEffect(() => {
-    if (actionMenuCloseSignal > 0) {
+  const toggleFromAction = useCallback(() => {
+    onSetDone(item.id, !item.done);
+    Haptics.selectionAsync().catch(() => undefined);
+    requestAnimationFrame(() => {
       closeActionMenu();
-    }
-  }, [actionMenuCloseSignal, closeActionMenu]);
+    });
+  }, [closeActionMenu, item.done, item.id, onSetDone]);
 
-  const openLeftActionMenu = useCallback(() => {
-    setActionMenuSide('left');
-    animateRow(TODO_LEFT_ACTION_MENU_WIDTH);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [animateRow]);
-
-  const openRightActionMenu = useCallback(() => {
-    setActionMenuSide('right');
-    animateRow(-TODO_RIGHT_ACTION_MENU_WIDTH);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [animateRow]);
-
-  const toggleSelection = useCallback(() => {
-    onToggle(item.id);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [item.id, onToggle]);
-
-  const toggleFromMenu = useCallback(() => {
-    toggleSelection();
-    closeActionMenu();
-  }, [closeActionMenu, toggleSelection]);
-
-  const deleteFromMenu = useCallback(() => {
+  const deleteFromAction = useCallback(() => {
     closeActionMenu();
     requestAnimationFrame(() => onDelete(item.id));
   }, [closeActionMenu, item.id, onDelete]);
 
   const openMenuFromAction = useCallback(() => {
-    closeActionMenu();
-    onOpenMenu();
-  }, [closeActionMenu, onOpenMenu]);
-
-  const handleTodoPress = useCallback(() => {
-    if (actionMenuOpen) {
+    onOpenMenu(item.id);
+    requestAnimationFrame(() => {
       closeActionMenu();
+    });
+  }, [closeActionMenu, item.id, onOpenMenu]);
+
+  const handleTodoPress = useCallback((event?: GestureResponderEvent) => {
+    if (isSwipeOpen) {
+      closeActionMenu();
+      return;
     }
-  }, [actionMenuOpen, closeActionMenu]);
 
-  const handleTodoLongPress = useCallback(() => {
-    closeActionMenu();
-    onLongSelect(item.id);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-  }, [closeActionMenu, item.id, onLongSelect]);
+    if (event) {
+      onListTap(event);
+    }
+  }, [
+    closeActionMenu,
+    isSwipeOpen,
+    onListTap,
+  ]);
 
-  const panResponder = useMemo(
-    () => PanResponder.create({
-      onMoveShouldSetPanResponder: (event, gesture) => {
-        const startX = event.nativeEvent.locationX;
-        const startedInsideSwipeBand = startX >= swipeStartMinX && startX <= swipeStartMaxX;
+  const handleSwipeableWillOpen = useCallback(() => {
+    setIsSwipeOpen(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
 
-        return (
-          startedInsideSwipeBand &&
-          Math.abs(gesture.dx) > 8 &&
-          Math.abs(gesture.dx) > Math.abs(gesture.dy)
-        );
-      },
-      onPanResponderMove: (_, gesture) => {
-        const baseX =
-          actionMenuSide === 'left'
-            ? TODO_LEFT_ACTION_MENU_WIDTH
-            : actionMenuSide === 'right'
-              ? -TODO_RIGHT_ACTION_MENU_WIDTH
-              : 0;
-        const nextX = Math.max(-TODO_RIGHT_ACTION_MENU_WIDTH, Math.min(SWIPE_LIMIT, baseX + gesture.dx));
-        translateX.setValue(nextX);
-      },
-      onPanResponderRelease: (_, gesture) => {
-        if (actionMenuSide === 'right' && gesture.dx > todoSwipeOpenDistance) {
-          closeActionMenu();
-          return;
-        }
+  const handleSwipeableClose = useCallback(() => {
+    setIsSwipeOpen(false);
+  }, []);
 
-        if (actionMenuSide === 'left' && gesture.dx < -todoSwipeOpenDistance) {
-          closeActionMenu();
-          return;
-        }
+  const renderLeftActions = useCallback(
+    () => (
+      <View style={styles.todoSwipeLeftActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
+          activeOpacity={0.82}
+          onPress={toggleFromAction}
+          style={[styles.todoActionButton, styles.todoActionDone]}
+        >
+          <Text style={styles.todoActionIcon}>{item.done ? '↩' : '✓'}</Text>
+        </GHTouchableOpacity>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Delete todo"
+          activeOpacity={0.82}
+          onPress={deleteFromAction}
+          style={[styles.todoActionButton, styles.todoActionDelete]}
+        >
+          <Text style={styles.todoActionIcon}>⌫</Text>
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [deleteFromAction, item.done, toggleFromAction],
+  );
 
-        if (gesture.dx > todoSwipeOpenDistance) {
-          openLeftActionMenu();
-          return;
-        }
-
-        if (gesture.dx < -todoSwipeOpenDistance) {
-          openRightActionMenu();
-          return;
-        }
-
-        if (actionMenuSide === 'left') {
-          animateRow(TODO_LEFT_ACTION_MENU_WIDTH);
-          return;
-        }
-
-        if (actionMenuSide === 'right') {
-          animateRow(-TODO_RIGHT_ACTION_MENU_WIDTH);
-          return;
-        }
-
-        closeActionMenu();
-      },
-      onPanResponderTerminate: () => {
-        if (actionMenuSide === 'left') {
-          animateRow(TODO_LEFT_ACTION_MENU_WIDTH);
-          return;
-        }
-
-        if (actionMenuSide === 'right') {
-          animateRow(-TODO_RIGHT_ACTION_MENU_WIDTH);
-          return;
-        }
-
-        closeActionMenu();
-      },
-    }),
-    [
-      actionMenuSide,
-      animateRow,
-      closeActionMenu,
-      openLeftActionMenu,
-      openRightActionMenu,
-      swipeStartMaxX,
-      swipeStartMinX,
-      translateX,
-      todoSwipeOpenDistance,
-    ],
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.todoSwipeRightActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Open filters"
+          activeOpacity={0.82}
+          onPress={openMenuFromAction}
+          style={[styles.todoActionButton, styles.todoActionMore]}
+        >
+          <Text style={styles.todoActionIcon}>☰</Text>
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [openMenuFromAction],
   );
 
   return (
     <View style={styles.swipeShell}>
-      <View style={styles.todoLeftActionMenu}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
-          onPress={toggleFromMenu}
-          style={({ pressed }) => [
-            styles.todoActionButton,
-            styles.todoActionDone,
-            pressed && styles.todoActionPressed,
-          ]}
-        >
-          <Text style={styles.todoActionIcon}>{item.done ? '↩' : '✓'}</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Delete todo"
-          onPress={deleteFromMenu}
-          style={({ pressed }) => [
-            styles.todoActionButton,
-            styles.todoActionDelete,
-            pressed && styles.todoActionPressed,
-          ]}
-        >
-          <Text style={styles.todoActionIcon}>⌫</Text>
-        </Pressable>
-      </View>
-      <View style={styles.todoRightActionMenu}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open menu"
-          onPress={openMenuFromAction}
-          style={({ pressed }) => [
-            styles.todoActionButton,
-            styles.todoActionMore,
-            pressed && styles.todoActionPressed,
-          ]}
-        >
-          <Text style={styles.todoActionIcon}>□</Text>
-        </Pressable>
-      </View>
-
-      <Animated.View
-        {...panResponder.panHandlers}
-        style={[
-          styles.todoRow,
-          item.done && styles.todoRowDone,
-          isSelected && styles.todoRowSelected,
-          { transform: [{ translateX }] },
-        ]}
+      <Swipeable
+        ref={swipeableRef}
+        childrenContainerStyle={styles.todoSwipeableChildren}
+        containerStyle={styles.todoSwipeableContainer}
+        friction={1.1}
+        leftThreshold={TODO_SWIPE_OPEN_DISTANCE}
+        onSwipeableClose={handleSwipeableClose}
+        onSwipeableWillOpen={handleSwipeableWillOpen}
+        overshootLeft={false}
+        overshootRight={false}
+        renderLeftActions={renderLeftActions}
+        renderRightActions={renderRightActions}
+        rightThreshold={TODO_SWIPE_OPEN_DISTANCE}
       >
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: item.done }}
-          hitSlop={8}
-          onPress={actionMenuOpen ? closeActionMenu : toggleSelection}
-          style={[styles.checkbox, item.done && styles.checkboxDone]}
+        <View
+          style={[
+            styles.todoRow,
+            item.done && styles.todoRowDone,
+            isMenuTarget && styles.todoRowMenuTarget,
+          ]}
         >
-          {item.done && <Text style={styles.checkmark}>✓</Text>}
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          delayLongPress={360}
-          onLongPress={handleTodoLongPress}
-          onPress={handleTodoPress}
-          style={styles.todoTextPressable}
-        >
-          <Text
-            numberOfLines={3}
-            style={[styles.todoText, item.done && styles.todoTextDone]}
-          >
-            {item.text}
-          </Text>
-        </Pressable>
-        {actionMenuOpen ? (
-          <Pressable
+          <GHTouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel="Close todo actions"
-            onPress={closeActionMenu}
-            style={styles.todoCollapseOverlay}
-          />
-        ) : null}
-      </Animated.View>
+            activeOpacity={1}
+            onPress={handleTodoPress}
+            style={styles.todoTextPressable}
+          >
+            <Text
+              numberOfLines={3}
+              style={[styles.todoText, item.done && styles.todoTextDone]}
+            >
+              {item.text}
+            </Text>
+          </GHTouchableOpacity>
+        </View>
+      </Swipeable>
     </View>
   );
 }
 
+const MemoizedSwipeTodoItem = React.memo(SwipeTodoItem);
+
 export default function App() {
-  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [query, setQuery] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const [pullDistance, setPullDistance] = useState(0);
-  const [pullStage, setPullStage] = useState(0);
-  const [pullMenuArmed, setPullMenuArmed] = useState(false);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
-  const [leftPanelVisible, setLeftPanelVisible] = useState(false);
-  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
-  const [rightPanelVisible, setRightPanelVisible] = useState(false);
-  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
+  const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
+  const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
+  const [googleDriveLastBackupAt, setGoogleDriveLastBackupAt] = useState<string | null>(null);
+  const [googleDriveLastRestoreAt, setGoogleDriveLastRestoreAt] = useState<string | null>(null);
+  const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [activeGestureSetting, setActiveGestureSetting] = useState<keyof GestureSettings | null>(null);
-  const [swipeSettingsOpen, setSwipeSettingsOpen] = useState(false);
-  const [gestureSettings, setGestureSettings] = useState<GestureSettings>(
-    DEFAULT_GESTURE_SETTINGS,
-  );
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
-  const [selectedTodoIds, setSelectedTodoIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [todoActionCloseSignal, setTodoActionCloseSignal] = useState(0);
   const [isListAtTop, setIsListAtTop] = useState(true);
   const [expandedListMenuPaths, setExpandedListMenuPaths] = useState<Set<string>>(
     () => new Set(),
   );
   const searchInputRef = useRef<TextInput>(null);
+  const todoListRef = useRef<FlatList<Todo> | null>(null);
   const scrollOffsetY = useRef(0);
-  const selectedPullStage = useRef(0);
   const hapticPullStage = useRef(0);
   const pullDistanceRef = useRef(0);
-  const pullArmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pullTapStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
-  const leftPanelTranslateX = useRef(new Animated.Value(-LEFT_PANEL_MAX_WIDTH)).current;
-  const rightPanelTranslateX = useRef(new Animated.Value(LEFT_PANEL_MAX_WIDTH)).current;
+  const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
-  const leftPanelWidth = Math.min(LEFT_PANEL_MAX_WIDTH, Math.max(300, screenWidth * 0.86));
-  const settingsSliderActive = activeGestureSetting !== null;
-  const drawerVerticalCoverage = gestureSettings.drawerVerticalCoveragePercent / 100;
-  const leftPanelGestureStyle = {
-    height: screenHeight * drawerVerticalCoverage,
-    left: screenWidth * (gestureSettings.drawerEdgeOffsetPercent / 100),
-    top: screenHeight * ((1 - drawerVerticalCoverage) / 2),
-    width: screenWidth * (gestureSettings.drawerTriggerWidthPercent / 100),
-  };
-  const rightPanelGestureStyle = {
-    height: screenHeight * drawerVerticalCoverage,
-    right: screenWidth * (gestureSettings.drawerEdgeOffsetPercent / 100),
-    top: screenHeight * ((1 - drawerVerticalCoverage) / 2),
-    width: screenWidth * (gestureSettings.drawerTriggerWidthPercent / 100),
-  };
+  const googleOAuthConfigured = isGoogleOAuthConfigured();
+  const googleConnected = Boolean(googleAuth?.accessToken);
+
+  const [googleRequest, , promptGoogleAuth] = Google.useAuthRequest({
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
+    extraParams: {
+      access_type: 'offline',
+      prompt: 'consent select_account',
+    },
+    iosClientId: GOOGLE_IOS_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
+    scopes: GOOGLE_AUTH_SCOPES,
+    webClientId: GOOGLE_WEB_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
+  });
+  const googleDriveActionReady =
+    googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
 
   useEffect(() => {
     let alive = true;
@@ -803,49 +526,25 @@ export default function App() {
   }, [loaded, todos]);
 
   useEffect(() => {
-    return () => {
-      if (pullArmTimeoutRef.current) {
-        clearTimeout(pullArmTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const clearPullMenuArm = useCallback(() => {
-    if (pullArmTimeoutRef.current) {
-      clearTimeout(pullArmTimeoutRef.current);
-      pullArmTimeoutRef.current = null;
-    }
-
-    setPullMenuArmed(false);
-  }, []);
-
-  const armPullMenu = useCallback(() => {
-    if (pullArmTimeoutRef.current) {
-      clearTimeout(pullArmTimeoutRef.current);
-    }
-
-    setPullMenuArmed(true);
-    Haptics.selectionAsync().catch(() => undefined);
-
-    pullArmTimeoutRef.current = setTimeout(() => {
-      pullArmTimeoutRef.current = null;
-      setPullMenuArmed(false);
-    }, PULL_ARM_TIMEOUT);
-  }, []);
-
-  useEffect(() => {
     let alive = true;
 
-    AsyncStorage.getItem(GESTURE_SETTINGS_STORAGE_KEY)
-      .then((storedSettings) => {
-        if (!alive || !storedSettings) {
+    Promise.all([
+      appSettingsStore.load(),
+      googleAuthStore.load(),
+    ])
+      .then(([settings, storedGoogleAuth]) => {
+        if (!alive) {
           return;
         }
 
-        const parsed = JSON.parse(storedSettings) as unknown;
-        if (isRecord(parsed)) {
-          setGestureSettings(normalizeGestureSettings(parsed));
-        }
+        setSelectedFilters(settings.selectedFilters);
+        setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
+        setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
+        setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
+
+        const lastBackup = formatBackupTime(settings.googleDriveLastBackupAt);
+        setGoogleDriveBackupStatus(lastBackup ? `Last backup ${lastBackup}` : 'Not backed up');
+        setGoogleAuth(storedGoogleAuth);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -864,114 +563,36 @@ export default function App() {
       return;
     }
 
-    AsyncStorage.setItem(
-      GESTURE_SETTINGS_STORAGE_KEY,
-      JSON.stringify(gestureSettings),
-    ).catch(() => undefined);
-  }, [gestureSettings, settingsLoaded]);
+    const settings: AppSettings = {
+      googleDriveBackupEnabled,
+      googleDriveLastBackupAt,
+      googleDriveLastRestoreAt,
+      selectedFilters,
+    };
 
-  const updateGestureSetting = useCallback(
-    (key: keyof GestureSettings, value: number) => {
-      setGestureSettings((current) =>
-        normalizeGestureSettings({ ...current, [key]: value }),
-      );
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!leftPanelVisible && !leftPanelOpen) {
-      leftPanelTranslateX.setValue(-leftPanelWidth);
-    }
-    if (!rightPanelVisible && !rightPanelOpen) {
-      rightPanelTranslateX.setValue(leftPanelWidth);
-    }
+    appSettingsStore.save(settings).catch(() => undefined);
   }, [
-    leftPanelOpen,
-    leftPanelTranslateX,
-    leftPanelVisible,
-    leftPanelWidth,
-    rightPanelOpen,
-    rightPanelTranslateX,
-    rightPanelVisible,
+    googleDriveBackupEnabled,
+    googleDriveLastBackupAt,
+    googleDriveLastRestoreAt,
+    selectedFilters,
+    settingsLoaded,
   ]);
 
-  const animateLeftPanel = useCallback(
-    (toValue: number, onComplete?: () => void) => {
-      Animated.spring(leftPanelTranslateX, {
-        toValue,
-        damping: 22,
-        stiffness: 230,
-        mass: 0.9,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) {
-          onComplete?.();
-        }
-      });
-    },
-    [leftPanelTranslateX],
-  );
+  useEffect(() => {
+    if (menuMode === null) {
+      setActiveTodoMenuId(null);
+    }
+  }, [menuMode]);
 
-  const animateRightPanel = useCallback(
-    (toValue: number, onComplete?: () => void) => {
-      Animated.spring(rightPanelTranslateX, {
-        toValue,
-        damping: 22,
-        stiffness: 230,
-        mass: 0.9,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) {
-          onComplete?.();
-        }
-      });
-    },
-    [rightPanelTranslateX],
-  );
-
-  const closeTodoActionMenus = useCallback(() => {
-    setTodoActionCloseSignal((current) => current + 1);
+  const closeSettingsModal = useCallback(() => {
+    setSettingsModalVisible(false);
+    Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
-  const openLeftPanel = useCallback(() => {
-    Keyboard.dismiss();
-    closeTodoActionMenus();
-    setLeftPanelVisible(true);
-    setLeftPanelOpen(true);
-    animateLeftPanel(0);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [animateLeftPanel, closeTodoActionMenus]);
-
-  const openRightPanel = useCallback(() => {
-    Keyboard.dismiss();
-    closeTodoActionMenus();
-    setRightPanelVisible(true);
-    setRightPanelOpen(true);
-    animateRightPanel(0);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [animateRightPanel, closeTodoActionMenus]);
-
-  const closeLeftPanel = useCallback(() => {
-    setLeftPanelOpen(false);
-    animateLeftPanel(-leftPanelWidth, () => setLeftPanelVisible(false));
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [animateLeftPanel, leftPanelWidth]);
-
-  const closeRightPanel = useCallback(() => {
-    setRightPanelOpen(false);
-    animateRightPanel(leftPanelWidth, () => setRightPanelVisible(false));
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [animateRightPanel, leftPanelWidth]);
-
   const goBackInMenu = useCallback(() => {
-    if (leftPanelVisible) {
-      closeLeftPanel();
-      return true;
-    }
-
-    if (rightPanelVisible) {
-      closeRightPanel();
+    if (settingsModalVisible) {
+      closeSettingsModal();
       return true;
     }
 
@@ -988,14 +609,7 @@ export default function App() {
     }
 
     return false;
-  }, [
-    closeLeftPanel,
-    closeRightPanel,
-    leftPanelVisible,
-    menuMode,
-    rightPanelVisible,
-    submenuOpen,
-  ]);
+  }, [closeSettingsModal, menuMode, settingsModalVisible, submenuOpen]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
@@ -1009,8 +623,9 @@ export default function App() {
   const searchIndex = useMemo(() => createTodoSearchIndex(todos), [todos]);
 
   const filteredTodos = useMemo(() => {
-    return searchTodos(todos, searchIndex, query);
-  }, [query, searchIndex, todos]);
+    return searchTodos(todos, searchIndex, query)
+      .filter((todo) => todoMatchesFilters(todo, selectedFilters));
+  }, [query, searchIndex, selectedFilters, todos]);
 
   const addTodo = useCallback(() => {
     const text = query.trim().replace(/\s+/g, ' ');
@@ -1033,158 +648,112 @@ export default function App() {
 
   const deleteTodo = useCallback((id: string) => {
     setTodos((current) => current.filter((todo) => todo.id !== id));
-    setSelectedTodoIds((current) => {
-      if (!current.has(id)) {
-        return current;
-      }
-
-      const next = new Set(current);
-      next.delete(id);
-      return next;
-    });
   }, []);
 
-  const toggleTodo = useCallback((id: string) => {
+  const setTodoDone = useCallback((id: string, done: boolean) => {
     setTodos((current) =>
-      current.map((todo) => (todo.id === id ? { ...todo, done: !todo.done } : todo)),
+      current.map((todo) => (
+        todo.id === id && todo.done !== done ? { ...todo, done } : todo
+      )),
     );
   }, []);
 
-  const getPullStage = useCallback((distance: number) => {
-    if (distance >= PULL_STAGES[1].threshold) {
-      return 2;
-    }
-
-    if (distance >= PULL_STAGES[0].threshold) {
-      return 1;
-    }
-
-    return 0;
+  const updateTodoFilters = useCallback((
+    id: string,
+    updater: (filters: SelectedFilters) => SelectedFilters,
+  ) => {
+    setTodos((current) =>
+      current.map((todo) => (
+        todo.id === id
+          ? { ...todo, filters: updater(cloneTodoFilters(todo.filters)) }
+          : todo
+      )),
+    );
   }, []);
-
-  const triggerStageHaptic = useCallback((stage: number) => {
-    if (Platform.OS === 'web' || stage === 0 || stage === hapticPullStage.current) {
-      return;
-    }
-
-    hapticPullStage.current = stage;
-
-    if (stage === 1) {
-      Haptics.selectionAsync().catch(() => undefined);
-    } else if (stage === 2) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-    } else if (stage === 3) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => undefined);
-    }
-  }, []);
-
-  const updatePull = useCallback(
-    (distance: number) => {
-      const nextDistance = Math.max(0, Math.min(PULL_MAX, distance));
-      const nextStage = getPullStage(nextDistance);
-
-      pullDistanceRef.current = nextDistance;
-      selectedPullStage.current = nextStage;
-      setPullDistance(nextDistance);
-      setPullStage(nextStage);
-      triggerStageHaptic(nextStage);
-    },
-    [getPullStage, triggerStageHaptic],
-  );
 
   const resetPull = useCallback(() => {
     pullDistanceRef.current = 0;
-    selectedPullStage.current = 0;
     hapticPullStage.current = 0;
-    setPullDistance(0);
-    setPullStage(0);
   }, []);
 
-  const handlePullTapStart = useCallback((event: GestureResponderEvent) => {
-    const { pageX, pageY, timestamp } = event.nativeEvent;
-    pullTapStartRef.current = { pageX, pageY, timestamp };
-  }, []);
-
-  const handlePullTapEnd = useCallback(
-    (event: GestureResponderEvent) => {
-      if (
-        listMenuOpen ||
-        leftPanelVisible ||
-        rightPanelVisible ||
-        !isListAtTop
-      ) {
-        return;
+  const registerListTap = useCallback(
+    (pageX: number, pageY: number, timestamp: number) => {
+      if (listMenuOpen) {
+        return false;
       }
 
-      const { pageX, pageY, timestamp } = event.nativeEvent;
-      const start = pullTapStartRef.current;
-      const moveX = Math.abs(pageX - start.pageX);
-      const moveY = Math.abs(pageY - start.pageY);
-      const elapsed = timestamp - start.timestamp;
+      const lastRegisteredTap = lastRegisteredListTapRef.current;
+      const duplicateTap =
+        Math.abs(timestamp - lastRegisteredTap.timestamp) < 24 &&
+        Math.hypot(pageX - lastRegisteredTap.pageX, pageY - lastRegisteredTap.pageY) < 4;
 
-      if (moveX > 8 || moveY > 8 || elapsed > 280) {
-        return;
+      if (duplicateTap) {
+        return false;
       }
+
+      lastRegisteredListTapRef.current = { pageX, pageY, timestamp };
 
       const lastTap = lastListTapRef.current;
       const sinceLastTap = timestamp - lastTap.timestamp;
       const distanceFromLastTap = Math.hypot(pageX - lastTap.pageX, pageY - lastTap.pageY);
 
-      if (sinceLastTap <= DOUBLE_TAP_DELAY && distanceFromLastTap <= 28) {
+      if (sinceLastTap <= DOUBLE_TAP_DELAY && distanceFromLastTap <= 56) {
         lastListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
-        clearPullMenuArm();
         Keyboard.dismiss();
+        setActiveTodoMenuId(null);
         setMenuMode('main');
         Haptics.selectionAsync().catch(() => undefined);
-        return;
+        return true;
       }
 
       lastListTapRef.current = { pageX, pageY, timestamp };
-      armPullMenu();
+      return false;
     },
-    [
-      armPullMenu,
-      clearPullMenuArm,
-      isListAtTop,
-      leftPanelVisible,
-      listMenuOpen,
-      rightPanelVisible,
-    ],
+    [listMenuOpen],
   );
 
-  const runPullAction = useCallback(
-    (stage: number) => {
-      if (stage === 1) {
-        searchInputRef.current?.focus();
+  const handleListTap = useCallback(
+    (event: GestureResponderEvent) => {
+      const { pageX, pageY, timestamp } = event.nativeEvent;
+      return registerListTap(pageX, pageY, timestamp);
+    },
+    [registerListTap],
+  );
+
+  const handleListFrameTouchStart = useCallback((event: GestureResponderEvent) => {
+    const { pageX, pageY, timestamp } = event.nativeEvent;
+    listTouchStartRef.current = { pageX, pageY, timestamp };
+  }, []);
+
+  const handleListFrameTouchEnd = useCallback(
+    (event: GestureResponderEvent) => {
+      const { pageX, pageY, timestamp } = event.nativeEvent;
+      const start = listTouchStartRef.current;
+      const moved = Math.hypot(pageX - start.pageX, pageY - start.pageY);
+      const elapsed = timestamp - start.timestamp;
+
+      if (moved > 8 || elapsed > 360) {
         return;
       }
 
-      if (stage === 2) {
-        Keyboard.dismiss();
-        setMenuMode('main');
-        return;
-      }
+      registerListTap(pageX, pageY, timestamp);
     },
-    [],
+    [registerListTap],
   );
 
   const releasePull = useCallback(() => {
-    const selectedStage = selectedPullStage.current;
-
-    if (pullDistanceRef.current > PULL_RELEASE && selectedStage > 0) {
-      runPullAction(selectedStage);
+    if (pullDistanceRef.current > PULL_RELEASE) {
+      searchInputRef.current?.focus();
     }
 
-    clearPullMenuArm();
     resetPull();
-  }, [clearPullMenuArm, resetPull, runPullAction]);
+  }, [resetPull]);
 
   const handleTopPullGesture = useCallback(
     (event: PanGestureHandlerGestureEvent) => {
       const { translationX, translationY } = event.nativeEvent;
 
       if (
-        !pullMenuArmed ||
         listMenuOpen ||
         !isListAtTop ||
         translationY <= 0 ||
@@ -1193,9 +762,14 @@ export default function App() {
         return;
       }
 
-      updatePull(translationY);
+      pullDistanceRef.current = Math.max(0, Math.min(PULL_MAX, translationY));
+
+      if (translationY > PULL_RELEASE && hapticPullStage.current === 0) {
+        hapticPullStage.current = 1;
+        Haptics.selectionAsync().catch(() => undefined);
+      }
     },
-    [isListAtTop, listMenuOpen, pullMenuArmed, updatePull],
+    [isListAtTop, listMenuOpen],
   );
 
   const handleTopPullStateChange = useCallback(
@@ -1250,196 +824,26 @@ export default function App() {
     [goBackInMenu, submenuOpen],
   );
 
-  const handleLeftPanelOpenGesture = useCallback(
-    (event: PanGestureHandlerGestureEvent) => {
-      if (listMenuOpen || leftPanelOpen) {
-        return;
-      }
-
-      const nextX = Math.min(0, -leftPanelWidth + Math.max(0, event.nativeEvent.translationX));
-      leftPanelTranslateX.setValue(nextX);
-    },
-    [leftPanelOpen, leftPanelTranslateX, leftPanelWidth, listMenuOpen],
-  );
-
-  const handleLeftPanelOpenStateChange = useCallback(
-    (event: PanGestureHandlerStateChangeEvent) => {
-      const { state, translationX, velocityX } = event.nativeEvent;
-
-      if (state === State.BEGAN && !leftPanelOpen && !listMenuOpen) {
-        closeTodoActionMenus();
-      }
-
-      if ((state === State.BEGAN || state === State.ACTIVE) && !leftPanelOpen && !listMenuOpen) {
-        Keyboard.dismiss();
-        setLeftPanelVisible(true);
-        leftPanelTranslateX.setValue(-leftPanelWidth);
-      }
-
-      if (
-        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
-        !listMenuOpen &&
-        !leftPanelOpen
-      ) {
-        if (translationX > leftPanelWidth * 0.36 || velocityX > 650) {
-          openLeftPanel();
-        } else {
-          setLeftPanelOpen(false);
-          animateLeftPanel(-leftPanelWidth, () => setLeftPanelVisible(false));
-        }
-      }
-    },
-    [
-      animateLeftPanel,
-      closeTodoActionMenus,
-      leftPanelOpen,
-      leftPanelTranslateX,
-      leftPanelWidth,
-      listMenuOpen,
-      openLeftPanel,
-    ],
-  );
-
-  const handleLeftPanelCloseGesture = useCallback(
-    (event: PanGestureHandlerGestureEvent) => {
-      if (!leftPanelOpen) {
-        return;
-      }
-
-      const nextX = Math.max(-leftPanelWidth, Math.min(0, event.nativeEvent.translationX));
-      leftPanelTranslateX.setValue(nextX);
-    },
-    [leftPanelOpen, leftPanelTranslateX, leftPanelWidth],
-  );
-
-  const handleLeftPanelCloseStateChange = useCallback(
-    (event: PanGestureHandlerStateChangeEvent) => {
-      const { state, translationX, velocityX } = event.nativeEvent;
-
-      if (
-        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
-        leftPanelOpen
-      ) {
-        if (translationX < -leftPanelWidth * 0.28 || velocityX < -650) {
-          closeLeftPanel();
-        } else {
-          animateLeftPanel(0);
-        }
-      }
-    },
-    [animateLeftPanel, closeLeftPanel, leftPanelOpen, leftPanelWidth],
-  );
-
-  const handleRightPanelOpenGesture = useCallback(
-    (event: PanGestureHandlerGestureEvent) => {
-      if (listMenuOpen || rightPanelOpen) {
-        return;
-      }
-
-      const nextX = Math.max(0, leftPanelWidth + Math.min(0, event.nativeEvent.translationX));
-      rightPanelTranslateX.setValue(nextX);
-    },
-    [leftPanelWidth, listMenuOpen, rightPanelOpen, rightPanelTranslateX],
-  );
-
-  const handleRightPanelOpenStateChange = useCallback(
-    (event: PanGestureHandlerStateChangeEvent) => {
-      const { state, translationX, velocityX } = event.nativeEvent;
-
-      if (state === State.BEGAN && !rightPanelOpen && !listMenuOpen) {
-        closeTodoActionMenus();
-      }
-
-      if ((state === State.BEGAN || state === State.ACTIVE) && !rightPanelOpen && !listMenuOpen) {
-        Keyboard.dismiss();
-        setRightPanelVisible(true);
-        rightPanelTranslateX.setValue(leftPanelWidth);
-      }
-
-      if (
-        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
-        !listMenuOpen &&
-        !rightPanelOpen
-      ) {
-        if (translationX < -leftPanelWidth * 0.36 || velocityX < -650) {
-          openRightPanel();
-        } else {
-          setRightPanelOpen(false);
-          animateRightPanel(leftPanelWidth, () => setRightPanelVisible(false));
-        }
-      }
-    },
-    [
-      animateRightPanel,
-      closeTodoActionMenus,
-      leftPanelWidth,
-      listMenuOpen,
-      openRightPanel,
-      rightPanelOpen,
-      rightPanelTranslateX,
-    ],
-  );
-
-  const handleRightPanelCloseGesture = useCallback(
-    (event: PanGestureHandlerGestureEvent) => {
-      if (!rightPanelOpen) {
-        return;
-      }
-
-      const nextX = Math.min(leftPanelWidth, Math.max(0, event.nativeEvent.translationX));
-      rightPanelTranslateX.setValue(nextX);
-    },
-    [leftPanelWidth, rightPanelOpen, rightPanelTranslateX],
-  );
-
-  const handleRightPanelCloseStateChange = useCallback(
-    (event: PanGestureHandlerStateChangeEvent) => {
-      const { state, translationX, velocityX } = event.nativeEvent;
-
-      if (
-        (state === State.END || state === State.CANCELLED || state === State.FAILED) &&
-        rightPanelOpen
-      ) {
-        if (translationX > leftPanelWidth * 0.28 || velocityX > 650) {
-          closeRightPanel();
-        } else {
-          animateRightPanel(0);
-        }
-      }
-    },
-    [animateRightPanel, closeRightPanel, leftPanelWidth, rightPanelOpen],
-  );
-
   const handleListScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const offsetY = event.nativeEvent.contentOffset.y;
       scrollOffsetY.current = Math.max(0, offsetY);
       setIsListAtTop(offsetY <= 1);
-
-      if (offsetY > 1 && pullMenuArmed) {
-        clearPullMenuArm();
-      }
-
-      if (!listMenuOpen && offsetY < 0) {
-        updatePull(Math.abs(offsetY));
-      }
     },
-    [clearPullMenuArm, listMenuOpen, pullMenuArmed, updatePull],
+    [],
   );
 
-  const pullMenuOpacity = Math.min(1, pullDistance / PULL_STAGES[0].threshold);
-  const pullMenuTranslateY = -18 + Math.min(18, pullDistance * 0.24);
-  const pullMenuScale = 0.94 + Math.min(0.06, pullDistance / 900);
-  const listTranslateY = Math.min(116, pullDistance * 0.62);
   const sortedListMenuTree = useMemo(() => sortListMenuTree(LIST_MENU_TREE), []);
   const visibleListMenuItems = useMemo(
     () => flattenListMenuItems(sortedListMenuTree, expandedListMenuPaths),
     [expandedListMenuPaths, sortedListMenuTree],
   );
-  const activeFilterCount = Object.values(selectedFilters).reduce(
-    (count, values) => count + values.length,
-    0,
+  const activeTodoMenuFilters = useMemo(
+    () => todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null,
+    [activeTodoMenuId, todos],
   );
+  const menuFilters = activeTodoMenuFilters ?? selectedFilters;
+  const activeFilterCount = countFilters(menuFilters);
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
     if (menuMode === 'lists') {
       return visibleListMenuItems;
@@ -1464,7 +868,7 @@ export default function App() {
     }
 
     if (menuMode === 'filters') {
-      return (Object.entries(selectedFilters) as Array<[FilterKey, string[]]>)
+      return (Object.entries(menuFilters) as Array<[FilterKey, string[]]>)
         .flatMap(([filterKey, values]) => values.map((label) => ({
           filterKey,
           id: `filter-${filterKey}-${label}`,
@@ -1475,21 +879,21 @@ export default function App() {
 
     return [
       {
-        count: selectedFilters.list.length || undefined,
+        count: menuFilters.list.length || undefined,
         id: 'main-lists',
         label: 'Lists',
         menuMode: 'lists',
         type: 'menu',
       },
       {
-        count: selectedFilters.priority.length || undefined,
+        count: menuFilters.priority.length || undefined,
         id: 'main-priority',
         label: 'Priority',
         menuMode: 'priority',
         type: 'menu',
       },
       {
-        count: selectedFilters.date.length || undefined,
+        count: menuFilters.date.length || undefined,
         id: 'main-date',
         label: 'Date',
         menuMode: 'date',
@@ -1508,10 +912,10 @@ export default function App() {
         type: 'clearFilters',
       },
     ];
-  }, [activeFilterCount, menuMode, selectedFilters, visibleListMenuItems]);
+  }, [activeFilterCount, menuFilters, menuMode, visibleListMenuItems]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
-    setSelectedFilters((current) => {
+    const toggleValue = (current: SelectedFilters) => {
       const currentValues = current[filterKey];
       const hasValue = currentValues.includes(value);
 
@@ -1521,36 +925,408 @@ export default function App() {
           ? currentValues.filter((item) => item !== value)
           : [...currentValues, value],
       };
-    });
-    Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+    };
+
+    if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, toggleValue);
+    } else {
+      setSelectedFilters(toggleValue);
+    }
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, updateTodoFilters]);
 
   const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
-    setSelectedFilters((current) => {
+    const removeValue = (current: SelectedFilters) => {
       const nextValues = current[filterKey].filter((item) => item !== value);
       return { ...current, [filterKey]: nextValues };
-    });
-    Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+    };
+
+    if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, removeValue);
+    } else {
+      setSelectedFilters(removeValue);
+    }
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, updateTodoFilters]);
 
   const clearFilters = useCallback(() => {
-    setSelectedFilters({
-      date: [],
-      list: [],
-      priority: [],
-    });
+    if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, () => cloneTodoFilters());
+    } else {
+      setSelectedFilters(cloneTodoFilters());
+    }
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, updateTodoFilters]);
+
+  const openSettingsModal = useCallback(() => {
+    Keyboard.dismiss();
+    setMenuMode(null);
+    setSettingsModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
-  const longSelectTodo = useCallback((id: string) => {
-    setSelectedTodoIds((current) => {
-      const next = new Set(current);
-      next.add(id);
-      return next;
+  const toggleGoogleDriveBackup = useCallback(() => {
+    setGoogleDriveBackupEnabled((current) => !current);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const disconnectGoogleDrive = useCallback(async () => {
+    setGoogleDriveBusy(true);
+
+    try {
+      if (Platform.OS === 'android') {
+        try {
+          const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+          await GoogleSignin.signOut();
+        } catch {
+          // Local token storage is still cleared below.
+        }
+      }
+
+      await googleAuthStore.clear();
+      setGoogleAuth(null);
+      setGoogleDriveBackupStatus('Google Drive disconnected');
+      Haptics.selectionAsync().catch(() => undefined);
+    } finally {
+      setGoogleDriveBusy(false);
+    }
+  }, []);
+
+  const getFreshGoogleAccessToken = useCallback(async (authOverride?: StoredGoogleAuth) => {
+    const clientId = getGoogleClientIdForPlatform();
+    if (!clientId) {
+      throw new Error('Google OAuth client ID is not configured for this platform.');
+    }
+
+    const storedAuth = authOverride ?? googleAuth ?? await googleAuthStore.load();
+    if (!storedAuth) {
+      throw new Error('Google sign in is required.');
+    }
+
+    const token = new TokenResponse({
+      accessToken: storedAuth.accessToken,
+      expiresIn: storedAuth.expiresIn,
+      idToken: storedAuth.idToken,
+      issuedAt: storedAuth.issuedAt,
+      refreshToken: storedAuth.refreshToken,
+      scope: storedAuth.scope,
+      tokenType: storedAuth.tokenType === 'mac' ? 'mac' : 'bearer',
     });
+
+    if (!token.shouldRefresh()) {
+      return storedAuth.accessToken;
+    }
+
+    if (!storedAuth.refreshToken) {
+      await googleAuthStore.clear();
+      setGoogleAuth(null);
+      throw new Error('Google session expired. Sign in again.');
+    }
+
+    const refreshedToken = await token.refreshAsync(
+      {
+        clientId,
+        scopes: GOOGLE_AUTH_SCOPES,
+      },
+      Google.discovery,
+    );
+    const nextAuth = {
+      ...googleAuthToStoredAuth(refreshedToken),
+      refreshToken: refreshedToken.refreshToken ?? storedAuth.refreshToken,
+    };
+    setGoogleAuth(nextAuth);
+    await googleAuthStore.save(nextAuth);
+
+    return nextAuth.accessToken;
+  }, [googleAuth]);
+
+  const handleGoogleDriveError = useCallback((error: unknown, fallbackMessage: string) => {
+    setGoogleDriveBackupStatus(error instanceof Error ? error.message : fallbackMessage);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+  }, []);
+
+  const authenticateWithAndroidGoogle = useCallback(async () => {
+    let nativeGoogleSignIn: NativeGoogleSignIn;
+
+    try {
+      assertNativeGoogleSignInAvailable();
+      setGoogleDriveBackupStatus('Loading Google sign in...');
+      nativeGoogleSignIn = await import('@react-native-google-signin/google-signin');
+    } catch (error) {
+      throw normalizeNativeGoogleSignInError(error);
+    }
+
+    const { GoogleSignin } = nativeGoogleSignIn;
+
+    try {
+      GoogleSignin.configure();
+      setGoogleDriveBackupStatus('Checking Google Play services...');
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true }).catch((error) => {
+        throw normalizeNativeGoogleSignInError(error, 'Checking Google Play services');
+      });
+
+      setGoogleDriveBackupStatus('Opening Google account picker...');
+      await GoogleSignin.signOut().catch(() => undefined);
+      const signInResult = await GoogleSignin.signIn().catch((error) => {
+        throw normalizeNativeGoogleSignInError(error, 'Opening Google account picker');
+      });
+      if (signInResult.type === 'cancelled') {
+        throw new Error('Google sign in cancelled');
+      }
+
+      setGoogleDriveBackupStatus('Requesting Google Drive permission...');
+      const scopeResult = await GoogleSignin.addScopes({ scopes: GOOGLE_AUTH_SCOPES }).catch((error) => {
+        throw normalizeNativeGoogleSignInError(error, 'Requesting Google Drive permission');
+      });
+      if (!scopeResult) {
+        throw new Error('Google Drive permission could not be requested.');
+      }
+      if (scopeResult.type === 'cancelled') {
+        throw new Error('Google Drive permission cancelled');
+      }
+
+      setGoogleDriveBackupStatus('Getting Google Drive access...');
+      const tokens = await GoogleSignin.getTokens().catch((error) => {
+        throw normalizeNativeGoogleSignInError(error, 'Getting Google Drive access');
+      });
+      if (!tokens.accessToken) {
+        throw new Error('Google did not return an access token.');
+      }
+
+      const nextAuth = googleNativeTokenToStoredAuth(tokens.accessToken, tokens.idToken);
+      setGoogleAuth(nextAuth);
+      await googleAuthStore.save(nextAuth);
+
+      return nextAuth;
+    } catch (error) {
+      throw error instanceof Error ? error : normalizeNativeGoogleSignInError(error);
+    }
+  }, []);
+
+  const uploadBackupWithToken = useCallback(async (accessToken: string) => {
+    setGoogleDriveBackupStatus('Backing up to Google Drive...');
+
+    const payload = createBackupPayload(todos, {
+      googleDriveBackupEnabled,
+      googleDriveLastBackupAt,
+      googleDriveLastRestoreAt,
+      selectedFilters,
+    });
+    await uploadDriveBackup(accessToken, payload);
+    setGoogleDriveLastBackupAt(payload.exportedAt);
+    setGoogleDriveBackupStatus(`Backed up ${todos.length} items · ${formatBackupTime(payload.exportedAt)}`);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+  }, [
+    googleDriveBackupEnabled,
+    googleDriveLastBackupAt,
+    googleDriveLastRestoreAt,
+    selectedFilters,
+    todos,
+  ]);
+
+  const restoreBackupWithToken = useCallback(async (accessToken: string) => {
+    setGoogleDriveBackupStatus('Restoring from Google Drive...');
+
+    const backup = await downloadDriveBackup(accessToken);
+
+    if (!backup) {
+      setGoogleDriveBackupStatus('No Google Drive backup found');
+      return;
+    }
+
+    const restoredAt = new Date().toISOString();
+    setTodos(withInitialTodos(backup.payload.todos));
+    setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
+    setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
+    setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
+    setGoogleDriveLastRestoreAt(restoredAt);
+    setGoogleDriveBackupStatus(
+      `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
+    );
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+  }, []);
+
+  const runGoogleDriveAction = useCallback(async (
+    action: GoogleDriveAction,
+    authOverride?: StoredGoogleAuth,
+  ) => {
+    const accessToken = await getFreshGoogleAccessToken(authOverride);
+
+    if (action === 'backup') {
+      await uploadBackupWithToken(accessToken);
+      return;
+    }
+
+    await restoreBackupWithToken(accessToken);
+  }, [getFreshGoogleAccessToken, restoreBackupWithToken, uploadBackupWithToken]);
+
+  const authenticateAndRunGoogleDriveAction = useCallback(async (action: GoogleDriveAction) => {
+    if (!googleOAuthConfigured) {
+      setGoogleDriveBackupStatus('Google sign-in is not configured for this build.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      return;
+    }
+
+    if (Platform.OS !== 'android' && !googleRequest) {
+      setGoogleDriveBackupStatus('Google sign-in is still preparing.');
+      return;
+    }
+
+    setGoogleDriveBusy(true);
+    setGoogleDriveBackupStatus('Opening Google sign in...');
+
+    try {
+      if (Platform.OS === 'android') {
+        const nextAuth = await authenticateWithAndroidGoogle();
+        await runGoogleDriveAction(action, nextAuth);
+        return;
+      }
+
+      const result = await promptGoogleAuth();
+
+      if (result.type === 'success' && result.authentication?.accessToken) {
+        const nextAuth = googleAuthToStoredAuth(result.authentication);
+        setGoogleAuth(nextAuth);
+        await googleAuthStore.save(nextAuth);
+        await runGoogleDriveAction(action, nextAuth);
+        return;
+      }
+
+      if (result.type === 'cancel') {
+        setGoogleDriveBackupStatus('Google sign in cancelled');
+      } else if (result.type === 'dismiss') {
+        setGoogleDriveBackupStatus('Google sign in dismissed');
+      } else if (result.type === 'error') {
+        setGoogleDriveBackupStatus(result.error?.message ?? 'Google sign in failed');
+      } else {
+        setGoogleDriveBackupStatus('Google sign in did not finish');
+      }
+    } catch (error) {
+      handleGoogleDriveError(error, 'Google sign in failed');
+    } finally {
+      setGoogleDriveBusy(false);
+    }
+  }, [
+    authenticateWithAndroidGoogle,
+    googleOAuthConfigured,
+    googleRequest,
+    handleGoogleDriveError,
+    promptGoogleAuth,
+    runGoogleDriveAction,
+  ]);
+
+  const performGoogleDriveAction = useCallback(async (action: GoogleDriveAction) => {
+    if (googleDriveBusy) {
+      return;
+    }
+
+    if (!googleAuth?.accessToken) {
+      await authenticateAndRunGoogleDriveAction(action);
+      return;
+    }
+
+    setGoogleDriveBusy(true);
+
+    try {
+      await runGoogleDriveAction(action);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const shouldSignInAgain =
+        message === 'Google session expired. Sign in again.' ||
+        message === 'Google sign in is required.';
+
+      if (shouldSignInAgain) {
+        setGoogleDriveBusy(false);
+        await authenticateAndRunGoogleDriveAction(action);
+        return;
+      }
+
+      handleGoogleDriveError(
+        error,
+        action === 'backup' ? 'Google Drive backup failed' : 'Google Drive restore failed',
+      );
+    } finally {
+      setGoogleDriveBusy(false);
+    }
+  }, [
+    authenticateAndRunGoogleDriveAction,
+    googleAuth,
+    googleDriveBusy,
+    handleGoogleDriveError,
+    runGoogleDriveAction,
+  ]);
+
+  const backupToGoogleDrive = useCallback(async () => {
+    await performGoogleDriveAction('backup');
+  }, [performGoogleDriveAction]);
+
+  const restoreFromGoogleDrive = useCallback(async () => {
+    await performGoogleDriveAction('restore');
+  }, [performGoogleDriveAction]);
+
+  const scrollTodoAboveMenu = useCallback((id: string) => {
+    const index = filteredTodos.findIndex((todo) => todo.id === id);
+
+    if (index < 0) {
+      return;
+    }
+
+    todoListRef.current?.scrollToIndex({
+      animated: true,
+      index,
+      viewOffset: 12,
+      viewPosition: 0.34,
+    });
+  }, [filteredTodos]);
+
+  const handleTodoListScrollToIndexFailed = useCallback((info: ScrollToIndexFailedInfo) => {
+    todoListRef.current?.scrollToOffset({
+      animated: true,
+      offset: Math.max(0, info.averageItemLength * info.index),
+    });
+
+    setTimeout(() => {
+      todoListRef.current?.scrollToIndex({
+        animated: true,
+        index: info.index,
+        viewOffset: 12,
+        viewPosition: 0.34,
+      });
+    }, 100);
+  }, []);
+
+  const openMenuForTodoAction = useCallback((id: string) => {
+    setActiveTodoMenuId(id);
     Keyboard.dismiss();
     setMenuMode('main');
-  }, []);
+
+    requestAnimationFrame(() => {
+      scrollTodoAboveMenu(id);
+    });
+
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [scrollTodoAboveMenu]);
+
+  const renderTodoItem = useCallback(
+    ({ item }: { item: Todo }) => (
+      <MemoizedSwipeTodoItem
+        item={item}
+        isMenuTarget={menuMode !== null && activeTodoMenuId === item.id}
+        onDelete={deleteTodo}
+        onListTap={handleListTap}
+        onOpenMenu={openMenuForTodoAction}
+        onSetDone={setTodoDone}
+      />
+    ),
+    [
+      deleteTodo,
+      handleListTap,
+      activeTodoMenuId,
+      menuMode,
+      openMenuForTodoAction,
+      setTodoDone,
+    ],
+  );
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -1592,282 +1368,6 @@ export default function App() {
         </View>
 
         <View style={styles.listShell}>
-          {!leftPanelOpen && !rightPanelVisible && !listMenuOpen ? (
-            <PanGestureHandler
-              activeOffsetX={[-2, 2]}
-              failOffsetY={[-18, 18]}
-              onGestureEvent={handleLeftPanelOpenGesture}
-              onHandlerStateChange={handleLeftPanelOpenStateChange}
-            >
-              <View
-                collapsable={false}
-                pointerEvents="box-only"
-                style={[styles.leftPanelOpenZone, leftPanelGestureStyle]}
-              />
-            </PanGestureHandler>
-          ) : null}
-
-          {!rightPanelOpen && !leftPanelVisible && !listMenuOpen ? (
-            <PanGestureHandler
-              activeOffsetX={[-2, 2]}
-              failOffsetY={[-18, 18]}
-              onGestureEvent={handleRightPanelOpenGesture}
-              onHandlerStateChange={handleRightPanelOpenStateChange}
-            >
-              <View
-                collapsable={false}
-                pointerEvents="box-only"
-                style={[styles.leftPanelOpenZone, rightPanelGestureStyle]}
-              />
-            </PanGestureHandler>
-          ) : null}
-
-          {leftPanelVisible ? (
-            <>
-              {leftPanelOpen ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close left panel"
-                  onPress={closeLeftPanel}
-                  style={styles.leftPanelBackdrop}
-                />
-              ) : null}
-              {activeGestureSetting ? (
-                <GestureSettingsOverlay
-                  activeSetting={activeGestureSetting}
-                  settings={gestureSettings}
-                />
-              ) : null}
-              <PanGestureHandler
-                enabled={!settingsSliderActive}
-                activeOffsetX={[-8, 8]}
-                failOffsetY={[-20, 20]}
-                onGestureEvent={handleLeftPanelCloseGesture}
-                onHandlerStateChange={handleLeftPanelCloseStateChange}
-              >
-                <Animated.View
-                  collapsable={false}
-                  style={[
-                    styles.leftPanel,
-                    {
-                      transform: [{ translateX: leftPanelTranslateX }],
-                      width: leftPanelWidth,
-                    },
-                  ]}
-                >
-                  <ScrollView
-                    contentContainerStyle={styles.leftPanelScrollContent}
-                    showsVerticalScrollIndicator={false}
-                  >
-                    <Text style={styles.leftPanelTitle}>Todo</Text>
-                    <Text style={styles.leftPanelSubtitle}>
-                      {todos.length} items · {todos.filter((todo) => !todo.done).length} active
-                    </Text>
-
-                    <View style={styles.leftPanelSection}>
-                      <Text style={styles.leftPanelSectionTitle}>Filters</Text>
-                      <View style={styles.leftPanelMetricRow}>
-                        <Text style={styles.leftPanelMetricLabel}>Lists</Text>
-                        <Text style={styles.leftPanelMetricValue}>{selectedFilters.list.length}</Text>
-                      </View>
-                      <View style={styles.leftPanelMetricRow}>
-                        <Text style={styles.leftPanelMetricLabel}>Priority</Text>
-                        <Text style={styles.leftPanelMetricValue}>{selectedFilters.priority.length}</Text>
-                      </View>
-                      <View style={styles.leftPanelMetricRow}>
-                        <Text style={styles.leftPanelMetricLabel}>Date</Text>
-                        <Text style={styles.leftPanelMetricValue}>{selectedFilters.date.length}</Text>
-                      </View>
-                    </View>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => {
-                        setMenuMode('main');
-                        closeLeftPanel();
-                      }}
-                      style={({ pressed }) => [
-                        styles.leftPanelAction,
-                        pressed && styles.leftPanelActionPressed,
-                      ]}
-                    >
-                      <Text style={styles.leftPanelActionText}>Open menu</Text>
-                      <Text style={styles.leftPanelActionIcon}>›</Text>
-                    </Pressable>
-
-                    <View style={styles.leftPanelSection}>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityState={{ expanded: swipeSettingsOpen }}
-                        onPress={() => setSwipeSettingsOpen((current) => !current)}
-                        style={({ pressed }) => [
-                          styles.leftPanelSectionToggle,
-                          pressed && styles.leftPanelSectionTogglePressed,
-                        ]}
-                      >
-                        <View>
-                          <Text
-                            style={[
-                              styles.leftPanelSectionTitle,
-                              styles.leftPanelSectionTitleInline,
-                            ]}
-                          >
-                            Swipe settings
-                          </Text>
-                          <Text style={styles.leftPanelSectionSubtitle}>Left and right drawers</Text>
-                        </View>
-                        <Text
-                          style={[
-                            styles.leftPanelSectionToggleIcon,
-                            swipeSettingsOpen && styles.leftPanelSectionToggleIconOpen,
-                          ]}
-                        >
-                          ›
-                        </Text>
-                      </Pressable>
-
-                      {swipeSettingsOpen ? (
-                        <View style={styles.swipeSettingsPanel}>
-                          <SettingsSlider
-                            description="Moves both drawer triggers away from the left and right screen edges. At 5%, each trigger begins after the first 5% of screen width."
-                            label="Drawer edge offset"
-                            min={0}
-                            max={20}
-                            onChange={(value) => updateGestureSetting('drawerEdgeOffsetPercent', value)}
-                            onSlidingChange={(sliding) =>
-                              setActiveGestureSetting(sliding ? 'drawerEdgeOffsetPercent' : null)
-                            }
-                            step={1}
-                            suffix="%"
-                            value={gestureSettings.drawerEdgeOffsetPercent}
-                          />
-                          <SettingsSlider
-                            description="Controls how wide both invisible drawer trigger bands are."
-                            label="Drawer trigger width"
-                            min={5}
-                            max={25}
-                            onChange={(value) => updateGestureSetting('drawerTriggerWidthPercent', value)}
-                            onSlidingChange={(sliding) =>
-                              setActiveGestureSetting(sliding ? 'drawerTriggerWidthPercent' : null)
-                            }
-                            step={1}
-                            suffix="%"
-                            value={gestureSettings.drawerTriggerWidthPercent}
-                          />
-                          <SettingsSlider
-                            description="Controls how tall both drawer trigger bands are in the middle of the screen."
-                            label="Drawer swipe height"
-                            min={20}
-                            max={80}
-                            onChange={(value) => updateGestureSetting('drawerVerticalCoveragePercent', value)}
-                            onSlidingChange={(sliding) =>
-                              setActiveGestureSetting(sliding ? 'drawerVerticalCoveragePercent' : null)
-                            }
-                            step={5}
-                            suffix="%"
-                            value={gestureSettings.drawerVerticalCoveragePercent}
-                          />
-                          <SettingsSlider
-                            description="Controls what part of each todo row can start a todo swipe. Lower values leave more of the row edges free for drawer gestures."
-                            label="Todo swipe area"
-                            min={30}
-                            max={100}
-                            onChange={(value) => updateGestureSetting('todoSwipeAreaPercent', value)}
-                            onSlidingChange={(sliding) =>
-                              setActiveGestureSetting(sliding ? 'todoSwipeAreaPercent' : null)
-                            }
-                            step={5}
-                            suffix="%"
-                            value={gestureSettings.todoSwipeAreaPercent}
-                          />
-                          <SettingsSlider
-                            description="Controls how far a todo must be swiped left or right before its icon menu opens."
-                            label="Todo reveal distance"
-                            min={28}
-                            max={120}
-                            onChange={(value) => updateGestureSetting('todoSwipeOpenDistance', value)}
-                            onSlidingChange={(sliding) =>
-                              setActiveGestureSetting(sliding ? 'todoSwipeOpenDistance' : null)
-                            }
-                            step={4}
-                            value={gestureSettings.todoSwipeOpenDistance}
-                          />
-                        </View>
-                      ) : null}
-                    </View>
-                  </ScrollView>
-                </Animated.View>
-              </PanGestureHandler>
-            </>
-          ) : null}
-
-          {rightPanelVisible ? (
-            <>
-              {rightPanelOpen ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close right panel"
-                  onPress={closeRightPanel}
-                  style={styles.leftPanelBackdrop}
-                />
-              ) : null}
-              <PanGestureHandler
-                activeOffsetX={[-8, 8]}
-                failOffsetY={[-20, 20]}
-                onGestureEvent={handleRightPanelCloseGesture}
-                onHandlerStateChange={handleRightPanelCloseStateChange}
-              >
-                <Animated.View
-                  collapsable={false}
-                  style={[
-                    styles.leftPanel,
-                    styles.rightPanel,
-                    {
-                      transform: [{ translateX: rightPanelTranslateX }],
-                      width: leftPanelWidth,
-                    },
-                  ]}
-                >
-                  <Text style={styles.leftPanelTitle}>Todo</Text>
-                  <Text style={styles.leftPanelSubtitle}>
-                    {todos.length} items · {todos.filter((todo) => !todo.done).length} active
-                  </Text>
-
-                  <View style={styles.leftPanelSection}>
-                    <Text style={styles.leftPanelSectionTitle}>Filters</Text>
-                    <View style={styles.leftPanelMetricRow}>
-                      <Text style={styles.leftPanelMetricLabel}>Lists</Text>
-                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.list.length}</Text>
-                    </View>
-                    <View style={styles.leftPanelMetricRow}>
-                      <Text style={styles.leftPanelMetricLabel}>Priority</Text>
-                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.priority.length}</Text>
-                    </View>
-                    <View style={styles.leftPanelMetricRow}>
-                      <Text style={styles.leftPanelMetricLabel}>Date</Text>
-                      <Text style={styles.leftPanelMetricValue}>{selectedFilters.date.length}</Text>
-                    </View>
-                  </View>
-
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setMenuMode('main');
-                      closeRightPanel();
-                    }}
-                    style={({ pressed }) => [
-                      styles.leftPanelAction,
-                      pressed && styles.leftPanelActionPressed,
-                    ]}
-                  >
-                    <Text style={styles.leftPanelActionText}>Open menu</Text>
-                    <Text style={styles.leftPanelActionIcon}>›</Text>
-                  </Pressable>
-                </Animated.View>
-              </PanGestureHandler>
-            </>
-          ) : null}
-
           {listMenuOpen ? (
             <>
               <Pressable
@@ -1884,6 +1384,25 @@ export default function App() {
                   onHandlerStateChange={handleMenuBackStateChange}
                 >
                   <View collapsable={false} style={styles.listMenu}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={submenuOpen ? 'Back to main filter menu' : 'Close filter menu'}
+                      onPress={() => {
+                        if (submenuOpen) {
+                          goBackInMenu();
+                        } else {
+                          setMenuMode(null);
+                          Haptics.selectionAsync().catch(() => undefined);
+                        }
+                      }}
+                      style={({ pressed }) => [
+                        styles.listMenuBackButton,
+                        pressed && styles.listMenuRowPressed,
+                      ]}
+                    >
+                      <Text style={styles.listMenuBackIcon}>{submenuOpen ? '‹' : '×'}</Text>
+                      <Text style={styles.listMenuBackText}>{submenuOpen ? 'Back' : 'Close'}</Text>
+                    </Pressable>
                     <FlatList
                       data={bottomMenuItems}
                       decelerationRate="fast"
@@ -1902,6 +1421,7 @@ export default function App() {
                       }
                       nestedScrollEnabled
                       overScrollMode="never"
+                      style={styles.listMenuList}
                       renderItem={({ item }) => {
                         if ('type' in item) {
                           if (item.type === 'clearFilters') {
@@ -1966,7 +1486,7 @@ export default function App() {
                             );
                           }
 
-                          const isSelected = selectedFilters[item.filterKey].includes(item.label);
+                          const isSelected = menuFilters[item.filterKey].includes(item.label);
 
                           return (
                             <Pressable
@@ -1987,7 +1507,7 @@ export default function App() {
                         }
 
                         const isExpanded = expandedListMenuPaths.has(item.path);
-                        const isSelected = selectedFilters.list.includes(item.label);
+                        const isSelected = menuFilters.list.includes(item.label);
                         const toggleSubmenu = () => {
                           setExpandedListMenuPaths((current) => {
                             const next = new Set(current);
@@ -2049,6 +1569,22 @@ export default function App() {
                       snapToAlignment="start"
                       snapToInterval={LIST_MENU_ROW_HEIGHT}
                     />
+                    {menuMode === 'main' ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Open settings"
+                        onPress={openSettingsModal}
+                        style={({ pressed }) => [
+                          styles.listMenuSettingsButton,
+                          pressed && styles.listMenuRowPressed,
+                        ]}
+                      >
+                        <View style={styles.listMenuRowTextWrap}>
+                          <Text style={styles.listMenuSettingsTitle}>Settings</Text>
+                        </View>
+                        <Text style={styles.listMenuArrow}>›</Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                 </PanGestureHandler>
               </View>
@@ -2081,115 +1617,188 @@ export default function App() {
             </>
           ) : null}
 
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.pullMenu,
-              {
-                opacity: pullMenuOpacity,
-                transform: [
-                  { translateY: pullMenuTranslateY },
-                  { scale: pullMenuScale },
-                ],
-              },
-            ]}
-          >
-            {PULL_STAGES.map((stage, index) => {
-              const stageNumber = index + 1;
-              const isActive = pullStage === stageNumber;
-
-              return (
-                <View
-                  key={stage.label}
-                  style={[
-                    styles.pullStage,
-                    isActive && styles.pullStageActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.pullStageText,
-                      isActive && styles.pullStageTextActive,
-                    ]}
-                  >
-                    {stage.label}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.pullStageMark,
-                      isActive && styles.pullStageMarkActive,
-                    ]}
-                  >
-                    {stageNumber === 2 ? '>' : stageNumber}
-                  </Text>
-                </View>
-              );
-            })}
-          </Animated.View>
-
-          <PanGestureHandler
-            activeOffsetY={8}
-            enabled={pullMenuArmed && isListAtTop && !listMenuOpen}
-            failOffsetX={[-24, 24]}
-            onGestureEvent={handleTopPullGesture}
-            onHandlerStateChange={handleTopPullStateChange}
-          >
-          <Animated.View
+          <View
             collapsable={false}
-            onTouchEnd={handlePullTapEnd}
-            onTouchStart={handlePullTapStart}
-            style={[styles.todoListFrame, { transform: [{ translateY: listTranslateY }] }]}
+            onTouchEnd={handleListFrameTouchEnd}
+            onTouchStart={handleListFrameTouchStart}
+            style={styles.todoListTapFrame}
           >
-            <FlatList
-              alwaysBounceVertical
-              bounces
-              contentContainerStyle={[
-                styles.listContent,
-                filteredTodos.length === 0 && styles.emptyListContent,
-              ]}
-              data={filteredTodos}
-              keyboardDismissMode="on-drag"
-              keyboardShouldPersistTaps="handled"
-              keyExtractor={(item) => item.id}
-              ListEmptyComponent={
-                <View style={styles.emptyState}>
-                  <Text style={styles.emptyIcon}>
-                    {query.trim() ? '⌕' : '✎'}
-                  </Text>
-                  <Text style={styles.emptyTitle}>
-                    {query.trim() ? 'No matching items' : 'No items yet'}
-                  </Text>
-                  <Text style={styles.emptyText}>
-                    {query.trim()
-                      ? 'Press return to add this as a new todo.'
-                      : 'Type above and press return to create one.'}
-                  </Text>
-                </View>
-              }
-              onScroll={handleListScroll}
-              onScrollEndDrag={releasePull}
-              renderItem={({ item }) => (
-                <SwipeTodoItem
-                  actionMenuCloseSignal={todoActionCloseSignal}
-                  gestureSettings={gestureSettings}
-                  isSelected={selectedTodoIds.has(item.id)}
-                  item={item}
-                  onDelete={deleteTodo}
-                  onLongSelect={longSelectTodo}
-                  onOpenMenu={() => {
-                    Keyboard.dismiss();
-                    setMenuMode('main');
-                    Haptics.selectionAsync().catch(() => undefined);
-                  }}
-                  onToggle={toggleTodo}
+            <PanGestureHandler
+              activeOffsetY={8}
+              enabled={isListAtTop && !listMenuOpen}
+              failOffsetX={[-24, 24]}
+              onGestureEvent={handleTopPullGesture}
+              onHandlerStateChange={handleTopPullStateChange}
+            >
+              <View
+                collapsable={false}
+                style={styles.todoListFrame}
+              >
+                <FlatList
+                  ref={todoListRef}
+                  alwaysBounceVertical={false}
+                  bounces={false}
+                  contentContainerStyle={[
+                    styles.listContent,
+                    activeTodoMenuId !== null && listMenuOpen && styles.listContentMenuOpen,
+                    filteredTodos.length === 0 && styles.emptyListContent,
+                  ]}
+                  data={filteredTodos}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  keyExtractor={(item) => item.id}
+                  ListEmptyComponent={
+                    <View style={styles.emptyState}>
+                      <Text style={styles.emptyIcon}>
+                        {query.trim() ? '⌕' : '✎'}
+                      </Text>
+                      <Text style={styles.emptyTitle}>
+                        {query.trim() ? 'No matching items' : 'No items yet'}
+                      </Text>
+                      <Text style={styles.emptyText}>
+                        {query.trim()
+                          ? 'Press return to add this as a new todo.'
+                          : 'Type above and press return to create one.'}
+                      </Text>
+                    </View>
+                  }
+                  onScroll={handleListScroll}
+                  onScrollEndDrag={releasePull}
+                  onScrollToIndexFailed={handleTodoListScrollToIndexFailed}
+                  renderItem={renderTodoItem}
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
                 />
-              )}
-              scrollEventThrottle={16}
-              showsVerticalScrollIndicator={false}
-            />
-          </Animated.View>
-          </PanGestureHandler>
+              </View>
+            </PanGestureHandler>
+          </View>
         </View>
+        <Modal
+          animationType="slide"
+          onRequestClose={closeSettingsModal}
+          presentationStyle="fullScreen"
+          visible={settingsModalVisible}
+        >
+          <SafeAreaView style={styles.settingsModal}>
+            <StatusBar barStyle="dark-content" />
+            <View style={styles.settingsHeader}>
+              <View style={styles.settingsHeaderTextWrap}>
+                <Text style={styles.settingsTitle}>Settings</Text>
+                <Text style={styles.settingsSubtitle}>Backup</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close settings"
+                onPress={closeSettingsModal}
+                style={({ pressed }) => [
+                  styles.settingsCloseButton,
+                  pressed && styles.settingsCloseButtonPressed,
+                ]}
+              >
+                <Text style={styles.settingsCloseIcon}>×</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.settingsBody}>
+              <View style={styles.settingsSection}>
+                <Text style={styles.settingsSectionTitle}>Google Drive</Text>
+                <View style={styles.settingsCard}>
+                  <View style={styles.settingsRow}>
+                    <View style={styles.settingsRowTextWrap}>
+                      <Text style={styles.settingsRowTitle}>Backup all data</Text>
+                      <Text style={styles.settingsRowSubtitle}>
+                        {todos.length} todos · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.settingsStatusPill,
+                        googleConnected && styles.settingsStatusPillEnabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.settingsStatusText,
+                          googleConnected && styles.settingsStatusTextEnabled,
+                        ]}
+                      >
+                        {googleConnected ? 'Connected' : 'Not signed in'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {!googleOAuthConfigured ? (
+                    <Text style={styles.settingsWarningText}>
+                      Google sign-in is not configured for this build. Add the EXPO_PUBLIC_GOOGLE_* client IDs and rebuild.
+                    </Text>
+                  ) : null}
+
+                  <Pressable
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: googleDriveBackupEnabled }}
+                    disabled={googleDriveBusy}
+                    onPress={toggleGoogleDriveBackup}
+                    style={({ pressed }) => [
+                      styles.settingsOptionRow,
+                      googleDriveBusy && styles.settingsButtonDisabled,
+                      pressed && styles.settingsOptionRowPressed,
+                    ]}
+                  >
+                    <Text style={styles.settingsOptionText}>Auto backup</Text>
+                    <Text style={styles.settingsOptionValue}>
+                      {googleDriveBackupEnabled ? 'Enabled' : 'Disabled'}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={googleDriveBusy || !googleDriveActionReady}
+                    onPress={backupToGoogleDrive}
+                    style={({ pressed }) => [
+                      styles.settingsPrimaryButton,
+                      (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                      pressed && styles.settingsPrimaryButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.settingsPrimaryButtonText}>
+                      {googleDriveBusy ? 'Working...' : 'Back up to Google Drive'}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={googleDriveBusy || !googleDriveActionReady}
+                    onPress={restoreFromGoogleDrive}
+                    style={({ pressed }) => [
+                      styles.settingsRestoreButton,
+                      (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                      pressed && styles.settingsSecondaryButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.settingsRestoreButtonText}>Restore from Google Drive</Text>
+                  </Pressable>
+
+                  {googleConnected ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={googleDriveBusy}
+                      onPress={disconnectGoogleDrive}
+                      style={({ pressed }) => [
+                        styles.settingsDisconnectButton,
+                        googleDriveBusy && styles.settingsButtonDisabled,
+                        pressed && styles.settingsSecondaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsDisconnectButtonText}>Disconnect Google Drive</Text>
+                    </Pressable>
+                  ) : null}
+
+                  <Text style={styles.settingsBackupStatus}>{googleDriveBackupStatus}</Text>
+                </View>
+              </View>
+            </View>
+          </SafeAreaView>
+        </Modal>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </GestureHandlerRootView>
@@ -2207,6 +1816,234 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#F8F6F2',
+  },
+  settingsModal: {
+    flex: 1,
+    backgroundColor: '#F8F6F2',
+  },
+  settingsHeader: {
+    minHeight: 72,
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E8E2DA',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 8,
+  },
+  settingsHeaderTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsTitle: {
+    color: '#1E1B18',
+    fontSize: 24,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 30,
+    letterSpacing: 0,
+  },
+  settingsSubtitle: {
+    color: '#8C847C',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+    marginTop: 2,
+  },
+  settingsCloseButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4DDD4',
+  },
+  settingsCloseButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.96 }],
+  },
+  settingsCloseIcon: {
+    color: '#2A2520',
+    fontSize: 26,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 28,
+  },
+  settingsBody: {
+    flex: 1,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 22,
+  },
+  settingsSection: {
+    width: '100%',
+  },
+  settingsSectionTitle: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.2,
+    marginBottom: 10,
+    textTransform: 'uppercase',
+  },
+  settingsCard: {
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
+    padding: 14,
+    shadowColor: '#3D3428',
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
+  },
+  settingsRow: {
+    minHeight: 54,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  settingsRowTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
+  },
+  settingsRowTitle: {
+    color: '#1E1B18',
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 21,
+    letterSpacing: 0.1,
+  },
+  settingsRowSubtitle: {
+    color: '#8C847C',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+    marginTop: 3,
+  },
+  settingsStatusPill: {
+    minWidth: 48,
+    borderRadius: 13,
+    alignItems: 'center',
+    backgroundColor: '#F3EEE7',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  settingsStatusPillEnabled: {
+    backgroundColor: '#EDF4F0',
+  },
+  settingsStatusText: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.1,
+  },
+  settingsStatusTextEnabled: {
+    color: '#1C5A4E',
+  },
+  settingsWarningText: {
+    color: '#8F4D46',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 17,
+    letterSpacing: 0.1,
+    marginTop: 10,
+  },
+  settingsSecondaryButtonPressed: {
+    opacity: 0.74,
+    transform: [{ scale: 0.99 }],
+  },
+  settingsButtonDisabled: {
+    opacity: 0.42,
+  },
+  settingsOptionRow: {
+    minHeight: 48,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F2EBE3',
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  settingsOptionRowPressed: {
+    opacity: 0.72,
+  },
+  settingsOptionText: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  settingsOptionValue: {
+    color: '#2F6F62',
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+  },
+  settingsPrimaryButton: {
+    minHeight: 50,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2F6F62',
+    marginTop: 14,
+    paddingHorizontal: 16,
+  },
+  settingsPrimaryButtonPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.99 }],
+  },
+  settingsPrimaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  settingsRestoreButton: {
+    minHeight: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3EEE7',
+    marginTop: 10,
+    paddingHorizontal: 16,
+  },
+  settingsRestoreButtonText: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  settingsDisconnectButton: {
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    paddingHorizontal: 12,
+  },
+  settingsDisconnectButtonText: {
+    color: '#8F4D46',
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+  },
+  settingsBackupStatus: {
+    color: '#8C847C',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+    marginTop: 12,
   },
   topBar: {
     paddingHorizontal: HORIZONTAL_PADDING,
@@ -2248,327 +2085,8 @@ const styles = StyleSheet.create({
   todoListFrame: {
     flex: 1,
   },
-  leftPanelOpenZone: {
-    position: 'absolute',
-    zIndex: 12,
-    elevation: 4,
-    backgroundColor: 'transparent',
-  },
-  leftPanelBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    top: -DRAWER_VERTICAL_OVERLAP,
-    zIndex: 34,
-    backgroundColor: 'rgba(31, 27, 22, 0.14)',
-  },
-  gestureSettingsOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    top: -DRAWER_VERTICAL_OVERLAP,
-    zIndex: 60,
-    elevation: 20,
-  },
-  gestureSettingsOverlayWash: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(238, 238, 238, 0.34)',
-  },
-  gestureSettingsOverlayZone: {
-    position: 'absolute',
-    borderRadius: 12,
-    backgroundColor: 'rgba(188, 188, 188, 0.5)',
-    borderWidth: 1,
-    borderColor: 'rgba(120, 120, 120, 0.55)',
-  },
-  gestureSettingsTodoSample: {
-    position: 'absolute',
-    left: HORIZONTAL_PADDING,
-    right: HORIZONTAL_PADDING,
-    top: '48%',
-    height: 64,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
-    borderWidth: 1,
-    borderColor: 'rgba(120, 120, 120, 0.32)',
-    overflow: 'hidden',
-  },
-  gestureSettingsTodoZone: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(188, 188, 188, 0.55)',
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: 'rgba(120, 120, 120, 0.45)',
-  },
-  leftPanel: {
-    position: 'absolute',
-    top: -DRAWER_VERTICAL_OVERLAP,
-    bottom: 0,
-    left: 0,
-    zIndex: 35,
-    elevation: 10,
-    backgroundColor: '#FFFFFF',
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: '#E4DDD4',
-    paddingHorizontal: 20,
-    paddingTop: TOP_SAFE_GAP + 18,
-    shadowColor: '#000000',
-    shadowOpacity: 0.12,
-    shadowRadius: 22,
-    shadowOffset: { width: 8, height: 0 },
-  },
-  leftPanelScrollContent: {
-    paddingBottom: 28,
-  },
-  rightPanel: {
-    left: undefined,
-    right: 0,
-    borderRightWidth: 0,
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: '#E4DDD4',
-    shadowOffset: { width: -8, height: 0 },
-  },
-  leftPanelTitle: {
-    color: '#1E1B18',
-    fontSize: 22,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 28,
-    letterSpacing: 0,
-  },
-  leftPanelSubtitle: {
-    color: '#8C847C',
-    fontSize: 13,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 18,
-    letterSpacing: 0.1,
-    marginTop: 4,
-  },
-  leftPanelSection: {
-    marginTop: 28,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#EEE8E0',
-    paddingTop: 16,
-  },
-  leftPanelSectionTitle: {
-    color: '#8C847C',
-    fontSize: 12,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 16,
-    letterSpacing: 0.2,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  leftPanelSectionTitleInline: {
-    marginBottom: 0,
-  },
-  leftPanelSectionSubtitle: {
-    color: '#A59B91',
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 16,
-    letterSpacing: 0.1,
-    marginTop: 2,
-  },
-  leftPanelSectionToggle: {
-    minHeight: 44,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 2,
-  },
-  leftPanelSectionTogglePressed: {
-    opacity: 0.72,
-  },
-  leftPanelSectionToggleIcon: {
-    color: '#2F6F62',
-    fontSize: 25,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 28,
-    transform: [{ rotate: '0deg' }],
-  },
-  leftPanelSectionToggleIconOpen: {
-    transform: [{ rotate: '90deg' }],
-  },
-  leftPanelMetricRow: {
-    minHeight: 38,
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F2EBE3',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  leftPanelMetricLabel: {
-    color: '#2A2520',
-    fontSize: 15,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 20,
-    letterSpacing: 0.1,
-  },
-  leftPanelMetricValue: {
-    color: '#2F6F62',
-    fontSize: 14,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    letterSpacing: 0.1,
-  },
-  leftPanelAction: {
-    minHeight: 48,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#EDF4F0',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 22,
-    paddingHorizontal: 14,
-  },
-  leftPanelActionPressed: {
-    opacity: 0.75,
-  },
-  leftPanelActionText: {
-    color: '#1C5A4E',
-    fontSize: 15,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 20,
-    letterSpacing: 0.1,
-  },
-  leftPanelActionIcon: {
-    color: '#2F6F62',
-    fontSize: 22,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 24,
-  },
-  settingsSlider: {
-    paddingVertical: 12,
-  },
-  swipeSettingsPanel: {
-    paddingTop: 4,
-  },
-  settingsSliderHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  settingsSliderHelpButton: {
+  todoListTapFrame: {
     flex: 1,
-    minWidth: 0,
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    paddingRight: 8,
-  },
-  settingsSliderLabel: {
-    color: '#2A2520',
-    fontSize: 14,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 18,
-    letterSpacing: 0.1,
-  },
-  settingsSliderHelpIcon: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    overflow: 'hidden',
-    color: '#8C847C',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D8D0C7',
-    fontSize: 12,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-  settingsSliderHelpText: {
-    color: '#766E66',
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 17,
-    letterSpacing: 0.1,
-    marginBottom: 10,
-  },
-  settingsSliderValuePill: {
-    minWidth: 48,
-    borderRadius: 10,
-    backgroundColor: '#EDF4F0',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  settingsSliderValue: {
-    color: '#2F6F62',
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    letterSpacing: 0.1,
-  },
-  settingsSliderTrack: {
-    height: 28,
-    justifyContent: 'center',
-    borderRadius: 14,
-    backgroundColor: '#F3EEE7',
-  },
-  settingsSliderTrackWrap: {
-    paddingHorizontal: 12,
-    paddingVertical: 2,
-  },
-  settingsSliderFill: {
-    position: 'absolute',
-    left: 0,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#2F6F62',
-  },
-  settingsSliderThumb: {
-    position: 'absolute',
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#2F6F62',
-    marginLeft: -11,
-    shadowColor: '#000000',
-    shadowOpacity: 0.12,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  gesturePreview: {
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E4DDD4',
-    backgroundColor: '#FAF8F5',
-    padding: 10,
-    marginBottom: 10,
-  },
-  gesturePreviewPhone: {
-    height: 150,
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E8E2DA',
-  },
-  gesturePreviewDrawerZone: {
-    position: 'absolute',
-    borderRadius: 8,
-    backgroundColor: 'rgba(47, 111, 98, 0.22)',
-    borderWidth: 1,
-    borderColor: 'rgba(47, 111, 98, 0.42)',
-  },
-  gesturePreviewTodoRow: {
-    position: 'absolute',
-    left: 18,
-    right: 18,
-    bottom: 22,
-    height: 24,
-    borderRadius: 8,
-    backgroundColor: '#F1ECE5',
-    overflow: 'hidden',
-  },
-  gesturePreviewTodoActive: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    borderRadius: 8,
-    backgroundColor: 'rgba(83, 114, 232, 0.28)',
   },
   listMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -2591,14 +2109,14 @@ const styles = StyleSheet.create({
   },
   listMenuLayer: {
     position: 'absolute',
-    bottom: 24,
+    bottom: LIST_MENU_BOTTOM_OFFSET,
     left: HORIZONTAL_PADDING,
     right: HORIZONTAL_PADDING,
     zIndex: 20,
     elevation: 7,
   },
   listMenu: {
-    height: 280,
+    height: LIST_MENU_HEIGHT,
     borderRadius: 18,
     backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
@@ -2610,6 +2128,48 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 14 },
     elevation: 6,
+  },
+  listMenuBackButton: {
+    minHeight: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginBottom: 6,
+    paddingHorizontal: 12,
+  },
+  listMenuBackIcon: {
+    color: '#2F6F62',
+    fontSize: 24,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 26,
+    marginRight: 8,
+  },
+  listMenuBackText: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  listMenuList: {
+    flex: 1,
+  },
+  listMenuSettingsButton: {
+    minHeight: 50,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E8E2DA',
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    paddingHorizontal: 16,
+  },
+  listMenuSettingsTitle: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    letterSpacing: 0.1,
   },
   listMenuRow: {
     height: LIST_MENU_ROW_HEIGHT,
@@ -2799,6 +2359,9 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     gap: 8,
   },
+  listContentMenuOpen: {
+    paddingBottom: LIST_MENU_HEIGHT + LIST_MENU_BOTTOM_OFFSET + 104,
+  },
   emptyListContent: {
     flexGrow: 1,
     justifyContent: 'center',
@@ -2807,26 +2370,28 @@ const styles = StyleSheet.create({
     minHeight: 60,
     borderRadius: 14,
     backgroundColor: 'transparent',
+    position: 'relative',
   },
-  todoLeftActionMenu: {
-    position: 'absolute',
-    top: 1,
-    left: 1,
-    bottom: 1,
+  todoSwipeableContainer: {
+    minHeight: 60,
+    borderRadius: 14,
+    overflow: 'visible',
+  },
+  todoSwipeableChildren: {
+    overflow: 'visible',
+  },
+  todoSwipeLeftActions: {
     width: TODO_LEFT_ACTION_MENU_WIDTH,
-    borderRadius: 13,
+    height: '100%',
+    borderRadius: 14,
     overflow: 'hidden',
     flexDirection: 'row',
-    justifyContent: 'flex-start',
     backgroundColor: '#CF413A',
   },
-  todoRightActionMenu: {
-    position: 'absolute',
-    top: 1,
-    right: 1,
-    bottom: 1,
+  todoSwipeRightActions: {
     width: TODO_RIGHT_ACTION_MENU_WIDTH,
-    borderRadius: 13,
+    height: '100%',
+    borderRadius: 14,
     overflow: 'hidden',
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -2834,6 +2399,7 @@ const styles = StyleSheet.create({
   },
   todoActionButton: {
     width: TODO_ACTION_WIDTH,
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2874,44 +2440,19 @@ const styles = StyleSheet.create({
   todoTextPressable: {
     flex: 1,
     minWidth: 0,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
   },
   todoRowDone: {
     backgroundColor: '#FAF9F6',
     borderColor: '#EEEAE4',
   },
-  todoRowSelected: {
-    backgroundColor: '#EDF4F0',
-    borderColor: '#9EC7BA',
-  },
-  todoCollapseOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 5,
-    backgroundColor: 'transparent',
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    borderWidth: 1.5,
-    borderColor: '#D4CCC2',
-    marginRight: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FAF8F5',
-  },
-  checkboxDone: {
-    backgroundColor: '#2F6F62',
-    borderColor: '#2F6F62',
-  },
-  checkmark: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 14,
-    marginTop: 1,
+  todoRowMenuTarget: {
+    backgroundColor: '#FFF8E7',
+    borderColor: '#E4BE63',
+    shadowOpacity: 0.07,
   },
   todoText: {
-    flex: 1,
     color: '#1E1B18',
     fontSize: 15,
     fontWeight: FONT_REGULAR,

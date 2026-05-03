@@ -2,7 +2,8 @@
   "expo": {
     "name": "Local Todo",
     "slug": "local-todo",
-    "version": "1.0.0",
+    "scheme": "com.localtodo.app",
+    "version": "1.0.2",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {
@@ -17,7 +18,18 @@
     },
     "android": {
       "package": "com.localtodo.app",
+      "versionCode": 3,
       "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-web-browser",
+      "expo-secure-store",
+      "@react-native-google-signin/google-signin"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "96b6e215-1b7a-4c22-b921-c3c59cc47d38"
+      }
     }
   }
 }

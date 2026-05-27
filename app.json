@@ -3,7 +3,7 @@
     "name": "Local Todo",
     "slug": "local-todo",
     "scheme": "com.localtodo.app",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.localtodo.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "edgeToEdgeEnabled": true
     },
     "plugins": [

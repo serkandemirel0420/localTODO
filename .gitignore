@@ -40,6 +40,10 @@ dist/
 .env.*
 !.env.example
 
+# Local Android signing
+android/app/localtodo-release.keystore
+android/app/localtodo-signing.properties
+
 # OS files
 .DS_Store
 

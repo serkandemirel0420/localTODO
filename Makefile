@@ -1,6 +1,6 @@
 PORT ?= 8083
 
-.PHONY: install start start-clear start-dev start-dev-tunnel start-local start-tunnel ios android android-dev android-dev-cloud web typecheck check audit clean
+.PHONY: install start start-clear start-dev start-dev-tunnel start-local start-tunnel ios android android-dev android-release android-release-install android-dev-cloud android-preview-cloud web typecheck check audit clean
 
 install:
 	npm install
@@ -32,8 +32,17 @@ android:
 android-dev:
 	npx expo run:android --port $(PORT)
 
+android-release:
+	./android/gradlew -p android :app:assembleRelease
+
+android-release-install:
+	./android/gradlew -p android :app:installRelease
+
 android-dev-cloud:
 	npx eas-cli build --platform android --profile development
+
+android-preview-cloud:
+	npx eas-cli build --platform android --profile preview
 
 web:
 	npm run web -- --lan --port $(PORT)

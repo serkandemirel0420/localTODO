@@ -1,10 +1,13 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   BackHandler,
+  Easing,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -16,10 +19,12 @@ import {
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -53,13 +58,30 @@ import {
   type StoredGoogleAuth,
 } from './src/google/googleAuthStore';
 import {
+  cloneFilterColors,
+  FILTER_COLOR_SWATCHES,
+  getFilterColorTheme,
+  getTodoColorThemes,
+  getTodoPrimaryColorTheme,
+  type FilterColorSettings,
+} from './src/filterColors';
+import {
   appSettingsStore,
+  cloneListMenuTree,
+  cloneMenuPresets,
+  DEFAULT_LIST_MENU_TREE,
   type AppSettings,
+  type ListOrderMode,
+  type StoredListMenuNode,
+  type StoredMenuPreset,
+  type TodoGroupMode,
+  type TodoSortMode,
 } from './src/storage/appSettingsStore';
 
 WebBrowser.maybeCompleteAuthSession();
 
 type SwipeTodoItemProps = {
+  filterColors: FilterColorSettings;
   item: Todo;
   isMenuTarget: boolean;
   onDelete: (id: string) => void;
@@ -68,27 +90,43 @@ type SwipeTodoItemProps = {
   onSetDone: (id: string, done: boolean) => void;
 };
 
-type ListMenuNode = {
-  label: string;
-  children?: ListMenuNode[];
-};
+type ListMenuNode = StoredListMenuNode;
+type MenuPreset = StoredMenuPreset;
 
 type VisibleListMenuItem = {
-  childCount: number;
-  depth: number;
-  hasChildren: boolean;
   id: string;
   label: string;
-  path: string;
 };
 
 type BottomMenuItem = MenuRow | VisibleListMenuItem;
 
 type FilterKey = 'list' | 'date' | 'priority';
 
-type MenuMode = 'date' | 'filters' | 'lists' | 'main' | 'priority';
+type MenuMode =
+  | 'date'
+  | 'filters'
+  | 'group'
+  | 'lists'
+  | 'main'
+  | 'presets'
+  | 'presetsQuickApply'
+  | 'priority'
+  | 'sort';
 
 type SelectedFilters = TodoFilters;
+
+type TodoListRow =
+  | {
+      id: string;
+      todo: Todo;
+      type: 'todo';
+    }
+  | {
+      count: number;
+      id: string;
+      label: string;
+      type: 'group';
+    };
 
 type GoogleDriveAction = 'backup' | 'restore';
 
@@ -107,11 +145,37 @@ type MenuRow =
       type: 'clearFilters';
     }
   | {
+      id: string;
+      label: string;
+      type: 'settings';
+    }
+  | {
+      id: string;
+      label: string;
+      summary: string;
+      type: 'savePreset';
+    }
+  | {
+      id: string;
+      label: string;
+      preset: MenuPreset;
+      summary: string;
+      type: 'quickApplyPreset';
+    }
+  | {
+      id: string;
+      label: string;
+      preset: MenuPreset;
+      summary: string;
+      type: 'preset';
+    }
+  | {
       count?: number;
       id: string;
       label: string;
       menuMode: MenuMode;
       type: 'menu';
+      valueLabel?: string;
     }
   | {
       filterKey: FilterKey;
@@ -124,7 +188,52 @@ type MenuRow =
       id: string;
       label: string;
       type: 'value';
+    }
+  | {
+      groupMode: TodoGroupMode;
+      id: string;
+      label: string;
+      type: 'groupOption';
+    }
+  | {
+      id: string;
+      label: string;
+      sortMode: TodoSortMode;
+      type: 'sortOption';
     };
+
+const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
+  date: 'date',
+  lists: 'list',
+  priority: 'priority',
+};
+
+const menuSectionCanClear = (
+  menuMode: MenuMode,
+  filters: TodoFilters,
+  activeFilterCount: number,
+  sortMode: TodoSortMode,
+  groupMode: TodoGroupMode,
+): boolean => {
+  const filterKey = MENU_SECTION_FILTER_KEYS[menuMode];
+  if (filterKey) {
+    return filters[filterKey].length > 0;
+  }
+
+  if (menuMode === 'filters') {
+    return activeFilterCount > 0;
+  }
+
+  if (menuMode === 'sort') {
+    return sortMode !== 'newest';
+  }
+
+  if (menuMode === 'group') {
+    return groupMode !== 'none';
+  }
+
+  return false;
+};
 
 const TODO_ACTION_WIDTH = 68;
 const TODO_LEFT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH * 2;
@@ -139,36 +248,47 @@ const PULL_RELEASE = 34;
 const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
 const TODO_SWIPE_OPEN_DISTANCE = 62;
-const LIST_MENU_HEIGHT = 280;
+const LIST_MENU_HEIGHT_RATIO = 0.5;
 const LIST_MENU_BOTTOM_OFFSET = 24;
+const MENU_DISMISS_RELEASE = 52;
+const MENU_DISMISS_VELOCITY = 680;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
-const LIST_MENU_TREE: ListMenuNode[] = [
-  { label: 'Inbox', children: [{ label: 'Quick capture' }, { label: 'Unsorted' }] },
-  { label: 'Today', children: [{ label: 'Morning' }, { label: 'Afternoon' }, { label: 'Evening' }] },
-  { label: 'Upcoming' },
-  { label: 'Priority', children: [{ label: 'High' }, { label: 'Medium' }, { label: 'Low' }] },
-  { label: 'Work', children: [{ label: 'Meetings' }, { label: 'Follow ups' }, { label: 'Deep work' }] },
-  { label: 'Personal' },
-  { label: 'Home', children: [{ label: 'Cleaning' }, { label: 'Repairs' }] },
-  { label: 'Errands' },
-  { label: 'Shopping', children: [{ label: 'Groceries' }, { label: 'Household' }] },
-  { label: 'Ideas' },
-  { label: 'Reading' },
-  { label: 'Calls' },
-  { label: 'Waiting' },
-  { label: 'Someday' },
-  { label: 'Projects', children: [{ label: 'Planning' }, { label: 'Active' }, { label: 'Backlog' }] },
-  { label: 'Health' },
-  { label: 'Finance', children: [{ label: 'Bills' }, { label: 'Budget' }] },
-  { label: 'Travel' },
-  { label: 'Archive' },
-];
 const LIST_MENU_ROW_HEIGHT = 52;
+const LIST_MENU_ICON_HIT_SLOP = 14;
+const PRESET_SWIPE_DELETE_WIDTH = 72;
 const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
 const DATE_MENU_ITEMS = ['Today', 'Tomorrow', 'This week', 'Next week', 'Someday'];
+const TODO_SORT_OPTIONS: Array<{ label: string; mode: TodoSortMode }> = [
+  { label: 'Newest first', mode: 'newest' },
+  { label: 'Oldest first', mode: 'oldest' },
+  { label: 'A to Z', mode: 'alphabetical' },
+  { label: 'Priority', mode: 'priority' },
+  { label: 'Date', mode: 'date' },
+];
+const TODO_GROUP_OPTIONS: Array<{ label: string; mode: TodoGroupMode }> = [
+  { label: 'None', mode: 'none' },
+  { label: 'Priority', mode: 'priority' },
+  { label: 'Date', mode: 'date' },
+  { label: 'List', mode: 'list' },
+  { label: 'Status', mode: 'status' },
+];
+const TODO_SORT_LABELS: Record<TodoSortMode, string> = {
+  alphabetical: 'A to Z',
+  date: 'Date',
+  newest: 'Newest',
+  oldest: 'Oldest',
+  priority: 'Priority',
+};
+const TODO_GROUP_LABELS: Record<TodoGroupMode, string> = {
+  date: 'Date',
+  list: 'List',
+  none: 'None',
+  priority: 'Priority',
+  status: 'Status',
+};
 const EMPTY_SELECTED_FILTERS: SelectedFilters = {
   date: [],
   list: [],
@@ -255,43 +375,33 @@ const assertNativeGoogleSignInAvailable = () => {
 };
 
 const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
-  [...nodes]
-    .sort((first, second) => first.label.localeCompare(second.label))
-    .map((node) => ({
-      ...node,
-      children: node.children ? sortListMenuTree(node.children) : undefined,
-    }));
+  [...nodes].sort((first, second) => first.label.localeCompare(second.label));
 
-const flattenListMenuItems = (
-  nodes: ListMenuNode[],
-  expandedPaths: Set<string>,
-  parentPath = '',
-  depth = 0,
-): VisibleListMenuItem[] =>
-  nodes.flatMap((node) => {
-    const path = parentPath ? `${parentPath}/${node.label}` : node.label;
-    const hasChildren = Boolean(node.children?.length);
-    const row = {
-      childCount: node.children?.length ?? 0,
-      depth,
-      hasChildren,
-      id: path,
-      label: node.label,
-      path,
-    };
-
-    if (!hasChildren || !expandedPaths.has(path)) {
-      return [row];
-    }
-
-    return [
-      row,
-      ...flattenListMenuItems(node.children ?? [], expandedPaths, path, depth + 1),
-    ];
-  });
+const collectListNodeLabels = (node: ListMenuNode): string[] => [node.label];
 
 const countFilters = (filters: SelectedFilters) =>
   filters.date.length + filters.list.length + filters.priority.length;
+
+const formatPresetCount = (count: number, label: string) =>
+  `${count} ${label}${count === 1 ? '' : 's'}`;
+
+const formatPresetSummary = (
+  filters: SelectedFilters,
+  sortMode: TodoSortMode,
+  groupMode: TodoGroupMode,
+  orderMode: ListOrderMode,
+) => {
+  const parts = [
+    filters.list.length > 0 ? formatPresetCount(filters.list.length, 'list') : null,
+    filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
+    filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
+    `Sort ${TODO_SORT_LABELS[sortMode]}`,
+    `Group ${TODO_GROUP_LABELS[groupMode]}`,
+    orderMode === 'alphabetical' ? 'Lists A to Z' : 'Manual lists',
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.join(' · ');
+};
 
 const todoMatchesFilters = (todo: Todo, filters: SelectedFilters) =>
   (Object.entries(filters) as Array<[FilterKey, string[]]>).every(([filterKey, values]) => (
@@ -299,7 +409,173 @@ const todoMatchesFilters = (todo: Todo, filters: SelectedFilters) =>
     values.some((value) => todo.filters[filterKey].includes(value))
   ));
 
+const getFilterRank = (values: string[], orderedLabels: string[]) =>
+  values.reduce((bestRank, value) => {
+    const rank = orderedLabels.indexOf(value);
+    return rank >= 0 ? Math.min(bestRank, rank) : bestRank;
+  }, orderedLabels.length);
+
+const getBestOrderedFilterLabel = (
+  values: string[],
+  orderedLabels: string[],
+  fallbackLabel: string,
+) => {
+  let bestLabel: string | null = null;
+  let bestRank = Number.POSITIVE_INFINITY;
+
+  values.forEach((value, index) => {
+    const orderedIndex = orderedLabels.indexOf(value);
+    const rank = orderedIndex >= 0 ? orderedIndex : orderedLabels.length + index;
+
+    if (rank < bestRank) {
+      bestRank = rank;
+      bestLabel = value;
+    }
+  });
+
+  return bestLabel ?? fallbackLabel;
+};
+
+const compareTodosByFallback = (first: Todo, second: Todo) =>
+  second.createdAt - first.createdAt ||
+  first.text.localeCompare(second.text) ||
+  first.id.localeCompare(second.id);
+
+const compareTodosBySortMode = (
+  first: Todo,
+  second: Todo,
+  sortMode: TodoSortMode,
+) => {
+  if (sortMode === 'oldest') {
+    return (
+      first.createdAt - second.createdAt ||
+      first.text.localeCompare(second.text) ||
+      first.id.localeCompare(second.id)
+    );
+  }
+
+  if (sortMode === 'alphabetical') {
+    return first.text.localeCompare(second.text) || compareTodosByFallback(first, second);
+  }
+
+  if (sortMode === 'priority') {
+    return (
+      getFilterRank(first.filters.priority, PRIORITY_MENU_ITEMS) -
+      getFilterRank(second.filters.priority, PRIORITY_MENU_ITEMS) ||
+      compareTodosByFallback(first, second)
+    );
+  }
+
+  if (sortMode === 'date') {
+    return (
+      getFilterRank(first.filters.date, DATE_MENU_ITEMS) -
+      getFilterRank(second.filters.date, DATE_MENU_ITEMS) ||
+      compareTodosByFallback(first, second)
+    );
+  }
+
+  return compareTodosByFallback(first, second);
+};
+
+const getTodoGroup = (
+  todo: Todo,
+  groupMode: Exclude<TodoGroupMode, 'none'>,
+  orderedListLabels: string[],
+) => {
+  if (groupMode === 'status') {
+    return {
+      label: todo.done ? 'Done' : 'Active',
+      rank: todo.done ? 1 : 0,
+    };
+  }
+
+  if (groupMode === 'list') {
+    const label = getBestOrderedFilterLabel(todo.filters.list, orderedListLabels, 'No list');
+    const rank = orderedListLabels.indexOf(label);
+
+    return {
+      label,
+      rank: rank >= 0 ? rank : orderedListLabels.length + 1,
+    };
+  }
+
+  if (groupMode === 'priority') {
+    const label = getBestOrderedFilterLabel(todo.filters.priority, PRIORITY_MENU_ITEMS, 'No priority');
+    const rank = PRIORITY_MENU_ITEMS.indexOf(label);
+
+    return {
+      label,
+      rank: rank >= 0 ? rank : PRIORITY_MENU_ITEMS.length + 1,
+    };
+  }
+
+  const label = getBestOrderedFilterLabel(todo.filters.date, DATE_MENU_ITEMS, 'No date');
+  const rank = DATE_MENU_ITEMS.indexOf(label);
+
+  return {
+    label,
+    rank: rank >= 0 ? rank : DATE_MENU_ITEMS.length + 1,
+  };
+};
+
+const buildTodoListRows = (
+  todos: Todo[],
+  groupMode: TodoGroupMode,
+  orderedListLabels: string[],
+  collapsedGroupIds: ReadonlySet<string>,
+): TodoListRow[] => {
+  if (groupMode === 'none') {
+    return todos.map((todo) => ({
+      id: todo.id,
+      todo,
+      type: 'todo',
+    }));
+  }
+
+  const groups = new Map<string, { label: string; rank: number; todos: Todo[] }>();
+
+  todos.forEach((todo) => {
+    const group = getTodoGroup(todo, groupMode, orderedListLabels);
+    const existingGroup = groups.get(group.label);
+
+    if (existingGroup) {
+      existingGroup.todos.push(todo);
+      return;
+    }
+
+    groups.set(group.label, {
+      label: group.label,
+      rank: group.rank,
+      todos: [todo],
+    });
+  });
+
+  return [...groups.values()]
+    .sort((first, second) => first.rank - second.rank || first.label.localeCompare(second.label))
+    .flatMap((group) => {
+      const groupId = `group-${groupMode}-${group.label}`;
+      const isCollapsed = collapsedGroupIds.has(groupId);
+
+      return [
+        {
+          count: group.todos.length,
+          id: groupId,
+          label: group.label,
+          type: 'group' as const,
+        },
+        ...(isCollapsed
+          ? []
+          : group.todos.map((todo) => ({
+              id: todo.id,
+              todo,
+              type: 'todo' as const,
+            }))),
+      ];
+    });
+};
+
 function SwipeTodoItem({
+  filterColors,
   item,
   isMenuTarget,
   onDelete,
@@ -309,10 +585,12 @@ function SwipeTodoItem({
 }: SwipeTodoItemProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
+  const [isMenuSwipeActive, setIsMenuSwipeActive] = useState(false);
 
   const closeActionMenu = useCallback(() => {
     swipeableRef.current?.close();
     setIsSwipeOpen(false);
+    setIsMenuSwipeActive(false);
   }, []);
 
   const toggleFromAction = useCallback(() => {
@@ -330,9 +608,7 @@ function SwipeTodoItem({
 
   const openMenuFromAction = useCallback(() => {
     onOpenMenu(item.id);
-    requestAnimationFrame(() => {
-      closeActionMenu();
-    });
+    closeActionMenu();
   }, [closeActionMenu, item.id, onOpenMenu]);
 
   const handleTodoPress = useCallback((event?: GestureResponderEvent) => {
@@ -350,13 +626,35 @@ function SwipeTodoItem({
     onListTap,
   ]);
 
-  const handleSwipeableWillOpen = useCallback(() => {
-    setIsSwipeOpen(true);
-    Haptics.selectionAsync().catch(() => undefined);
+  const handleSwipeableWillOpen = useCallback(
+    (direction: 'left' | 'right') => {
+      setIsSwipeOpen(true);
+
+      if (direction === 'right') {
+        setIsMenuSwipeActive(true);
+        openMenuFromAction();
+        return;
+      }
+
+      setIsMenuSwipeActive(false);
+      Haptics.selectionAsync().catch(() => undefined);
+    },
+    [openMenuFromAction],
+  );
+
+  const handleSwipeableWillClose = useCallback((direction: 'left' | 'right') => {
+    if (direction === 'right') {
+      setIsMenuSwipeActive(false);
+    }
+  }, []);
+
+  const handleSwipeableOpenStartDrag = useCallback((direction: 'left' | 'right') => {
+    setIsMenuSwipeActive(direction === 'right');
   }, []);
 
   const handleSwipeableClose = useCallback(() => {
     setIsSwipeOpen(false);
+    setIsMenuSwipeActive(false);
   }, []);
 
   const renderLeftActions = useCallback(
@@ -390,7 +688,7 @@ function SwipeTodoItem({
       <View style={styles.todoSwipeRightActions}>
         <GHTouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Open filters"
+          accessibilityLabel="Open item settings"
           activeOpacity={0.82}
           onPress={openMenuFromAction}
           style={[styles.todoActionButton, styles.todoActionMore]}
@@ -401,6 +699,9 @@ function SwipeTodoItem({
     ),
     [openMenuFromAction],
   );
+  const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
+  const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
+  const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
 
   return (
     <View style={styles.swipeShell}>
@@ -410,8 +711,11 @@ function SwipeTodoItem({
         containerStyle={styles.todoSwipeableContainer}
         friction={1.1}
         leftThreshold={TODO_SWIPE_OPEN_DISTANCE}
+        animationOptions={{ bounciness: 0, speed: 28 }}
         onSwipeableClose={handleSwipeableClose}
+        onSwipeableOpenStartDrag={handleSwipeableOpenStartDrag}
         onSwipeableWillOpen={handleSwipeableWillOpen}
+        onSwipeableWillClose={handleSwipeableWillClose}
         overshootLeft={false}
         overshootRight={false}
         renderLeftActions={renderLeftActions}
@@ -421,10 +725,24 @@ function SwipeTodoItem({
         <View
           style={[
             styles.todoRow,
+            todoColorTheme && !item.done && {
+              backgroundColor: todoColorTheme.tint,
+              borderColor: todoColorTheme.border,
+              shadowColor: todoColorTheme.accent,
+            },
             item.done && styles.todoRowDone,
-            isMenuTarget && styles.todoRowMenuTarget,
+            isHighlightedForMenu && styles.todoRowMenuTarget,
           ]}
         >
+          {todoColorTheme ? (
+            <View
+              style={[
+                styles.todoColorRail,
+                { backgroundColor: todoColorTheme.accent },
+                item.done && styles.todoColorRailDone,
+              ]}
+            />
+          ) : null}
           <GHTouchableOpacity
             accessibilityRole="button"
             activeOpacity={1}
@@ -437,6 +755,20 @@ function SwipeTodoItem({
             >
               {item.text}
             </Text>
+            {todoColorDots.length > 0 ? (
+              <View style={styles.todoColorDotRow}>
+                {todoColorDots.map((theme) => (
+                  <View
+                    key={`${theme.filterKey}-${theme.value}`}
+                    style={[
+                      styles.todoColorDot,
+                      { backgroundColor: theme.accent },
+                      item.done && styles.todoColorDotDone,
+                    ]}
+                  />
+                ))}
+              </View>
+            ) : null}
           </GHTouchableOpacity>
         </View>
       </Swipeable>
@@ -446,32 +778,110 @@ function SwipeTodoItem({
 
 const MemoizedSwipeTodoItem = React.memo(SwipeTodoItem);
 
+type MenuPresetSwipeRowProps = {
+  label: string;
+  onApply: () => void;
+  onDelete: () => void;
+  summary: string;
+};
+
+function MenuPresetSwipeRow({ label, onApply, onDelete, summary }: MenuPresetSwipeRowProps) {
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.listMenuPresetSwipeActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${label}`}
+          activeOpacity={0.82}
+          onPress={onDelete}
+          style={styles.listMenuPresetSwipeDelete}
+        >
+          <Ionicons color="#FFFFFF" name="trash-outline" size={22} />
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [label, onDelete],
+  );
+
+  return (
+    <View style={styles.listMenuPresetSwipeShell}>
+      <Swipeable
+        childrenContainerStyle={styles.listMenuPresetSwipeChildren}
+        containerStyle={styles.listMenuPresetSwipeContainer}
+        friction={1.1}
+        overshootRight={false}
+        renderRightActions={renderRightActions}
+        rightThreshold={PRESET_SWIPE_DELETE_WIDTH}
+      >
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          activeOpacity={1}
+          onPress={onApply}
+          style={styles.listMenuPresetRow}
+        >
+          <View style={styles.listMenuRowTextStack}>
+            <Text style={styles.listMenuRowTitle}>{label}</Text>
+            <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+              {summary}
+            </Text>
+          </View>
+          <Text style={styles.listMenuApplyText}>Apply</Text>
+        </GHTouchableOpacity>
+      </Swipeable>
+    </View>
+  );
+}
+
+const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
+
 export default function App() {
+  const { height: windowHeight } = useWindowDimensions();
+  const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [query, setQuery] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
+  const [presetSaveName, setPresetSaveName] = useState('');
+  const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
+  const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(true);
+  const [settingsListsExpanded, setSettingsListsExpanded] = useState(true);
+  const [filterColors, setFilterColors] = useState<FilterColorSettings>(
+    () => cloneFilterColors(),
+  );
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
   const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
   const [googleDriveLastBackupAt, setGoogleDriveLastBackupAt] = useState<string | null>(null);
   const [googleDriveLastRestoreAt, setGoogleDriveLastRestoreAt] = useState<string | null>(null);
   const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
+  const [listOrderMode, setListOrderMode] = useState<ListOrderMode>('alphabetical');
+  const [listMenuTree, setListMenuTree] = useState<ListMenuNode[]>(
+    () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+  );
+  const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
+  const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
+  const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
+  const [newListName, setNewListName] = useState('');
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
   const [isListAtTop, setIsListAtTop] = useState(true);
-  const [expandedListMenuPaths, setExpandedListMenuPaths] = useState<Set<string>>(
-    () => new Set(),
-  );
   const searchInputRef = useRef<TextInput>(null);
-  const todoListRef = useRef<FlatList<Todo> | null>(null);
+  const presetSaveInputRef = useRef<TextInput>(null);
+  const todoListRef = useRef<FlatList<TodoListRow> | null>(null);
   const scrollOffsetY = useRef(0);
   const hapticPullStage = useRef(0);
   const pullDistanceRef = useRef(0);
+  const menuPullAnim = useRef(new Animated.Value(0)).current;
+  const menuDismissPullRef = useRef(0);
+  const menuDismissHapticRef = useRef(0);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
@@ -538,9 +948,16 @@ export default function App() {
         }
 
         setSelectedFilters(settings.selectedFilters);
+        setFilterColors(settings.filterColors);
         setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
         setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
         setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
+        setListMenuTree(settings.listMenuTree);
+        setListOrderMode(settings.listOrderMode);
+        setMenuPresets(cloneMenuPresets(settings.menuPresets));
+        setTodoGroupMode(settings.todoGroupMode);
+        setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
+        setTodoSortMode(settings.todoSortMode);
 
         const lastBackup = formatBackupTime(settings.googleDriveLastBackupAt);
         setGoogleDriveBackupStatus(lastBackup ? `Last backup ${lastBackup}` : 'Not backed up');
@@ -564,19 +981,33 @@ export default function App() {
     }
 
     const settings: AppSettings = {
+      collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+      filterColors,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
+      listMenuTree,
+      listOrderMode,
+      menuPresets,
       selectedFilters,
+      todoGroupMode,
+      todoSortMode,
     };
 
     appSettingsStore.save(settings).catch(() => undefined);
   }, [
+    collapsedTodoGroupIds,
+    filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    listMenuTree,
+    listOrderMode,
+    menuPresets,
     selectedFilters,
     settingsLoaded,
+    todoGroupMode,
+    todoSortMode,
   ]);
 
   useEffect(() => {
@@ -585,14 +1016,169 @@ export default function App() {
     }
   }, [menuMode]);
 
+  useEffect(() => {
+    if (!listMenuOpen) {
+      menuPullAnim.stopAnimation();
+      menuPullAnim.setValue(0);
+      menuDismissPullRef.current = 0;
+      menuDismissHapticRef.current = 0;
+    }
+  }, [listMenuOpen, menuPullAnim]);
+
+  const closeListMenu = useCallback(() => {
+    setMenuMode(null);
+    setActiveTodoMenuId(null);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const dampMenuPullDistance = useCallback((translationY: number) => {
+    if (translationY <= 0) {
+      return 0;
+    }
+
+    return Math.min(PULL_MAX, translationY * 0.85);
+  }, []);
+
+  const resetMenuDismissPull = useCallback(() => {
+    menuDismissPullRef.current = 0;
+    menuDismissHapticRef.current = 0;
+  }, []);
+
+  const animateMenuDismissReset = useCallback(() => {
+    Animated.spring(menuPullAnim, {
+      friction: 22,
+      tension: 220,
+      toValue: 0,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        resetMenuDismissPull();
+      }
+    });
+  }, [menuPullAnim, resetMenuDismissPull]);
+
+  const animateMenuDismissClose = useCallback(() => {
+    Animated.timing(menuPullAnim, {
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      toValue: listMenuHeight * 0.42 + 56,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        menuPullAnim.setValue(0);
+        resetMenuDismissPull();
+        closeListMenu();
+      }
+    });
+  }, [closeListMenu, listMenuHeight, menuPullAnim, resetMenuDismissPull]);
+
+  const handleMenuDismissGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      const { translationX, translationY } = event.nativeEvent;
+
+      if (translationY <= 0 || Math.abs(translationY) <= Math.abs(translationX)) {
+        menuPullAnim.setValue(0);
+        menuDismissPullRef.current = 0;
+        return;
+      }
+
+      const damped = dampMenuPullDistance(translationY);
+      menuDismissPullRef.current = damped;
+      menuPullAnim.setValue(damped);
+
+      if (damped > MENU_DISMISS_RELEASE && menuDismissHapticRef.current === 0) {
+        menuDismissHapticRef.current = 1;
+        Haptics.selectionAsync().catch(() => undefined);
+      }
+    },
+    [dampMenuPullDistance, menuPullAnim],
+  );
+
+  const handleMenuDismissStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationY, velocityY } = event.nativeEvent;
+
+      if (
+        state !== State.END &&
+        state !== State.CANCELLED &&
+        state !== State.FAILED
+      ) {
+        return;
+      }
+
+      const pulled = menuDismissPullRef.current;
+      const shouldClose =
+        pulled > MENU_DISMISS_RELEASE ||
+        (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
+
+      if (shouldClose) {
+        animateMenuDismissClose();
+        return;
+      }
+
+      animateMenuDismissReset();
+    },
+    [animateMenuDismissClose, animateMenuDismissReset],
+  );
+
+  const listMenuAnimatedStyle = useMemo(
+    () => ({
+      borderBottomLeftRadius: menuPullAnim.interpolate({
+        extrapolate: 'clamp',
+        inputRange: [0, PULL_MAX],
+        outputRange: [18, 32],
+      }),
+      borderBottomRightRadius: menuPullAnim.interpolate({
+        extrapolate: 'clamp',
+        inputRange: [0, PULL_MAX],
+        outputRange: [18, 32],
+      }),
+      transform: [
+        { translateY: menuPullAnim },
+        {
+          scaleX: menuPullAnim.interpolate({
+            extrapolate: 'clamp',
+            inputRange: [0, PULL_MAX],
+            outputRange: [1, 1.045],
+          }),
+        },
+        {
+          scaleY: menuPullAnim.interpolate({
+            extrapolate: 'clamp',
+            inputRange: [0, PULL_MAX / 2, PULL_MAX],
+            outputRange: [1, 1.035, 1.08],
+          }),
+        },
+      ],
+    }),
+    [menuPullAnim],
+  );
+
   const closeSettingsModal = useCallback(() => {
     setSettingsModalVisible(false);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const closePresetSaveModal = useCallback(() => {
+    Keyboard.dismiss();
+    setPresetSaveModalVisible(false);
+    setPresetSaveName('');
+  }, []);
+
   const goBackInMenu = useCallback(() => {
+    if (presetSaveModalVisible) {
+      closePresetSaveModal();
+      return true;
+    }
+
     if (settingsModalVisible) {
       closeSettingsModal();
+      return true;
+    }
+
+    if (menuMode === 'presetsQuickApply') {
+      setMenuMode('presets');
+      Haptics.selectionAsync().catch(() => undefined);
       return true;
     }
 
@@ -603,13 +1189,20 @@ export default function App() {
     }
 
     if (menuMode === 'main') {
-      setMenuMode(null);
-      Haptics.selectionAsync().catch(() => undefined);
+      closeListMenu();
       return true;
     }
 
     return false;
-  }, [closeSettingsModal, menuMode, settingsModalVisible, submenuOpen]);
+  }, [
+    closeListMenu,
+    closePresetSaveModal,
+    closeSettingsModal,
+    menuMode,
+    presetSaveModalVisible,
+    settingsModalVisible,
+    submenuOpen,
+  ]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
@@ -754,7 +1347,6 @@ export default function App() {
       const { translationX, translationY } = event.nativeEvent;
 
       if (
-        listMenuOpen ||
         !isListAtTop ||
         translationY <= 0 ||
         Math.abs(translationY) <= Math.abs(translationX)
@@ -769,7 +1361,7 @@ export default function App() {
         Haptics.selectionAsync().catch(() => undefined);
       }
     },
-    [isListAtTop, listMenuOpen],
+    [isListAtTop],
   );
 
   const handleTopPullStateChange = useCallback(
@@ -794,7 +1386,7 @@ export default function App() {
       if (
         state === State.END &&
         submenuOpen &&
-        (Math.abs(translationX) > 64 || Math.abs(velocityX) > 650)
+        (translationX > 64 || velocityX > 650)
       ) {
         goBackInMenu();
       }
@@ -833,10 +1425,57 @@ export default function App() {
     [],
   );
 
-  const sortedListMenuTree = useMemo(() => sortListMenuTree(LIST_MENU_TREE), []);
+  const orderedListMenuTree = useMemo(
+    () => (listOrderMode === 'alphabetical' ? sortListMenuTree(listMenuTree) : listMenuTree),
+    [listMenuTree, listOrderMode],
+  );
   const visibleListMenuItems = useMemo(
-    () => flattenListMenuItems(sortedListMenuTree, expandedListMenuPaths),
-    [expandedListMenuPaths, sortedListMenuTree],
+    () =>
+      orderedListMenuTree.map((node) => ({
+        id: node.label,
+        label: node.label,
+      })),
+    [orderedListMenuTree],
+  );
+  const orderedListLabels = useMemo(
+    () => orderedListMenuTree.flatMap(collectListNodeLabels),
+    [orderedListMenuTree],
+  );
+  const settingsListColorLabels = useMemo(
+    () => Array.from(new Set(listMenuTree.flatMap(collectListNodeLabels))),
+    [listMenuTree],
+  );
+  const settingsColorGroups = useMemo(
+    () => [
+      {
+        filterKey: 'priority' as const,
+        title: 'Priority',
+        values: PRIORITY_MENU_ITEMS,
+      },
+      {
+        filterKey: 'date' as const,
+        title: 'Date',
+        values: DATE_MENU_ITEMS,
+      },
+      {
+        filterKey: 'list' as const,
+        title: 'Lists',
+        values: settingsListColorLabels,
+      },
+    ],
+    [settingsListColorLabels],
+  );
+  const settingsColorItemCount = settingsColorGroups.reduce(
+    (count, group) => count + group.values.length,
+    0,
+  );
+  const sortedTodos = useMemo(
+    () => [...filteredTodos].sort((first, second) => compareTodosBySortMode(first, second, todoSortMode)),
+    [filteredTodos, todoSortMode],
+  );
+  const todoListRows = useMemo(
+    () => buildTodoListRows(sortedTodos, todoGroupMode, orderedListLabels, collapsedTodoGroupIds),
+    [collapsedTodoGroupIds, orderedListLabels, sortedTodos, todoGroupMode],
   );
   const activeTodoMenuFilters = useMemo(
     () => todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null,
@@ -844,6 +1483,13 @@ export default function App() {
   );
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const activeFilterCount = countFilters(menuFilters);
+  const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
+  const currentPresetSummary = formatPresetSummary(
+    menuFilters,
+    todoSortMode,
+    todoGroupMode,
+    listOrderMode,
+  );
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
     if (menuMode === 'lists') {
       return visibleListMenuItems;
@@ -877,7 +1523,86 @@ export default function App() {
         })));
     }
 
-    return [
+    if (menuMode === 'sort') {
+      return TODO_SORT_OPTIONS.map((item) => ({
+        id: `sort-${item.mode}`,
+        label: item.label,
+        sortMode: item.mode,
+        type: 'sortOption',
+      }));
+    }
+
+    if (menuMode === 'group') {
+      return TODO_GROUP_OPTIONS.map((item) => ({
+        groupMode: item.mode,
+        id: `group-${item.mode}`,
+        label: item.label,
+        type: 'groupOption',
+      }));
+    }
+
+    if (menuMode === 'presetsQuickApply' && latestMenuPreset) {
+      return [
+        {
+          id: 'preset-quick-apply',
+          label: latestMenuPreset.label,
+          preset: latestMenuPreset,
+          summary: formatPresetSummary(
+            latestMenuPreset.filters,
+            latestMenuPreset.todoSortMode,
+            latestMenuPreset.todoGroupMode,
+            latestMenuPreset.listOrderMode,
+          ),
+          type: 'quickApplyPreset',
+        },
+      ];
+    }
+
+    if (menuMode === 'presets') {
+      const rows: MenuRow[] = [];
+
+      if (latestMenuPreset) {
+        rows.push({
+          id: 'preset-quick-apply-menu',
+          label: 'Quick apply',
+          menuMode: 'presetsQuickApply',
+          type: 'menu',
+          valueLabel: latestMenuPreset.label,
+        });
+      }
+
+      rows.push(
+        ...menuPresets.map((preset) => ({
+          id: `preset-${preset.id}`,
+          label: preset.label,
+          preset,
+          summary: formatPresetSummary(
+            preset.filters,
+            preset.todoSortMode,
+            preset.todoGroupMode,
+            preset.listOrderMode,
+          ),
+          type: 'preset' as const,
+        })),
+        {
+          id: 'preset-save-current',
+          label: 'Save current as preset',
+          summary: currentPresetSummary,
+          type: 'savePreset' as const,
+        },
+      );
+
+      return rows;
+    }
+
+    const rows: MenuRow[] = [
+      {
+        count: menuPresets.length || undefined,
+        id: 'main-presets',
+        label: 'Presets',
+        menuMode: 'presets',
+        type: 'menu',
+      },
       {
         count: menuFilters.list.length || undefined,
         id: 'main-lists',
@@ -900,6 +1625,21 @@ export default function App() {
         type: 'menu',
       },
       {
+        id: 'main-sort',
+        label: 'Sort',
+        menuMode: 'sort',
+        type: 'menu',
+        valueLabel: TODO_SORT_LABELS[todoSortMode],
+      },
+      {
+        id: 'main-group',
+        label: 'Group',
+        menuMode: 'group',
+        type: 'menu',
+        valueLabel:
+          todoGroupMode !== 'none' ? TODO_GROUP_LABELS[todoGroupMode] : undefined,
+      },
+      {
         count: activeFilterCount || undefined,
         id: 'main-filters',
         label: 'Filters',
@@ -911,8 +1651,26 @@ export default function App() {
         label: 'Clear filters',
         type: 'clearFilters',
       },
+      {
+        id: 'main-settings',
+        label: 'Settings',
+        type: 'settings',
+      },
     ];
-  }, [activeFilterCount, menuFilters, menuMode, visibleListMenuItems]);
+
+    return rows;
+  }, [
+    activeFilterCount,
+    currentPresetSummary,
+    latestMenuPreset,
+    listOrderMode,
+    menuFilters,
+    menuMode,
+    menuPresets,
+    todoGroupMode,
+    todoSortMode,
+    visibleListMenuItems,
+  ]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -958,9 +1716,217 @@ export default function App() {
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, [activeTodoMenuId, updateTodoFilters]);
 
+  const setFilterColor = useCallback((
+    filterKey: FilterKey,
+    value: string,
+    color: string,
+  ) => {
+    setFilterColors((current) => ({
+      ...current,
+      [filterKey]: {
+        ...current[filterKey],
+        [value]: color,
+      },
+    }));
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const selectTodoSortMode = useCallback((sortMode: TodoSortMode) => {
+    setTodoSortMode(sortMode);
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
+    setCollapsedTodoGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+
+      return next;
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const selectTodoGroupMode = useCallback((groupMode: TodoGroupMode) => {
+    setTodoGroupMode(groupMode);
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const clearMenuSection = useCallback((section: MenuMode) => {
+    const filterKey = MENU_SECTION_FILTER_KEYS[section];
+
+    if (filterKey) {
+      const clearKey = (current: SelectedFilters) => ({
+        ...current,
+        [filterKey]: [],
+      });
+
+      if (activeTodoMenuId) {
+        updateTodoFilters(activeTodoMenuId, clearKey);
+      } else {
+        setSelectedFilters(clearKey);
+      }
+      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+      return;
+    }
+
+    if (section === 'filters') {
+      clearFilters();
+      return;
+    }
+
+    if (section === 'sort') {
+      selectTodoSortMode('newest');
+      return;
+    }
+
+    if (section === 'group') {
+      selectTodoGroupMode('none');
+    }
+  }, [activeTodoMenuId, clearFilters, selectTodoGroupMode, selectTodoSortMode, updateTodoFilters]);
+
+  const commitMenuPreset = useCallback((rawName: string) => {
+    const label = normalizeTodoText(rawName);
+
+    if (!label) {
+      return;
+    }
+
+    const createdAt = Date.now();
+
+    setMenuPresets((current) => [
+      ...current,
+      {
+        id: `preset-${createdAt}-${Math.random().toString(36).slice(2)}`,
+        label,
+        filters: cloneTodoFilters(menuFilters),
+        listOrderMode,
+        todoGroupMode,
+        todoSortMode,
+        createdAt,
+      },
+    ]);
+    closePresetSaveModal();
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [closePresetSaveModal, listOrderMode, menuFilters, todoGroupMode, todoSortMode]);
+
+  const focusPresetSaveInput = useCallback(() => {
+    searchInputRef.current?.blur();
+    presetSaveInputRef.current?.focus();
+  }, []);
+
+  const openSavePresetPrompt = useCallback(() => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    setPresetSaveName(`Preset ${menuPresets.length + 1}`);
+    setPresetSaveModalVisible(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [menuPresets.length]);
+
+  useEffect(() => {
+    if (!presetSaveModalVisible) {
+      return;
+    }
+
+    const focusTimer = setTimeout(focusPresetSaveInput, 100);
+
+    return () => clearTimeout(focusTimer);
+  }, [focusPresetSaveInput, presetSaveModalVisible]);
+
+  const applyMenuPreset = useCallback((preset: MenuPreset) => {
+    const nextFilters = cloneTodoFilters(preset.filters);
+
+    if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, () => cloneTodoFilters(nextFilters));
+    } else {
+      setSelectedFilters(nextFilters);
+    }
+
+    setListOrderMode(preset.listOrderMode);
+    setTodoGroupMode(preset.todoGroupMode);
+    setTodoSortMode(preset.todoSortMode);
+    setMenuMode(null);
+    setActiveTodoMenuId(null);
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, updateTodoFilters]);
+
+  const removeMenuPreset = useCallback((id: string) => {
+    setMenuPresets((current) => current.filter((preset) => preset.id !== id));
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const addSettingsList = useCallback(() => {
+    const label = normalizeTodoText(newListName);
+
+    if (!label) {
+      return;
+    }
+
+    setListMenuTree((current) => {
+      const duplicate = current.some((item) => item.label.toLowerCase() === label.toLowerCase());
+      if (duplicate) {
+        return current;
+      }
+
+      return [...current, { label }];
+    });
+    setNewListName('');
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [newListName]);
+
+  const moveSettingsList = useCallback((index: number, direction: -1 | 1) => {
+    setListOrderMode('manual');
+    setListMenuTree((current) => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= current.length) {
+        return current;
+      }
+
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const removeSettingsList = useCallback((index: number) => {
+    setListMenuTree((current) => {
+      const node = current[index];
+      if (!node) {
+        return current;
+      }
+
+      const removedLabels = new Set(collectListNodeLabels(node));
+      setSelectedFilters((filters) => ({
+        ...filters,
+        list: filters.list.filter((label) => !removedLabels.has(label)),
+      }));
+      setTodos((items) => items.map((todo) => ({
+        ...todo,
+        filters: {
+          ...todo.filters,
+          list: todo.filters.list.filter((label) => !removedLabels.has(label)),
+        },
+      })));
+      setFilterColors((colors) => ({
+        ...colors,
+        list: Object.fromEntries(
+          Object.entries(colors.list).filter(([label]) => !removedLabels.has(label)),
+        ),
+      }));
+
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
     setMenuMode(null);
+    setActiveTodoMenuId(null);
     setSettingsModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
@@ -1059,7 +2025,9 @@ export default function App() {
     const { GoogleSignin } = nativeGoogleSignIn;
 
     try {
-      GoogleSignin.configure();
+      GoogleSignin.configure({
+        scopes: GOOGLE_AUTH_SCOPES,
+      });
       setGoogleDriveBackupStatus('Checking Google Play services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true }).catch((error) => {
         throw normalizeNativeGoogleSignInError(error, 'Checking Google Play services');
@@ -1107,20 +2075,34 @@ export default function App() {
     setGoogleDriveBackupStatus('Backing up to Google Drive...');
 
     const payload = createBackupPayload(todos, {
+      collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+      filterColors,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
+      listMenuTree,
+      listOrderMode,
+      menuPresets,
       selectedFilters,
+      todoGroupMode,
+      todoSortMode,
     });
     await uploadDriveBackup(accessToken, payload);
     setGoogleDriveLastBackupAt(payload.exportedAt);
     setGoogleDriveBackupStatus(`Backed up ${todos.length} items · ${formatBackupTime(payload.exportedAt)}`);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   }, [
+    collapsedTodoGroupIds,
+    filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    listMenuTree,
+    listOrderMode,
+    menuPresets,
     selectedFilters,
+    todoGroupMode,
+    todoSortMode,
     todos,
   ]);
 
@@ -1137,9 +2119,20 @@ export default function App() {
     const restoredAt = new Date().toISOString();
     setTodos(withInitialTodos(backup.payload.todos));
     setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
+    setFilterColors(backup.payload.settings.filterColors);
     setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
     setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
+    setListMenuTree(
+      backup.payload.settings.listMenuTree.length > 0
+        ? backup.payload.settings.listMenuTree
+        : cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+    );
+    setListOrderMode(backup.payload.settings.listOrderMode);
+    setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
+    setTodoGroupMode(backup.payload.settings.todoGroupMode);
+    setCollapsedTodoGroupIds(new Set(backup.payload.settings.collapsedTodoGroupIds));
+    setTodoSortMode(backup.payload.settings.todoSortMode);
     setGoogleDriveBackupStatus(
       `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
     );
@@ -1265,7 +2258,7 @@ export default function App() {
   }, [performGoogleDriveAction]);
 
   const scrollTodoAboveMenu = useCallback((id: string) => {
-    const index = filteredTodos.findIndex((todo) => todo.id === id);
+    const index = todoListRows.findIndex((row) => row.type === 'todo' && row.todo.id === id);
 
     if (index < 0) {
       return;
@@ -1277,7 +2270,7 @@ export default function App() {
       viewOffset: 12,
       viewPosition: 0.34,
     });
-  }, [filteredTodos]);
+  }, [todoListRows]);
 
   const handleTodoListScrollToIndexFailed = useCallback((info: ScrollToIndexFailedInfo) => {
     todoListRef.current?.scrollToOffset({
@@ -1308,23 +2301,59 @@ export default function App() {
   }, [scrollTodoAboveMenu]);
 
   const renderTodoItem = useCallback(
-    ({ item }: { item: Todo }) => (
-      <MemoizedSwipeTodoItem
-        item={item}
-        isMenuTarget={menuMode !== null && activeTodoMenuId === item.id}
-        onDelete={deleteTodo}
-        onListTap={handleListTap}
-        onOpenMenu={openMenuForTodoAction}
-        onSetDone={setTodoDone}
-      />
-    ),
+    ({ item }: { item: TodoListRow }) => {
+      if (item.type === 'group') {
+        const isCollapsed = collapsedTodoGroupIds.has(item.id);
+
+        return (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: !isCollapsed }}
+            accessibilityLabel={`${item.label}, ${item.count} items`}
+            onPress={() => toggleTodoGroupCollapsed(item.id)}
+            style={({ pressed }) => [
+              styles.todoGroupHeader,
+              pressed && styles.todoGroupHeaderPressed,
+            ]}
+          >
+            <View style={styles.todoGroupHeaderMain}>
+              <Text
+                style={[
+                  styles.todoGroupChevron,
+                  !isCollapsed && styles.todoGroupChevronExpanded,
+                ]}
+              >
+                ›
+              </Text>
+              <Text style={styles.todoGroupTitle}>{item.label}</Text>
+            </View>
+            <Text style={styles.todoGroupCount}>{item.count}</Text>
+          </Pressable>
+        );
+      }
+
+      return (
+        <MemoizedSwipeTodoItem
+          filterColors={filterColors}
+          item={item.todo}
+          isMenuTarget={menuMode !== null && activeTodoMenuId === item.todo.id}
+          onDelete={deleteTodo}
+          onListTap={handleListTap}
+          onOpenMenu={openMenuForTodoAction}
+          onSetDone={setTodoDone}
+        />
+      );
+    },
     [
+      collapsedTodoGroupIds,
       deleteTodo,
+      filterColors,
       handleListTap,
       activeTodoMenuId,
       menuMode,
       openMenuForTodoAction,
       setTodoDone,
+      toggleTodoGroupCollapsed,
     ],
   );
 
@@ -1370,40 +2399,47 @@ export default function App() {
         <View style={styles.listShell}>
           {listMenuOpen ? (
             <>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close lists menu"
-                onPress={() => setMenuMode(null)}
-                style={styles.listMenuBackdrop}
-              />
+              <PanGestureHandler
+                activeOffsetY={[8, 10000]}
+                enabled={listMenuOpen}
+                failOffsetX={[-36, 36]}
+                onGestureEvent={handleMenuDismissGesture}
+                onHandlerStateChange={handleMenuDismissStateChange}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close lists menu"
+                  onPress={closeListMenu}
+                  style={styles.listMenuBackdrop}
+                />
+              </PanGestureHandler>
               <View pointerEvents="box-none" style={styles.listMenuLayer}>
                 <PanGestureHandler
-                  activeOffsetX={32}
-                  enabled={menuMode !== null && menuMode !== 'main'}
-                  failOffsetY={[-18, 18]}
-                  onHandlerStateChange={handleMenuBackStateChange}
+                  activeOffsetY={[8, 10000]}
+                  enabled={listMenuOpen}
+                  failOffsetX={[-36, 36]}
+                  onGestureEvent={handleMenuDismissGesture}
+                  onHandlerStateChange={handleMenuDismissStateChange}
                 >
-                  <View collapsable={false} style={styles.listMenu}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={submenuOpen ? 'Back to main filter menu' : 'Close filter menu'}
-                      onPress={() => {
-                        if (submenuOpen) {
-                          goBackInMenu();
-                        } else {
-                          setMenuMode(null);
-                          Haptics.selectionAsync().catch(() => undefined);
-                        }
-                      }}
-                      style={({ pressed }) => [
-                        styles.listMenuBackButton,
-                        pressed && styles.listMenuRowPressed,
-                      ]}
+                  <Animated.View
+                    collapsable={false}
+                    style={[
+                      styles.listMenu,
+                      { height: listMenuHeight },
+                      listMenuAnimatedStyle,
+                    ]}
+                  >
+                    <View style={styles.menuDragHandle} accessibilityRole="adjustable">
+                      <View style={styles.menuDragPill} />
+                    </View>
+                    <PanGestureHandler
+                      activeOffsetX={[-10000, 32]}
+                      enabled={menuMode !== null && menuMode !== 'main'}
+                      failOffsetY={[-18, 18]}
+                      onHandlerStateChange={handleMenuBackStateChange}
                     >
-                      <Text style={styles.listMenuBackIcon}>{submenuOpen ? '‹' : '×'}</Text>
-                      <Text style={styles.listMenuBackText}>{submenuOpen ? 'Back' : 'Close'}</Text>
-                    </Pressable>
-                    <FlatList
+                      <View collapsable={false} style={styles.listMenuBody}>
+                        <FlatList
                       data={bottomMenuItems}
                       decelerationRate="fast"
                       directionalLockEnabled
@@ -1445,11 +2481,12 @@ export default function App() {
                             );
                           }
 
-                          if (item.type === 'filter') {
+                          if (item.type === 'settings') {
                             return (
                               <Pressable
                                 accessibilityRole="button"
-                                onPress={() => removeFilter(item.filterKey, item.label)}
+                                accessibilityLabel="Open settings"
+                                onPress={openSettingsModal}
                                 style={({ pressed }) => [
                                   styles.listMenuRow,
                                   pressed && styles.listMenuRowPressed,
@@ -1458,134 +2495,348 @@ export default function App() {
                                 <View style={styles.listMenuRowTextWrap}>
                                   <Text style={styles.listMenuRowTitle}>{item.label}</Text>
                                 </View>
-                                <Text style={styles.filterTypeText}>{item.filterKey}</Text>
+                                <Text style={styles.listMenuArrow}>›</Text>
                               </Pressable>
                             );
                           }
 
-                          if (item.type === 'menu') {
+                          if (item.type === 'filter') {
+                            const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
+
+                            return (
+                              <View style={styles.listMenuRow}>
+                                <Pressable
+                                  accessibilityRole="button"
+                                  onPress={() => removeFilter(item.filterKey, item.label)}
+                                  style={({ pressed }) => [
+                                    styles.listMenuRowMainPress,
+                                    pressed && styles.listMenuRowPressed,
+                                  ]}
+                                >
+                                  <View style={styles.listMenuRowTextWrap}>
+                                    <View
+                                      style={[
+                                        styles.listMenuColorDot,
+                                        { backgroundColor: colorTheme.accent },
+                                      ]}
+                                    />
+                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                  </View>
+                                </Pressable>
+                                <View style={styles.listMenuSubmenuZone}>
+                                  <Text style={[styles.filterTypeText, { color: colorTheme.text }]}>
+                                    {item.filterKey}
+                                  </Text>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Remove ${item.label}`}
+                                    hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                                    onPress={() => removeFilter(item.filterKey, item.label)}
+                                    style={({ pressed }) => [
+                                      styles.listMenuClearButton,
+                                      pressed && styles.listMenuClearButtonPressed,
+                                    ]}
+                                  >
+                                    <Text style={styles.listMenuClearButtonText}>×</Text>
+                                  </Pressable>
+                                </View>
+                              </View>
+                            );
+                          }
+
+                          if (item.type === 'sortOption') {
+                            const isSelected = todoSortMode === item.sortMode;
+
                             return (
                               <Pressable
                                 accessibilityRole="button"
-                                onPress={() => setMenuMode(item.menuMode)}
+                                accessibilityState={{ selected: isSelected }}
+                                onPress={() => selectTodoSortMode(item.sortMode)}
                                 style={({ pressed }) => [
                                   styles.listMenuRow,
+                                  isSelected && styles.listMenuRowSelected,
                                   pressed && styles.listMenuRowPressed,
                                 ]}
                               >
                                 <View style={styles.listMenuRowTextWrap}>
                                   <Text style={styles.listMenuRowTitle}>{item.label}</Text>
                                 </View>
-                                <View style={styles.listMenuSubmenuZone}>
-                                  {item.count ? (
-                                    <Text style={styles.listMenuChildCount}>{item.count}</Text>
-                                  ) : null}
-                                  <Text style={styles.listMenuArrow}>›</Text>
-                                </View>
+                                {isSelected ? <Text style={styles.listMenuCheck}>✓</Text> : null}
                               </Pressable>
                             );
+                          }
+
+	                          if (item.type === 'groupOption') {
+	                            const isSelected = todoGroupMode === item.groupMode;
+
+	                            return (
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: isSelected }}
+                                onPress={() => selectTodoGroupMode(item.groupMode)}
+                                style={({ pressed }) => [
+                                  styles.listMenuRow,
+                                  isSelected && styles.listMenuRowSelected,
+                                  pressed && styles.listMenuRowPressed,
+                                ]}
+                              >
+                                <View style={styles.listMenuRowTextWrap}>
+                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                </View>
+                                {isSelected ? <Text style={styles.listMenuCheck}>✓</Text> : null}
+                              </Pressable>
+	                            );
+	                          }
+
+	                          if (item.type === 'savePreset') {
+	                            return (
+	                              <Pressable
+	                                accessibilityRole="button"
+	                                onPress={openSavePresetPrompt}
+	                                style={({ pressed }) => [
+	                                  styles.listMenuRow,
+	                                  pressed && styles.listMenuRowPressed,
+	                                ]}
+	                              >
+	                                <View style={styles.listMenuRowTextStack}>
+	                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+	                                  <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+	                                    {item.summary}
+	                                  </Text>
+	                                </View>
+	                                <Text style={styles.listMenuApplyText}>+</Text>
+	                              </Pressable>
+	                            );
+	                          }
+
+	                          if (item.type === 'quickApplyPreset') {
+	                            return (
+	                              <Pressable
+	                                accessibilityRole="button"
+	                                onPress={() => applyMenuPreset(item.preset)}
+	                                style={({ pressed }) => [
+	                                  styles.listMenuRow,
+	                                  pressed && styles.listMenuRowPressed,
+	                                ]}
+	                              >
+	                                <View style={styles.listMenuRowTextStack}>
+	                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+	                                  <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+	                                    {item.summary}
+	                                  </Text>
+	                                </View>
+	                                <Text style={styles.listMenuApplyText}>Apply</Text>
+	                              </Pressable>
+	                            );
+	                          }
+
+	                          if (item.type === 'preset') {
+	                            return (
+	                              <MemoizedMenuPresetSwipeRow
+	                                label={item.label}
+	                                onApply={() => applyMenuPreset(item.preset)}
+	                                onDelete={() => removeMenuPreset(item.preset.id)}
+	                                summary={item.summary}
+	                              />
+	                            );
+	                          }
+
+	                          if (item.type === 'menu') {
+	                            const canClearSection = menuSectionCanClear(
+	                              item.menuMode,
+	                              menuFilters,
+	                              activeFilterCount,
+	                              todoSortMode,
+	                              todoGroupMode,
+	                            );
+
+	                            return (
+	                              <View style={styles.listMenuRow}>
+	                                <Pressable
+	                                  accessibilityRole="button"
+	                                  onPress={() => setMenuMode(item.menuMode)}
+	                                  style={({ pressed }) => [
+	                                    styles.listMenuRowMainPress,
+	                                    pressed && styles.listMenuRowPressed,
+	                                  ]}
+	                                >
+	                                  <View style={styles.listMenuRowTextWrap}>
+	                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+	                                  </View>
+	                                </Pressable>
+	                                <View style={styles.listMenuSubmenuZone}>
+	                                  {item.valueLabel ? (
+	                                    <Text numberOfLines={1} style={styles.listMenuValueText}>
+	                                      {item.valueLabel}
+	                                    </Text>
+	                                  ) : item.count ? (
+	                                    <Text style={styles.listMenuChildCount}>{item.count}</Text>
+	                                  ) : null}
+	                                  {canClearSection ? (
+	                                    <Pressable
+	                                      accessibilityRole="button"
+	                                      accessibilityLabel={`Clear ${item.label}`}
+	                                      hitSlop={LIST_MENU_ICON_HIT_SLOP}
+	                                      onPress={() => clearMenuSection(item.menuMode)}
+	                                      style={({ pressed }) => [
+	                                        styles.listMenuClearButton,
+	                                        pressed && styles.listMenuClearButtonPressed,
+	                                      ]}
+	                                    >
+	                                      <Text style={styles.listMenuClearButtonText}>×</Text>
+	                                    </Pressable>
+	                                  ) : null}
+	                                  <Pressable
+	                                    accessibilityRole="button"
+	                                    accessibilityLabel={`Open ${item.label}`}
+	                                    hitSlop={LIST_MENU_ICON_HIT_SLOP}
+	                                    onPress={() => setMenuMode(item.menuMode)}
+	                                    style={({ pressed }) => [
+	                                      styles.listMenuArrowButton,
+	                                      pressed && styles.listMenuArrowButtonPressed,
+	                                    ]}
+	                                  >
+	                                    <Text style={styles.listMenuArrow}>›</Text>
+	                                  </Pressable>
+	                                </View>
+	                              </View>
+	                            );
+	                          }
+
+                          if (item.type !== 'value') {
+                            return null;
                           }
 
                           const isSelected = menuFilters[item.filterKey].includes(item.label);
+                          const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
 
                           return (
-                            <Pressable
-                              accessibilityRole="button"
-                              onPress={() => toggleFilterValue(item.filterKey, item.label)}
-                              style={({ pressed }) => [
+                            <View
+                              style={[
                                 styles.listMenuRow,
                                 isSelected && styles.listMenuRowSelected,
+                                isSelected && {
+                                  backgroundColor: colorTheme.tint,
+                                  borderBottomColor: colorTheme.border,
+                                },
+                              ]}
+                            >
+                              <Pressable
+                                accessibilityRole="button"
+                                onPress={() => toggleFilterValue(item.filterKey, item.label)}
+                                style={({ pressed }) => [
+                                  styles.listMenuRowMainPress,
+                                  pressed && styles.listMenuRowPressed,
+                                ]}
+                              >
+                                <View style={styles.listMenuRowTextWrap}>
+                                  <View
+                                    style={[
+                                      styles.listMenuColorDot,
+                                      { backgroundColor: colorTheme.accent },
+                                    ]}
+                                  />
+                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                </View>
+                              </Pressable>
+                              {isSelected ? (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Clear ${item.label}`}
+                                  hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                                  onPress={() => removeFilter(item.filterKey, item.label)}
+                                  style={({ pressed }) => [
+                                    styles.listMenuClearButton,
+                                    pressed && styles.listMenuClearButtonPressed,
+                                  ]}
+                                >
+                                  <Text style={[styles.listMenuClearButtonText, { color: colorTheme.text }]}>
+                                    ×
+                                  </Text>
+                                </Pressable>
+                              ) : null}
+                            </View>
+                          );
+                        }
+
+                        const isSelected = menuFilters.list.includes(item.label);
+                        const listColorTheme = getFilterColorTheme(filterColors, 'list', item.label);
+
+                        return (
+                          <View
+                            style={[
+                              styles.listMenuRow,
+                              isSelected && styles.listMenuRowSelected,
+                              isSelected && {
+                                backgroundColor: listColorTheme.tint,
+                                borderBottomColor: listColorTheme.border,
+                              },
+                            ]}
+                          >
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => {
+                                toggleFilterValue('list', item.label);
+                              }}
+                              style={({ pressed }) => [
+                                styles.listMenuRowMainPress,
                                 pressed && styles.listMenuRowPressed,
                               ]}
                             >
                               <View style={styles.listMenuRowTextWrap}>
+                                <View
+                                  style={[
+                                    styles.listMenuColorDot,
+                                    { backgroundColor: listColorTheme.accent },
+                                  ]}
+                                />
                                 <Text style={styles.listMenuRowTitle}>{item.label}</Text>
                               </View>
-                              {isSelected ? <Text style={styles.listMenuCheck}>✓</Text> : null}
                             </Pressable>
-                          );
-                        }
-
-                        const isExpanded = expandedListMenuPaths.has(item.path);
-                        const isSelected = menuFilters.list.includes(item.label);
-                        const toggleSubmenu = () => {
-                          setExpandedListMenuPaths((current) => {
-                            const next = new Set(current);
-                            if (next.has(item.path)) {
-                              next.delete(item.path);
-                            } else {
-                              next.add(item.path);
-                            }
-
-                            return next;
-                          });
-                          Haptics.selectionAsync().catch(() => undefined);
-                        };
-
-                        return (
-                          <Pressable
-                            accessibilityRole="button"
-                            onPress={() => {
-                              toggleFilterValue('list', item.label);
-                            }}
-                            style={({ pressed }) => [
-                              styles.listMenuRow,
-                              isSelected && styles.listMenuRowSelected,
-                              pressed && !item.hasChildren && styles.listMenuRowPressed,
-                            ]}
-                          >
-                            <View
-                              style={[
-                                styles.listMenuRowTextWrap,
-                                item.depth > 0 && { marginLeft: item.depth * 18 },
-                              ]}
-                            >
-                              <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-                            </View>
-                            {item.hasChildren ? (
+                            {isSelected ? (
                               <Pressable
                                 accessibilityRole="button"
-                                accessibilityLabel={`${isExpanded ? 'Collapse' : 'Expand'} ${item.label}`}
-                                hitSlop={{ top: 8, right: 4, bottom: 8, left: 0 }}
-                                onPress={toggleSubmenu}
+                                accessibilityLabel={`Clear ${item.label}`}
+                                hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                                onPress={() => removeFilter('list', item.label)}
                                 style={({ pressed }) => [
-                                  styles.listMenuSubmenuZone,
-                                  pressed && styles.listMenuArrowButtonPressed,
+                                  styles.listMenuClearButton,
+                                  pressed && styles.listMenuClearButtonPressed,
                                 ]}
                               >
-                                {isSelected ? <Text style={styles.listMenuInlineCheck}>✓</Text> : null}
-                                <Text style={styles.listMenuChildCount}>{item.childCount}</Text>
-                                <Text style={[styles.listMenuArrow, isExpanded && styles.listMenuArrowExpanded]}>
-                                  ›
+                                <Text style={[styles.listMenuClearButtonText, { color: listColorTheme.text }]}>
+                                  ×
                                 </Text>
                               </Pressable>
-                            ) : isSelected ? (
-                              <Text style={styles.listMenuCheck}>✓</Text>
                             ) : null}
-                          </Pressable>
+                          </View>
                         );
                       }}
                       showsVerticalScrollIndicator={false}
                       snapToAlignment="start"
                       snapToInterval={LIST_MENU_ROW_HEIGHT}
                     />
-                    {menuMode === 'main' ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Open settings"
-                        onPress={openSettingsModal}
-                        style={({ pressed }) => [
-                          styles.listMenuSettingsButton,
-                          pressed && styles.listMenuRowPressed,
-                        ]}
-                      >
-                        <View style={styles.listMenuRowTextWrap}>
-                          <Text style={styles.listMenuSettingsTitle}>Settings</Text>
-                        </View>
-                        <Text style={styles.listMenuArrow}>›</Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={submenuOpen ? 'Back to main filter menu' : 'Close filter menu'}
+                      onPress={() => {
+                        if (submenuOpen) {
+                          goBackInMenu();
+                        } else {
+                          closeListMenu();
+                        }
+                      }}
+                      style={({ pressed }) => [
+                        styles.listMenuFooterButton,
+                        pressed && styles.listMenuRowPressed,
+                      ]}
+                    >
+                      <Text style={styles.listMenuBackIcon}>{submenuOpen ? '‹' : '×'}</Text>
+                      <Text style={styles.listMenuBackText}>{submenuOpen ? 'Back' : 'Close'}</Text>
+                    </Pressable>
+                      </View>
+                    </PanGestureHandler>
+                  </Animated.View>
                 </PanGestureHandler>
               </View>
               {submenuOpen ? (
@@ -1640,10 +2891,13 @@ export default function App() {
                   bounces={false}
                   contentContainerStyle={[
                     styles.listContent,
-                    activeTodoMenuId !== null && listMenuOpen && styles.listContentMenuOpen,
+                    activeTodoMenuId !== null &&
+                      listMenuOpen && {
+                        paddingBottom: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 104,
+                      },
                     filteredTodos.length === 0 && styles.emptyListContent,
                   ]}
-                  data={filteredTodos}
+                  data={todoListRows}
                   keyboardDismissMode="on-drag"
                   keyboardShouldPersistTaps="handled"
                   keyExtractor={(item) => item.id}
@@ -1684,7 +2938,7 @@ export default function App() {
             <View style={styles.settingsHeader}>
               <View style={styles.settingsHeaderTextWrap}>
                 <Text style={styles.settingsTitle}>Settings</Text>
-                <Text style={styles.settingsSubtitle}>Backup</Text>
+                <Text style={styles.settingsSubtitle}>Preferences</Text>
               </View>
               <Pressable
                 accessibilityRole="button"
@@ -1699,105 +2953,452 @@ export default function App() {
               </Pressable>
             </View>
 
-            <View style={styles.settingsBody}>
+            <ScrollView
+              contentContainerStyle={styles.settingsBodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={styles.settingsBody}
+            >
               <View style={styles.settingsSection}>
-                <Text style={styles.settingsSectionTitle}>Google Drive</Text>
-                <View style={styles.settingsCard}>
-                  <View style={styles.settingsRow}>
-                    <View style={styles.settingsRowTextWrap}>
-                      <Text style={styles.settingsRowTitle}>Backup all data</Text>
-                      <Text style={styles.settingsRowSubtitle}>
-                        {todos.length} todos · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
-                      </Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.settingsStatusPill,
-                        googleConnected && styles.settingsStatusPillEnabled,
-                      ]}
-                    >
-                      <Text
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: settingsBackupExpanded }}
+                  onPress={() => setSettingsBackupExpanded((current) => !current)}
+                  style={({ pressed }) => [
+                    styles.settingsSectionHeader,
+                    pressed && styles.settingsOptionRowPressed,
+                  ]}
+                >
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Backup</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      Google Drive · {googleConnected ? 'Connected' : 'Not signed in'}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.settingsSectionChevron,
+                      settingsBackupExpanded && styles.settingsSectionChevronExpanded,
+                    ]}
+                  >
+                    ›
+                  </Text>
+                </Pressable>
+
+                {settingsBackupExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <View style={styles.settingsRow}>
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Backup all data</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          {todos.length} todos · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
+                        </Text>
+                      </View>
+                      <View
                         style={[
-                          styles.settingsStatusText,
-                          googleConnected && styles.settingsStatusTextEnabled,
+                          styles.settingsStatusPill,
+                          googleConnected && styles.settingsStatusPillEnabled,
                         ]}
                       >
-                        {googleConnected ? 'Connected' : 'Not signed in'}
-                      </Text>
+                        <Text
+                          style={[
+                            styles.settingsStatusText,
+                            googleConnected && styles.settingsStatusTextEnabled,
+                          ]}
+                        >
+                          {googleConnected ? 'Connected' : 'Not signed in'}
+                        </Text>
+                      </View>
                     </View>
-                  </View>
 
-                  {!googleOAuthConfigured ? (
-                    <Text style={styles.settingsWarningText}>
-                      Google sign-in is not configured for this build. Add the EXPO_PUBLIC_GOOGLE_* client IDs and rebuild.
-                    </Text>
-                  ) : null}
+                    {!googleOAuthConfigured ? (
+                      <Text style={styles.settingsWarningText}>
+                        Google sign-in is not configured for this build. Add the EXPO_PUBLIC_GOOGLE_* client IDs and rebuild.
+                      </Text>
+                    ) : null}
 
-                  <Pressable
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: googleDriveBackupEnabled }}
-                    disabled={googleDriveBusy}
-                    onPress={toggleGoogleDriveBackup}
-                    style={({ pressed }) => [
-                      styles.settingsOptionRow,
-                      googleDriveBusy && styles.settingsButtonDisabled,
-                      pressed && styles.settingsOptionRowPressed,
-                    ]}
-                  >
-                    <Text style={styles.settingsOptionText}>Auto backup</Text>
-                    <Text style={styles.settingsOptionValue}>
-                      {googleDriveBackupEnabled ? 'Enabled' : 'Disabled'}
-                    </Text>
-                  </Pressable>
+                    <Pressable
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: googleDriveBackupEnabled }}
+                      disabled={googleDriveBusy}
+                      onPress={toggleGoogleDriveBackup}
+                      style={({ pressed }) => [
+                        styles.settingsOptionRow,
+                        googleDriveBusy && styles.settingsButtonDisabled,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsOptionText}>Auto backup</Text>
+                      <Text style={styles.settingsOptionValue}>
+                        {googleDriveBackupEnabled ? 'Enabled' : 'Disabled'}
+                      </Text>
+                    </Pressable>
 
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={googleDriveBusy || !googleDriveActionReady}
-                    onPress={backupToGoogleDrive}
-                    style={({ pressed }) => [
-                      styles.settingsPrimaryButton,
-                      (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
-                      pressed && styles.settingsPrimaryButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.settingsPrimaryButtonText}>
-                      {googleDriveBusy ? 'Working...' : 'Back up to Google Drive'}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={googleDriveBusy || !googleDriveActionReady}
-                    onPress={restoreFromGoogleDrive}
-                    style={({ pressed }) => [
-                      styles.settingsRestoreButton,
-                      (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
-                      pressed && styles.settingsSecondaryButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.settingsRestoreButtonText}>Restore from Google Drive</Text>
-                  </Pressable>
-
-                  {googleConnected ? (
                     <Pressable
                       accessibilityRole="button"
-                      disabled={googleDriveBusy}
-                      onPress={disconnectGoogleDrive}
+                      disabled={googleDriveBusy || !googleDriveActionReady}
+                      onPress={backupToGoogleDrive}
                       style={({ pressed }) => [
-                        styles.settingsDisconnectButton,
-                        googleDriveBusy && styles.settingsButtonDisabled,
+                        styles.settingsPrimaryButton,
+                        (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                        pressed && styles.settingsPrimaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsPrimaryButtonText}>
+                        {googleDriveBusy ? 'Working...' : 'Back up to Google Drive'}
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={googleDriveBusy || !googleDriveActionReady}
+                      onPress={restoreFromGoogleDrive}
+                      style={({ pressed }) => [
+                        styles.settingsRestoreButton,
+                        (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
                         pressed && styles.settingsSecondaryButtonPressed,
                       ]}
                     >
-                      <Text style={styles.settingsDisconnectButtonText}>Disconnect Google Drive</Text>
+                      <Text style={styles.settingsRestoreButtonText}>Restore from Google Drive</Text>
                     </Pressable>
-                  ) : null}
 
-                  <Text style={styles.settingsBackupStatus}>{googleDriveBackupStatus}</Text>
+                    {googleConnected ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={googleDriveBusy}
+                        onPress={disconnectGoogleDrive}
+                        style={({ pressed }) => [
+                          styles.settingsDisconnectButton,
+                          googleDriveBusy && styles.settingsButtonDisabled,
+                          pressed && styles.settingsSecondaryButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsDisconnectButtonText}>Disconnect Google Drive</Text>
+                      </Pressable>
+                    ) : null}
+
+                    <Text style={styles.settingsBackupStatus}>{googleDriveBackupStatus}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: settingsListsExpanded }}
+                  onPress={() => setSettingsListsExpanded((current) => !current)}
+                  style={({ pressed }) => [
+                    styles.settingsSectionHeader,
+                    pressed && styles.settingsOptionRowPressed,
+                  ]}
+                >
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Lists</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {listMenuTree.length} items · {listOrderMode === 'alphabetical' ? 'Alphabetical' : 'Manual order'}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.settingsSectionChevron,
+                      settingsListsExpanded && styles.settingsSectionChevronExpanded,
+                    ]}
+                  >
+                    ›
+                  </Text>
+                </Pressable>
+
+                {settingsListsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <View style={styles.settingsSegmentedControl}>
+                      {(['alphabetical', 'manual'] as ListOrderMode[]).map((mode) => {
+                        const selected = listOrderMode === mode;
+                        return (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityState={{ selected }}
+                            key={mode}
+                            onPress={() => setListOrderMode(mode)}
+                            style={({ pressed }) => [
+                              styles.settingsSegmentButton,
+                              selected && styles.settingsSegmentButtonSelected,
+                              pressed && styles.settingsOptionRowPressed,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.settingsSegmentButtonText,
+                                selected && styles.settingsSegmentButtonTextSelected,
+                              ]}
+                            >
+                              {mode === 'alphabetical' ? 'Alphabetical' : 'Manual'}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    <View style={styles.settingsAddListRow}>
+                      <TextInput
+                        autoCapitalize="words"
+                        onChangeText={setNewListName}
+                        onSubmitEditing={addSettingsList}
+                        placeholder="New list"
+                        placeholderTextColor="#A69D94"
+                        returnKeyType="done"
+                        style={styles.settingsAddListInput}
+                        value={newListName}
+                      />
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={!newListName.trim()}
+                        onPress={addSettingsList}
+                        style={({ pressed }) => [
+                          styles.settingsAddListButton,
+                          !newListName.trim() && styles.settingsButtonDisabled,
+                          pressed && styles.settingsPrimaryButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsAddListButtonText}>Add</Text>
+                      </Pressable>
+                    </View>
+
+                    <View style={styles.settingsListEditor}>
+                      {listMenuTree.map((item, index) => (
+                        <View key={`${item.label}-${index}`} style={styles.settingsListEditRow}>
+                          <PanGestureHandler
+                            activeOffsetY={[-6, 6]}
+                            failOffsetX={[-18, 18]}
+                            onHandlerStateChange={(event) => {
+                              const { state, translationY } = event.nativeEvent;
+                              if (state === State.END && Math.abs(translationY) > 18) {
+                                moveSettingsList(index, translationY > 0 ? 1 : -1);
+                              }
+                            }}
+                          >
+                            <View collapsable={false} style={styles.settingsListDragZone}>
+                              <Text style={styles.settingsListDragHandle}>☰</Text>
+                            </View>
+                          </PanGestureHandler>
+                          <View style={styles.settingsListTextWrap}>
+                            <Text style={styles.settingsListTitle}>{item.label}</Text>
+                          </View>
+                          <View style={styles.settingsListActions}>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Move ${item.label} up`}
+                              disabled={index === 0}
+                              onPress={() => moveSettingsList(index, -1)}
+                              style={({ pressed }) => [
+                                styles.settingsIconButton,
+                                index === 0 && styles.settingsButtonDisabled,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <Text style={styles.settingsIconButtonText}>↑</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Move ${item.label} down`}
+                              disabled={index === listMenuTree.length - 1}
+                              onPress={() => moveSettingsList(index, 1)}
+                              style={({ pressed }) => [
+                                styles.settingsIconButton,
+                                index === listMenuTree.length - 1 && styles.settingsButtonDisabled,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <Text style={styles.settingsIconButtonText}>↓</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Remove ${item.label}`}
+                              onPress={() => removeSettingsList(index)}
+                              style={({ pressed }) => [
+                                styles.settingsIconButton,
+                                styles.settingsDangerIconButton,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <Text style={styles.settingsDangerIconButtonText}>×</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: settingsColorsExpanded }}
+                  onPress={() => setSettingsColorsExpanded((current) => !current)}
+                  style={({ pressed }) => [
+                    styles.settingsSectionHeader,
+                    pressed && styles.settingsOptionRowPressed,
+                  ]}
+                >
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Colors</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {settingsColorItemCount} items · Priority, dates, lists
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.settingsSectionChevron,
+                      settingsColorsExpanded && styles.settingsSectionChevronExpanded,
+                    ]}
+                  >
+                    ›
+                  </Text>
+                </Pressable>
+
+                {settingsColorsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    {settingsColorGroups.map((group, groupIndex) => (
+                      <View
+                        key={group.filterKey}
+                        style={[
+                          styles.settingsColorGroup,
+                          groupIndex === 0 && styles.settingsColorGroupFirst,
+                        ]}
+                      >
+                        <Text style={styles.settingsColorGroupTitle}>{group.title}</Text>
+                        {group.values.map((value) => {
+                          const colorTheme = getFilterColorTheme(filterColors, group.filterKey, value);
+
+                          return (
+                            <View key={`${group.filterKey}-${value}`} style={styles.settingsColorRow}>
+                              <View style={styles.settingsColorLabelWrap}>
+                                <View
+                                  style={[
+                                    styles.settingsColorPreviewDot,
+                                    { backgroundColor: colorTheme.accent },
+                                  ]}
+                                />
+                                <Text style={styles.settingsColorLabel}>{value}</Text>
+                              </View>
+                              <ScrollView
+                                horizontal
+                                keyboardShouldPersistTaps="handled"
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.settingsColorSwatchScroll}
+                                contentContainerStyle={styles.settingsColorSwatches}
+                              >
+                                {FILTER_COLOR_SWATCHES.map((swatch) => {
+                                  const selected =
+                                    swatch.accent.toUpperCase() === colorTheme.accent.toUpperCase();
+
+                                  return (
+                                    <Pressable
+                                      accessibilityRole="button"
+                                      accessibilityLabel={`Set ${value} color to ${swatch.label}`}
+                                      accessibilityState={{ selected }}
+                                      key={swatch.id}
+                                      onPress={() => setFilterColor(group.filterKey, value, swatch.accent)}
+                                      style={({ pressed }) => [
+                                        styles.settingsColorSwatchButton,
+                                        selected && {
+                                          backgroundColor: swatch.tint,
+                                          borderColor: swatch.accent,
+                                        },
+                                        pressed && styles.settingsOptionRowPressed,
+                                      ]}
+                                    >
+                                      <View
+                                        style={[
+                                          styles.settingsColorSwatch,
+                                          { backgroundColor: swatch.accent },
+                                        ]}
+                                      />
+                                    </Pressable>
+                                  );
+                                })}
+                              </ScrollView>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
+        <Modal
+          animationType="fade"
+          onRequestClose={closePresetSaveModal}
+          onShow={focusPresetSaveInput}
+          transparent
+          visible={presetSaveModalVisible}
+        >
+          <View style={styles.presetSaveModalBackdrop}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss save preset dialog"
+              onPress={closePresetSaveModal}
+              style={StyleSheet.absoluteFill}
+            />
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={styles.presetSaveModalCenter}
+            >
+              <View style={styles.presetSaveModalCard}>
+                <Text style={styles.presetSaveModalTitle}>Save preset</Text>
+                <Text style={styles.presetSaveModalMessage}>
+                  Enter a name for this preset.
+                </Text>
+                <TextInput
+                  ref={presetSaveInputRef}
+                  autoCapitalize="words"
+                  autoFocus
+                  onChangeText={setPresetSaveName}
+                  onPressIn={focusPresetSaveInput}
+                  onSubmitEditing={(event) => {
+                    commitMenuPreset(event.nativeEvent.text || presetSaveName);
+                  }}
+                  placeholder="Preset name"
+                  placeholderTextColor="#A69D94"
+                  returnKeyType="done"
+                  selectTextOnFocus
+                  showSoftInputOnFocus
+                  style={styles.presetSaveModalInput}
+                  submitBehavior="submit"
+                  value={presetSaveName}
+                />
+                <View style={styles.presetSaveModalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={closePresetSaveModal}
+                    style={({ pressed }) => [
+                      styles.presetSaveModalButton,
+                      styles.presetSaveModalButtonSecondary,
+                      pressed && styles.presetSaveModalButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.presetSaveModalButtonSecondaryText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!presetSaveName.trim()}
+                    onPress={() => commitMenuPreset(presetSaveName)}
+                    style={({ pressed }) => [
+                      styles.presetSaveModalButton,
+                      styles.presetSaveModalButtonPrimary,
+                      !presetSaveName.trim() && styles.settingsButtonDisabled,
+                      pressed && styles.presetSaveModalButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.presetSaveModalButtonPrimaryText}>Save</Text>
+                  </Pressable>
                 </View>
               </View>
-            </View>
-          </SafeAreaView>
+            </KeyboardAvoidingView>
+          </View>
         </Modal>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -1821,15 +3422,99 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8F6F2',
   },
+  presetSaveModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(30, 27, 24, 0.42)',
+    justifyContent: 'center',
+    paddingHorizontal: HORIZONTAL_PADDING,
+  },
+  presetSaveModalCenter: {
+    width: '100%',
+  },
+  presetSaveModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4DDD4',
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 16,
+    width: '100%',
+  },
+  presetSaveModalTitle: {
+    color: '#1E1B18',
+    fontSize: 18,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 24,
+  },
+  presetSaveModalMessage: {
+    color: '#8C847C',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    marginTop: 6,
+  },
+  presetSaveModalInput: {
+    minHeight: 46,
+    borderRadius: 14,
+    backgroundColor: '#F8F6F2',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
+    color: '#1E1B18',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    marginTop: 16,
+    paddingHorizontal: 14,
+  },
+  presetSaveModalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-end',
+    marginTop: 18,
+  },
+  presetSaveModalButton: {
+    minHeight: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  presetSaveModalButtonSecondary: {
+    backgroundColor: '#F8F6F2',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
+  },
+  presetSaveModalButtonPrimary: {
+    backgroundColor: '#2F6F62',
+  },
+  presetSaveModalButtonPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.98 }],
+  },
+  presetSaveModalButtonSecondaryText: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+  },
+  presetSaveModalButtonPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+  },
   settingsHeader: {
-    minHeight: 72,
+    minHeight: TOP_SAFE_GAP + 74,
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#E8E2DA',
     flexDirection: 'row',
+    gap: 14,
     justifyContent: 'space-between',
+    paddingBottom: 12,
     paddingHorizontal: HORIZONTAL_PADDING,
-    paddingTop: 8,
+    paddingTop: TOP_SAFE_GAP,
   },
   settingsHeaderTextWrap: {
     flex: 1,
@@ -1872,20 +3557,47 @@ const styles = StyleSheet.create({
   },
   settingsBody: {
     flex: 1,
+  },
+  settingsBodyContent: {
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingTop: 22,
+    paddingBottom: 34,
   },
   settingsSection: {
     width: '100%',
+    marginBottom: 18,
+  },
+  settingsSectionHeader: {
+    minHeight: 58,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
   },
   settingsSectionTitle: {
-    color: '#8C847C',
-    fontSize: 12,
+    color: '#1E1B18',
+    fontSize: 16,
     fontWeight: FONT_MEDIUM,
-    lineHeight: 16,
-    letterSpacing: 0.2,
-    marginBottom: 10,
-    textTransform: 'uppercase',
+    lineHeight: 21,
+    letterSpacing: 0.1,
+  },
+  settingsSectionSubtitle: {
+    color: '#8C847C',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+    marginTop: 3,
+  },
+  settingsSectionChevron: {
+    color: '#8C847C',
+    fontSize: 25,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 27,
+    transform: [{ rotate: '0deg' }],
+  },
+  settingsSectionChevronExpanded: {
+    transform: [{ rotate: '90deg' }],
   },
   settingsCard: {
     borderRadius: 16,
@@ -1898,6 +3610,213 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
     elevation: 2,
+  },
+  settingsSegmentedControl: {
+    minHeight: 44,
+    borderRadius: 14,
+    backgroundColor: '#F3EEE7',
+    flexDirection: 'row',
+    padding: 4,
+  },
+  settingsSegmentButton: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingsSegmentButtonSelected: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#3D3428',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
+  },
+  settingsSegmentButtonText: {
+    color: '#8C847C',
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    letterSpacing: 0.1,
+  },
+  settingsSegmentButtonTextSelected: {
+    color: '#1E1B18',
+  },
+  settingsAddListRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  settingsAddListInput: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 14,
+    backgroundColor: '#F8F6F2',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
+    color: '#1E1B18',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    paddingHorizontal: 14,
+  },
+  settingsAddListButton: {
+    minWidth: 66,
+    minHeight: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2F6F62',
+    paddingHorizontal: 14,
+  },
+  settingsAddListButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
+  settingsListEditor: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F2EBE3',
+    marginTop: 14,
+  },
+  settingsListEditRow: {
+    minHeight: 56,
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F2EBE3',
+    flexDirection: 'row',
+    paddingVertical: 8,
+  },
+  settingsListDragZone: {
+    width: 28,
+    minHeight: 40,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  settingsListDragHandle: {
+    color: '#B4AAA0',
+    fontSize: 18,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 22,
+  },
+  settingsListTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
+  },
+  settingsListTitle: {
+    color: '#1E1B18',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  settingsListSubtitle: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  settingsListActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  settingsColorGroup: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F2EBE3',
+    paddingTop: 14,
+    marginTop: 14,
+  },
+  settingsColorGroupFirst: {
+    borderTopWidth: 0,
+    paddingTop: 0,
+    marginTop: 0,
+  },
+  settingsColorGroupTitle: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.2,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
+  settingsColorRow: {
+    minHeight: 46,
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 6,
+  },
+  settingsColorLabelWrap: {
+    width: 112,
+    minWidth: 0,
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  settingsColorPreviewDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  settingsColorLabel: {
+    flex: 1,
+    color: '#1E1B18',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+  },
+  settingsColorSwatchScroll: {
+    flex: 1,
+  },
+  settingsColorSwatches: {
+    alignItems: 'center',
+    gap: 8,
+    paddingRight: 2,
+  },
+  settingsColorSwatchButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E2DA',
+    backgroundColor: '#FFFFFF',
+  },
+  settingsColorSwatch: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+  },
+  settingsIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3EEE7',
+  },
+  settingsIconButtonText: {
+    color: '#2A2520',
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+  },
+  settingsDangerIconButton: {
+    backgroundColor: '#F8EDEA',
+  },
+  settingsDangerIconButtonText: {
+    color: '#8F4D46',
+    fontSize: 22,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 24,
   },
   settingsRow: {
     minHeight: 54,
@@ -2116,26 +4035,45 @@ const styles = StyleSheet.create({
     elevation: 7,
   },
   listMenu: {
-    height: LIST_MENU_HEIGHT,
     borderRadius: 18,
     backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E4DDD4',
+    overflow: 'hidden',
     paddingHorizontal: 8,
-    paddingVertical: 10,
+    paddingBottom: 10,
     shadowColor: '#000000',
     shadowOpacity: 0.1,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 14 },
     elevation: 6,
   },
-  listMenuBackButton: {
-    minHeight: 42,
+  listMenuBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  menuDragHandle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingBottom: 4,
+    paddingTop: 8,
+  },
+  menuDragPill: {
+    backgroundColor: '#D8D0C8',
+    borderRadius: 999,
+    height: 5,
+    width: 42,
+  },
+  listMenuFooterButton: {
+    minHeight: 50,
     borderRadius: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E8E2DA',
     alignItems: 'center',
     flexDirection: 'row',
-    marginBottom: 6,
-    paddingHorizontal: 12,
+    marginTop: 8,
+    paddingHorizontal: 16,
   },
   listMenuBackIcon: {
     color: '#2F6F62',
@@ -2154,23 +4092,6 @@ const styles = StyleSheet.create({
   listMenuList: {
     flex: 1,
   },
-  listMenuSettingsButton: {
-    minHeight: 50,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E8E2DA',
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    paddingHorizontal: 16,
-  },
-  listMenuSettingsTitle: {
-    color: '#2A2520',
-    fontSize: 15,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 20,
-    letterSpacing: 0.1,
-  },
   listMenuRow: {
     height: LIST_MENU_ROW_HEIGHT,
     borderRadius: 12,
@@ -2180,6 +4101,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
+  },
+  listMenuRowMainPress: {
+    flex: 1,
+    minWidth: 0,
+    height: '100%',
+    justifyContent: 'center',
+    marginRight: 8,
   },
   listMenuRowPressed: {
     backgroundColor: '#F5F2ED',
@@ -2205,6 +4133,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     textTransform: 'capitalize',
   },
+  listMenuValueText: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    letterSpacing: 0.1,
+  },
   menuEmptyState: {
     height: LIST_MENU_ROW_HEIGHT * 2,
     alignItems: 'center',
@@ -2222,6 +4157,74 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  listMenuRowTextStack: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    paddingRight: 12,
+  },
+  listMenuRowSummary: {
+    color: '#8C847C',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    letterSpacing: 0.1,
+    marginTop: 2,
+  },
+  listMenuApplyText: {
+    color: '#2F6F62',
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    marginLeft: 10,
+  },
+  listMenuPresetSwipeShell: {
+    height: LIST_MENU_ROW_HEIGHT,
+    borderRadius: 12,
+    overflow: 'visible',
+  },
+  listMenuPresetSwipeContainer: {
+    height: LIST_MENU_ROW_HEIGHT,
+    borderRadius: 12,
+    overflow: 'visible',
+  },
+  listMenuPresetSwipeChildren: {
+    backgroundColor: 'transparent',
+  },
+  listMenuPresetRow: {
+    height: LIST_MENU_ROW_HEIGHT,
+    borderRadius: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F2EBE3',
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  listMenuPresetSwipeActions: {
+    width: PRESET_SWIPE_DELETE_WIDTH,
+    height: LIST_MENU_ROW_HEIGHT,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+  },
+  listMenuPresetSwipeDelete: {
+    width: PRESET_SWIPE_DELETE_WIDTH,
+    height: LIST_MENU_ROW_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#CF413A',
+  },
+  listMenuColorDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    flexShrink: 0,
   },
   listMenuRowTitle: {
     color: '#2A2520',
@@ -2254,15 +4257,40 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '90deg' }],
   },
   listMenuSubmenuZone: {
-    width: '30%',
-    minWidth: 86,
+    flexShrink: 0,
+    maxWidth: '52%',
     height: 36,
     borderRadius: 10,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    marginLeft: 10,
-    paddingRight: 2,
+    gap: 12,
+    marginLeft: 8,
+    paddingLeft: 4,
+    paddingRight: 4,
+  },
+  listMenuClearButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listMenuClearButtonPressed: {
+    backgroundColor: '#F5EBE8',
+  },
+  listMenuClearButtonText: {
+    color: '#A35D55',
+    fontSize: 18,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+  },
+  listMenuArrowButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   listMenuArrowButtonPressed: {
     backgroundColor: '#EDF4F0',
@@ -2273,7 +4301,6 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 16,
     letterSpacing: 0.2,
-    marginRight: 10,
   },
   pullMenu: {
     position: 'absolute',
@@ -2359,12 +4386,51 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     gap: 8,
   },
-  listContentMenuOpen: {
-    paddingBottom: LIST_MENU_HEIGHT + LIST_MENU_BOTTOM_OFFSET + 104,
-  },
   emptyListContent: {
     flexGrow: 1,
     justifyContent: 'center',
+  },
+  todoGroupHeader: {
+    minHeight: 30,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingTop: 8,
+  },
+  todoGroupHeaderPressed: {
+    opacity: 0.72,
+  },
+  todoGroupHeaderMain: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 1,
+    gap: 4,
+  },
+  todoGroupChevron: {
+    color: '#A9A19A',
+    fontSize: 18,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    width: 14,
+  },
+  todoGroupChevronExpanded: {
+    transform: [{ rotate: '90deg' }],
+  },
+  todoGroupTitle: {
+    color: '#706860',
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 16,
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  todoGroupCount: {
+    color: '#A9A19A',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.1,
   },
   swipeShell: {
     minHeight: 60,
@@ -2448,9 +4514,36 @@ const styles = StyleSheet.create({
     borderColor: '#EEEAE4',
   },
   todoRowMenuTarget: {
-    backgroundColor: '#FFF8E7',
+    backgroundColor: '#FFF7E5',
+    borderWidth: 1,
     borderColor: '#E4BE63',
-    shadowOpacity: 0.07,
+    shadowColor: '#D89328',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 3,
+  },
+  todoColorRail: {
+    alignSelf: 'stretch',
+    borderRadius: 3,
+    marginRight: 12,
+    opacity: 0.9,
+    width: 5,
+  },
+  todoColorRailDone: {
+    opacity: 0.35,
+  },
+  todoColorDotRow: {
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 8,
+  },
+  todoColorDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  todoColorDotDone: {
+    opacity: 0.35,
   },
   todoText: {
     color: '#1E1B18',

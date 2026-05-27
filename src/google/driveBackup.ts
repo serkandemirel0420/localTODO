@@ -5,6 +5,11 @@ import {
   type Todo,
   type TodoFilters,
 } from '../todos';
+import {
+  cloneFilterColors,
+  normalizeFilterColors,
+  type FilterColorSettings,
+} from '../filterColors';
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
@@ -12,11 +17,37 @@ export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
 const BACKUP_FILE_NAME = 'local-todo-backup.json';
 const BACKUP_MIME_TYPE = 'application/json';
 
+export type BackupListOrderMode = 'alphabetical' | 'manual';
+export type BackupTodoGroupMode = 'date' | 'list' | 'none' | 'priority' | 'status';
+export type BackupTodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' | 'priority';
+
+export type BackupListMenuNode = {
+  label: string;
+  children?: BackupListMenuNode[];
+};
+
+export type BackupMenuPreset = {
+  id: string;
+  label: string;
+  filters: TodoFilters;
+  listOrderMode: BackupListOrderMode;
+  todoGroupMode: BackupTodoGroupMode;
+  todoSortMode: BackupTodoSortMode;
+  createdAt: number;
+};
+
 export type BackupSettings = {
+  collapsedTodoGroupIds: string[];
+  filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
+  listMenuTree: BackupListMenuNode[];
+  listOrderMode: BackupListOrderMode;
+  menuPresets: BackupMenuPreset[];
   selectedFilters: TodoFilters;
+  todoGroupMode: BackupTodoGroupMode;
+  todoSortMode: BackupTodoSortMode;
 };
 
 export type LocalTodoBackup = {
@@ -41,6 +72,153 @@ export type DriveUploadResult = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+const normalizeBackupTodoGroupMode = (value: unknown): BackupTodoGroupMode => {
+  if (
+    value === 'date' ||
+    value === 'list' ||
+    value === 'priority' ||
+    value === 'status'
+  ) {
+    return value;
+  }
+
+  return 'none';
+};
+
+const normalizeCollapsedTodoGroupIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+};
+
+const normalizeBackupTodoSortMode = (value: unknown): BackupTodoSortMode => {
+  if (
+    value === 'alphabetical' ||
+    value === 'date' ||
+    value === 'newest' ||
+    value === 'oldest' ||
+    value === 'priority'
+  ) {
+    return value;
+  }
+
+  return 'newest';
+};
+
+const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
+  nodes.map((node) => ({
+    label: node.label,
+    children: node.children ? cloneListMenuTree(node.children) : undefined,
+  }));
+
+const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
+  presets.map((preset) => ({
+    id: preset.id,
+    label: preset.label,
+    filters: cloneTodoFilters(preset.filters),
+    listOrderMode: preset.listOrderMode,
+    todoGroupMode: preset.todoGroupMode,
+    todoSortMode: preset.todoSortMode,
+    createdAt: preset.createdAt,
+  }));
+
+const flattenBackupListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] => {
+  const seen = new Set<string>();
+  const flattened: BackupListMenuNode[] = [];
+
+  const walk = (items: BackupListMenuNode[]) => {
+    for (const item of items) {
+      const key = item.label.toLocaleLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        flattened.push({ label: item.label });
+      }
+
+      if (item.children?.length) {
+        walk(item.children);
+      }
+    }
+  };
+
+  walk(nodes);
+  return flattened;
+};
+
+const normalizeBackupListMenuTree = (value: unknown): BackupListMenuNode[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const nodes = value
+    .map((item): BackupListMenuNode | null => {
+      if (!isRecord(item) || typeof item.label !== 'string') {
+        return null;
+      }
+
+      const label = item.label.trim();
+      if (!label) {
+        return null;
+      }
+
+      const children = Array.isArray(item.children)
+        ? item.children
+            .map((child): BackupListMenuNode | null => {
+              if (!isRecord(child) || typeof child.label !== 'string') {
+                return null;
+              }
+
+              const childLabel = child.label.trim();
+              return childLabel ? { label: childLabel } : null;
+            })
+            .filter((child): child is BackupListMenuNode => Boolean(child))
+        : [];
+
+      return {
+        label,
+        children: children.length > 0 ? children : undefined,
+      };
+    })
+    .filter((item): item is BackupListMenuNode => Boolean(item));
+
+  return flattenBackupListMenuTree(nodes);
+};
+
+const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index): BackupMenuPreset | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const id = typeof item.id === 'string' && item.id.trim()
+        ? item.id.trim()
+        : `preset-${index + 1}`;
+      const label = typeof item.label === 'string' && item.label.trim()
+        ? item.label.trim()
+        : `Preset ${index + 1}`;
+      const createdAt = typeof item.createdAt === 'number' && Number.isFinite(item.createdAt)
+        ? item.createdAt
+        : 0;
+
+      return {
+        id,
+        label,
+        filters: normalizeTodoFilters(item.filters),
+        listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
+        todoGroupMode: normalizeBackupTodoGroupMode(item.todoGroupMode),
+        todoSortMode: normalizeBackupTodoSortMode(item.todoSortMode),
+        createdAt,
+      };
+    })
+    .filter((item): item is BackupMenuPreset => Boolean(item));
+};
 
 const escapeDriveQueryString = (value: string) => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
@@ -103,10 +281,17 @@ export const createBackupPayload = (
     exportedAt,
     schemaVersion: 1,
     settings: {
+      collapsedTodoGroupIds: [...settings.collapsedTodoGroupIds],
+      filterColors: cloneFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
       googleDriveLastBackupAt: exportedAt,
       googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
+      listMenuTree: cloneListMenuTree(settings.listMenuTree),
+      listOrderMode: settings.listOrderMode,
+      menuPresets: cloneMenuPresets(settings.menuPresets),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
+      todoGroupMode: settings.todoGroupMode,
+      todoSortMode: settings.todoSortMode,
     },
     todos,
   };
@@ -125,12 +310,19 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
     exportedAt: typeof value.exportedAt === 'string' ? value.exportedAt : new Date().toISOString(),
     schemaVersion: 1,
     settings: {
+      collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
+      filterColors: normalizeFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,
       googleDriveLastBackupAt:
         typeof settings.googleDriveLastBackupAt === 'string' ? settings.googleDriveLastBackupAt : null,
       googleDriveLastRestoreAt:
         typeof settings.googleDriveLastRestoreAt === 'string' ? settings.googleDriveLastRestoreAt : null,
+      listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
+      listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
+      menuPresets: normalizeBackupMenuPresets(settings.menuPresets),
       selectedFilters: normalizeTodoFilters(settings.selectedFilters),
+      todoGroupMode: normalizeBackupTodoGroupMode(settings.todoGroupMode),
+      todoSortMode: normalizeBackupTodoSortMode(settings.todoSortMode),
     },
     todos,
   };

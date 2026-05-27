@@ -883,11 +883,31 @@ export default function App() {
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
   const goBackInMenuRef = useRef<() => boolean>(() => false);
+  const menuModeRef = useRef<MenuMode | null>(null);
+  const presetSaveModalVisibleRef = useRef(false);
+  const settingsModalVisibleRef = useRef(false);
+  const menuListScrollOffsetRef = useRef(0);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
+  menuModeRef.current = menuMode;
+  presetSaveModalVisibleRef.current = presetSaveModalVisible;
+  settingsModalVisibleRef.current = settingsModalVisible;
+
+  const resolveMenuDismissAction = (): 'back' | 'close' => {
+    if (presetSaveModalVisibleRef.current || settingsModalVisibleRef.current) {
+      return 'back';
+    }
+
+    const mode = menuModeRef.current;
+    if (mode === null || mode === 'main') {
+      return 'close';
+    }
+
+    return 'back';
+  };
   const googleOAuthConfigured = isGoogleOAuthConfigured();
   const googleConnected = Boolean(googleAuth?.accessToken);
 
@@ -1018,6 +1038,10 @@ export default function App() {
   }, [menuMode]);
 
   useEffect(() => {
+    menuListScrollOffsetRef.current = 0;
+  }, [menuMode]);
+
+  useEffect(() => {
     if (!listMenuOpen) {
       menuPullAnim.stopAnimation();
       menuPullAnim.setValue(0);
@@ -1099,6 +1123,19 @@ export default function App() {
     [dampMenuPullDistance, menuPullAnim],
   );
 
+  const handleMenuDismissGestureFromBody = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      if (menuListScrollOffsetRef.current > 1) {
+        menuPullAnim.setValue(0);
+        menuDismissPullRef.current = 0;
+        return;
+      }
+
+      handleMenuDismissGesture(event);
+    },
+    [handleMenuDismissGesture, menuPullAnim],
+  );
+
   const handleMenuDismissStateChange = useCallback(
     (event: PanGestureHandlerStateChangeEvent) => {
       const { state, translationY, velocityY } = event.nativeEvent;
@@ -1117,23 +1154,20 @@ export default function App() {
         (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
 
       if (shouldClose) {
-        const shouldGoBack =
-          presetSaveModalVisible ||
-          settingsModalVisible ||
-          submenuOpen;
-        animateMenuDismissClose(shouldGoBack ? 'back' : 'close');
+        animateMenuDismissClose(resolveMenuDismissAction());
         return;
       }
 
       animateMenuDismissReset();
     },
-    [
-      animateMenuDismissClose,
-      animateMenuDismissReset,
-      presetSaveModalVisible,
-      settingsModalVisible,
-      submenuOpen,
-    ],
+    [animateMenuDismissClose, animateMenuDismissReset],
+  );
+
+  const handleMenuListScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      menuListScrollOffsetRef.current = Math.max(0, event.nativeEvent.contentOffset.y);
+    },
+    [],
   );
 
   const listMenuAnimatedStyle = useMemo(
@@ -2435,7 +2469,7 @@ export default function App() {
                   activeOffsetY={[8, 10000]}
                   enabled={listMenuOpen}
                   failOffsetX={[-36, 36]}
-                  onGestureEvent={handleMenuDismissGesture}
+                  onGestureEvent={handleMenuDismissGestureFromBody}
                   onHandlerStateChange={handleMenuDismissStateChange}
                 >
                   <Animated.View
@@ -2446,9 +2480,17 @@ export default function App() {
                       listMenuAnimatedStyle,
                     ]}
                   >
-                    <View style={styles.menuDragHandle} accessibilityRole="adjustable">
-                      <View style={styles.menuDragPill} />
-                    </View>
+                    <PanGestureHandler
+                      activeOffsetY={[8, 10000]}
+                      enabled={listMenuOpen}
+                      failOffsetX={[-36, 36]}
+                      onGestureEvent={handleMenuDismissGesture}
+                      onHandlerStateChange={handleMenuDismissStateChange}
+                    >
+                      <View collapsable={false} style={styles.menuDragHandle} accessibilityRole="adjustable">
+                        <View style={styles.menuDragPill} />
+                      </View>
+                    </PanGestureHandler>
                     <PanGestureHandler
                       activeOffsetX={[-10000, 32]}
                       enabled={menuMode !== null && menuMode !== 'main'}
@@ -2473,7 +2515,9 @@ export default function App() {
                         </View>
                       }
                       nestedScrollEnabled
+                      onScroll={handleMenuListScroll}
                       overScrollMode="never"
+                      scrollEventThrottle={16}
                       style={styles.listMenuList}
                       renderItem={({ item }) => {
                         if ('type' in item) {

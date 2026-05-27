@@ -886,6 +886,14 @@ export default function App() {
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
+  const todoListInsetStyle = useMemo(
+    () => ({
+      bottom: listMenuOpen
+        ? listMenuHeight + LIST_MENU_BOTTOM_OFFSET
+        : LIST_MENU_BOTTOM_OFFSET,
+    }),
+    [listMenuHeight, listMenuOpen],
+  );
   const submenuOpen = menuMode !== null && menuMode !== 'main';
   const googleOAuthConfigured = isGoogleOAuthConfigured();
   const googleConnected = Boolean(googleAuth?.accessToken);
@@ -2399,23 +2407,15 @@ export default function App() {
         <View style={styles.listShell}>
           {listMenuOpen ? (
             <>
-              <PanGestureHandler
-                activeOffsetY={[8, 10000]}
-                enabled={listMenuOpen}
-                failOffsetX={[-36, 36]}
-                onGestureEvent={handleMenuDismissGesture}
-                onHandlerStateChange={handleMenuDismissStateChange}
-              >
+              <View pointerEvents="box-none" style={styles.listMenuOverlay}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Close lists menu"
                   onPress={closeListMenu}
                   style={styles.listMenuBackdrop}
                 />
-              </PanGestureHandler>
-              <View pointerEvents="box-none" style={styles.listMenuLayer}>
                 <PanGestureHandler
-                  activeOffsetY={[8, 10000]}
+                  activeOffsetY={8}
                   enabled={listMenuOpen}
                   failOffsetX={[-36, 36]}
                   onGestureEvent={handleMenuDismissGesture}
@@ -2872,7 +2872,7 @@ export default function App() {
             collapsable={false}
             onTouchEnd={handleListFrameTouchEnd}
             onTouchStart={handleListFrameTouchStart}
-            style={styles.todoListTapFrame}
+            style={[styles.todoListTapFrame, todoListInsetStyle]}
           >
             <PanGestureHandler
               activeOffsetY={8}
@@ -2891,10 +2891,7 @@ export default function App() {
                   bounces={false}
                   contentContainerStyle={[
                     styles.listContent,
-                    activeTodoMenuId !== null &&
-                      listMenuOpen && {
-                        paddingBottom: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 104,
-                      },
+                    listMenuOpen && styles.listContentAboveMenu,
                     filteredTodos.length === 0 && styles.emptyListContent,
                   ]}
                   data={todoListRows}
@@ -4005,12 +4002,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   todoListTapFrame: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+  listMenuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    paddingBottom: LIST_MENU_BOTTOM_OFFSET,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    zIndex: 20,
+    elevation: 8,
   },
   listMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 19,
-    backgroundColor: 'rgba(0,0,0,0.04)',
+    backgroundColor: 'rgba(30, 27, 24, 0.42)',
   },
   edgeBackZone: {
     position: 'absolute',
@@ -4025,14 +4030,6 @@ const styles = StyleSheet.create({
   },
   edgeBackZoneRight: {
     right: 0,
-  },
-  listMenuLayer: {
-    position: 'absolute',
-    bottom: LIST_MENU_BOTTOM_OFFSET,
-    left: HORIZONTAL_PADDING,
-    right: HORIZONTAL_PADDING,
-    zIndex: 20,
-    elevation: 7,
   },
   listMenu: {
     borderRadius: 18,
@@ -4385,6 +4382,9 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
     paddingTop: 4,
     gap: 8,
+  },
+  listContentAboveMenu: {
+    paddingBottom: 24,
   },
   emptyListContent: {
     flexGrow: 1,

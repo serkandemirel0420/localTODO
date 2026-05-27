@@ -882,6 +882,7 @@ export default function App() {
   const menuPullAnim = useRef(new Animated.Value(0)).current;
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
+  const goBackInMenuRef = useRef<() => boolean>(() => false);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
@@ -1057,7 +1058,7 @@ export default function App() {
     });
   }, [menuPullAnim, resetMenuDismissPull]);
 
-  const animateMenuDismissClose = useCallback(() => {
+  const animateMenuDismissClose = useCallback((action: 'back' | 'close' = 'close') => {
     Animated.timing(menuPullAnim, {
       duration: 220,
       easing: Easing.out(Easing.cubic),
@@ -1067,7 +1068,11 @@ export default function App() {
       if (finished) {
         menuPullAnim.setValue(0);
         resetMenuDismissPull();
-        closeListMenu();
+        if (action === 'back') {
+          goBackInMenuRef.current();
+        } else {
+          closeListMenu();
+        }
       }
     });
   }, [closeListMenu, listMenuHeight, menuPullAnim, resetMenuDismissPull]);
@@ -1112,13 +1117,23 @@ export default function App() {
         (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
 
       if (shouldClose) {
-        animateMenuDismissClose();
+        const shouldGoBack =
+          presetSaveModalVisible ||
+          settingsModalVisible ||
+          submenuOpen;
+        animateMenuDismissClose(shouldGoBack ? 'back' : 'close');
         return;
       }
 
       animateMenuDismissReset();
     },
-    [animateMenuDismissClose, animateMenuDismissReset],
+    [
+      animateMenuDismissClose,
+      animateMenuDismissReset,
+      presetSaveModalVisible,
+      settingsModalVisible,
+      submenuOpen,
+    ],
   );
 
   const listMenuAnimatedStyle = useMemo(
@@ -1203,6 +1218,8 @@ export default function App() {
     settingsModalVisible,
     submenuOpen,
   ]);
+
+  goBackInMenuRef.current = goBackInMenu;
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(

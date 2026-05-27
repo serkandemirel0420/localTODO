@@ -2400,7 +2400,7 @@ export default function App() {
           {listMenuOpen ? (
             <>
               <PanGestureHandler
-                activeOffsetY={[8, 10000]}
+                activeOffsetY={[-10000, 8]}
                 enabled={listMenuOpen}
                 failOffsetX={[-36, 36]}
                 onGestureEvent={handleMenuDismissGesture}
@@ -2415,7 +2415,7 @@ export default function App() {
               </PanGestureHandler>
               <View pointerEvents="box-none" style={styles.listMenuLayer}>
                 <PanGestureHandler
-                  activeOffsetY={[8, 10000]}
+                  activeOffsetY={[-10000, 8]}
                   enabled={listMenuOpen}
                   failOffsetX={[-36, 36]}
                   onGestureEvent={handleMenuDismissGesture}

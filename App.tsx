@@ -882,11 +882,34 @@ export default function App() {
   const menuPullAnim = useRef(new Animated.Value(0)).current;
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
+  const goBackInMenuRef = useRef<() => boolean>(() => false);
+  const menuModeRef = useRef<MenuMode | null>(null);
+  const presetSaveModalVisibleRef = useRef(false);
+  const settingsModalVisibleRef = useRef(false);
+  const menuListScrollOffsetRef = useRef(0);
+  const menuScrollOffsetsRef = useRef<Partial<Record<MenuMode, number>>>({});
+  const listMenuRef = useRef<FlatList<BottomMenuItem> | null>(null);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
+  menuModeRef.current = menuMode;
+  presetSaveModalVisibleRef.current = presetSaveModalVisible;
+  settingsModalVisibleRef.current = settingsModalVisible;
+
+  const resolveMenuDismissAction = (): 'back' | 'close' => {
+    if (presetSaveModalVisibleRef.current || settingsModalVisibleRef.current) {
+      return 'back';
+    }
+
+    const mode = menuModeRef.current;
+    if (mode === null || mode === 'main') {
+      return 'close';
+    }
+
+    return 'back';
+  };
   const googleOAuthConfigured = isGoogleOAuthConfigured();
   const googleConnected = Boolean(googleAuth?.accessToken);
 
@@ -1057,7 +1080,7 @@ export default function App() {
     });
   }, [menuPullAnim, resetMenuDismissPull]);
 
-  const animateMenuDismissClose = useCallback(() => {
+  const animateMenuDismissClose = useCallback((action: 'back' | 'close' = 'close') => {
     Animated.timing(menuPullAnim, {
       duration: 220,
       easing: Easing.out(Easing.cubic),
@@ -1067,7 +1090,11 @@ export default function App() {
       if (finished) {
         menuPullAnim.setValue(0);
         resetMenuDismissPull();
-        closeListMenu();
+        if (action === 'back') {
+          goBackInMenuRef.current();
+        } else {
+          closeListMenu();
+        }
       }
     });
   }, [closeListMenu, listMenuHeight, menuPullAnim, resetMenuDismissPull]);
@@ -1094,6 +1121,19 @@ export default function App() {
     [dampMenuPullDistance, menuPullAnim],
   );
 
+  const handleMenuDismissGestureFromBody = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      if (menuListScrollOffsetRef.current > 1) {
+        menuPullAnim.setValue(0);
+        menuDismissPullRef.current = 0;
+        return;
+      }
+
+      handleMenuDismissGesture(event);
+    },
+    [handleMenuDismissGesture, menuPullAnim],
+  );
+
   const handleMenuDismissStateChange = useCallback(
     (event: PanGestureHandlerStateChangeEvent) => {
       const { state, translationY, velocityY } = event.nativeEvent;
@@ -1112,13 +1152,26 @@ export default function App() {
         (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
 
       if (shouldClose) {
-        animateMenuDismissClose();
+        animateMenuDismissClose(resolveMenuDismissAction());
         return;
       }
 
       animateMenuDismissReset();
     },
     [animateMenuDismissClose, animateMenuDismissReset],
+  );
+
+  const handleMenuListScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetY = Math.max(0, event.nativeEvent.contentOffset.y);
+      menuListScrollOffsetRef.current = offsetY;
+
+      const mode = menuModeRef.current;
+      if (mode !== null) {
+        menuScrollOffsetsRef.current[mode] = offsetY;
+      }
+    },
+    [],
   );
 
   const listMenuAnimatedStyle = useMemo(
@@ -1203,6 +1256,8 @@ export default function App() {
     settingsModalVisible,
     submenuOpen,
   ]);
+
+  goBackInMenuRef.current = goBackInMenu;
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
@@ -1671,6 +1726,21 @@ export default function App() {
     todoSortMode,
     visibleListMenuItems,
   ]);
+
+  useEffect(() => {
+    if (menuMode === null) {
+      return;
+    }
+
+    const offset = menuScrollOffsetsRef.current[menuMode] ?? 0;
+    menuListScrollOffsetRef.current = offset;
+
+    const frame = requestAnimationFrame(() => {
+      listMenuRef.current?.scrollToOffset({ offset, animated: false });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [bottomMenuItems, menuMode]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -2418,7 +2488,7 @@ export default function App() {
                   activeOffsetY={[8, 10000]}
                   enabled={listMenuOpen}
                   failOffsetX={[-36, 36]}
-                  onGestureEvent={handleMenuDismissGesture}
+                  onGestureEvent={handleMenuDismissGestureFromBody}
                   onHandlerStateChange={handleMenuDismissStateChange}
                 >
                   <Animated.View
@@ -2429,9 +2499,17 @@ export default function App() {
                       listMenuAnimatedStyle,
                     ]}
                   >
-                    <View style={styles.menuDragHandle} accessibilityRole="adjustable">
-                      <View style={styles.menuDragPill} />
-                    </View>
+                    <PanGestureHandler
+                      activeOffsetY={[8, 10000]}
+                      enabled={listMenuOpen}
+                      failOffsetX={[-36, 36]}
+                      onGestureEvent={handleMenuDismissGesture}
+                      onHandlerStateChange={handleMenuDismissStateChange}
+                    >
+                      <View collapsable={false} style={styles.menuDragHandle} accessibilityRole="adjustable">
+                        <View style={styles.menuDragPill} />
+                      </View>
+                    </PanGestureHandler>
                     <PanGestureHandler
                       activeOffsetX={[-10000, 32]}
                       enabled={menuMode !== null && menuMode !== 'main'}
@@ -2440,6 +2518,7 @@ export default function App() {
                     >
                       <View collapsable={false} style={styles.listMenuBody}>
                         <FlatList
+                      ref={listMenuRef}
                       data={bottomMenuItems}
                       decelerationRate="fast"
                       directionalLockEnabled
@@ -2456,7 +2535,9 @@ export default function App() {
                         </View>
                       }
                       nestedScrollEnabled
+                      onScroll={handleMenuListScroll}
                       overScrollMode="never"
+                      scrollEventThrottle={16}
                       style={styles.listMenuList}
                       renderItem={({ item }) => {
                         if ('type' in item) {

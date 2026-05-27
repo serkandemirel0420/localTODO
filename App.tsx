@@ -2399,23 +2399,15 @@ export default function App() {
         <View style={styles.listShell}>
           {listMenuOpen ? (
             <>
-              <PanGestureHandler
-                activeOffsetY={[-10000, 8]}
-                enabled={listMenuOpen}
-                failOffsetX={[-36, 36]}
-                onGestureEvent={handleMenuDismissGesture}
-                onHandlerStateChange={handleMenuDismissStateChange}
-              >
+              <View pointerEvents="box-none" style={styles.listMenuOverlay}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Close lists menu"
                   onPress={closeListMenu}
                   style={styles.listMenuBackdrop}
                 />
-              </PanGestureHandler>
-              <View pointerEvents="box-none" style={styles.listMenuLayer}>
                 <PanGestureHandler
-                  activeOffsetY={[-10000, 8]}
+                  activeOffsetY={8}
                   enabled={listMenuOpen}
                   failOffsetX={[-36, 36]}
                   onGestureEvent={handleMenuDismissGesture}
@@ -4007,10 +3999,17 @@ const styles = StyleSheet.create({
   todoListTapFrame: {
     flex: 1,
   },
+  listMenuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    paddingBottom: LIST_MENU_BOTTOM_OFFSET,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    zIndex: 20,
+    elevation: 8,
+  },
   listMenuBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 19,
-    backgroundColor: 'rgba(0,0,0,0.04)',
+    backgroundColor: 'rgba(30, 27, 24, 0.42)',
   },
   edgeBackZone: {
     position: 'absolute',
@@ -4025,14 +4024,6 @@ const styles = StyleSheet.create({
   },
   edgeBackZoneRight: {
     right: 0,
-  },
-  listMenuLayer: {
-    position: 'absolute',
-    bottom: LIST_MENU_BOTTOM_OFFSET,
-    left: HORIZONTAL_PADDING,
-    right: HORIZONTAL_PADDING,
-    zIndex: 20,
-    elevation: 7,
   },
   listMenu: {
     borderRadius: 18,

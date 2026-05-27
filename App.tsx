@@ -887,6 +887,8 @@ export default function App() {
   const presetSaveModalVisibleRef = useRef(false);
   const settingsModalVisibleRef = useRef(false);
   const menuListScrollOffsetRef = useRef(0);
+  const menuScrollOffsetsRef = useRef<Partial<Record<MenuMode, number>>>({});
+  const listMenuRef = useRef<FlatList<BottomMenuItem> | null>(null);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
@@ -1038,10 +1040,6 @@ export default function App() {
   }, [menuMode]);
 
   useEffect(() => {
-    menuListScrollOffsetRef.current = 0;
-  }, [menuMode]);
-
-  useEffect(() => {
     if (!listMenuOpen) {
       menuPullAnim.stopAnimation();
       menuPullAnim.setValue(0);
@@ -1165,7 +1163,13 @@ export default function App() {
 
   const handleMenuListScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      menuListScrollOffsetRef.current = Math.max(0, event.nativeEvent.contentOffset.y);
+      const offsetY = Math.max(0, event.nativeEvent.contentOffset.y);
+      menuListScrollOffsetRef.current = offsetY;
+
+      const mode = menuModeRef.current;
+      if (mode !== null) {
+        menuScrollOffsetsRef.current[mode] = offsetY;
+      }
     },
     [],
   );
@@ -1722,6 +1726,21 @@ export default function App() {
     todoSortMode,
     visibleListMenuItems,
   ]);
+
+  useEffect(() => {
+    if (menuMode === null) {
+      return;
+    }
+
+    const offset = menuScrollOffsetsRef.current[menuMode] ?? 0;
+    menuListScrollOffsetRef.current = offset;
+
+    const frame = requestAnimationFrame(() => {
+      listMenuRef.current?.scrollToOffset({ offset, animated: false });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [bottomMenuItems, menuMode]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -2499,6 +2518,7 @@ export default function App() {
                     >
                       <View collapsable={false} style={styles.listMenuBody}>
                         <FlatList
+                      ref={listMenuRef}
                       data={bottomMenuItems}
                       decelerationRate="fast"
                       directionalLockEnabled

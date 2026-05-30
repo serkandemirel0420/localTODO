@@ -1809,16 +1809,6 @@ export default function App() {
     setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
   }, [listMenuTree]);
 
-  const handleCreateDrawerClosePress = useCallback(() => {
-    if (createDrawerPicker) {
-      backToCreateDrawerInput();
-      Haptics.selectionAsync().catch(() => undefined);
-      return;
-    }
-
-    closeCreateDrawer();
-  }, [backToCreateDrawerInput, closeCreateDrawer, createDrawerPicker]);
-
   const openCreateDrawer = useCallback((initialText = '') => {
     if (listMenuOpen) {
       closeListMenu();
@@ -1904,6 +1894,21 @@ export default function App() {
     todoTextMaxLength,
     todos,
   ]);
+
+  const createDrawerCanSubmit = useMemo(
+    () => createDraftText.trim().replace(/\s+/g, ' ').length > 0,
+    [createDraftText],
+  );
+
+  const handleCreateDrawerTrailingPress = useCallback(() => {
+    if (createDrawerPicker) {
+      backToCreateDrawerInput();
+      Haptics.selectionAsync().catch(() => undefined);
+      return;
+    }
+
+    submitCreateTodo();
+  }, [backToCreateDrawerInput, createDrawerPicker, submitCreateTodo]);
 
   const setCreateDraftFilterValue = useCallback((
     filterKey: FilterKey,
@@ -4486,18 +4491,28 @@ export default function App() {
                     accessibilityLabel={
                       createDrawerPicker
                         ? 'Back to task title'
-                        : 'Close new todo'
+                        : 'Create todo'
                     }
+                    accessibilityState={{
+                      disabled: !createDrawerPicker && !createDrawerCanSubmit,
+                    }}
+                    disabled={!createDrawerPicker && !createDrawerCanSubmit}
                     hitSlop={8}
-                    onPress={handleCreateDrawerClosePress}
+                    onPress={handleCreateDrawerTrailingPress}
                     style={({ pressed }) => [
                       styles.createDrawerToolbarButton,
                       pressed && styles.createDrawerToolbarButtonPressed,
                     ]}
                   >
                     <Ionicons
-                      color="#8C847C"
-                      name={createDrawerPicker ? 'arrow-back' : 'close'}
+                      color={
+                        createDrawerPicker
+                          ? '#8C847C'
+                          : createDrawerCanSubmit
+                            ? THEME_ACCENT
+                            : '#C8C0B8'
+                      }
+                      name={createDrawerPicker ? 'arrow-back' : 'checkmark'}
                       size={24}
                     />
                   </Pressable>

@@ -40,6 +40,40 @@ export const normalizeTodoFilters = (value: unknown): TodoFilters => {
   };
 };
 
+/** Matches `styles.todoText` and list row layout in App.tsx */
+export const TODO_TEXT_FONT_SIZE = 16;
+export const TODO_TEXT_LINE_COUNT = 2;
+const TODO_TEXT_AVERAGE_CHAR_WIDTH_RATIO = 0.53;
+const TODO_LIST_HORIZONTAL_PADDING = 16;
+const TODO_ROW_HORIZONTAL_PADDING = 16;
+const TODO_COLOR_RAIL_WIDTH = 5;
+const TODO_COLOR_RAIL_MARGIN = 12;
+
+export const getTodoTextCharsPerLine = (windowWidth: number) => {
+  const textWidth = Math.max(
+    120,
+    windowWidth
+      - TODO_LIST_HORIZONTAL_PADDING * 2
+      - TODO_ROW_HORIZONTAL_PADDING * 2
+      - TODO_COLOR_RAIL_WIDTH
+      - TODO_COLOR_RAIL_MARGIN,
+  );
+  const averageCharWidth = TODO_TEXT_FONT_SIZE * TODO_TEXT_AVERAGE_CHAR_WIDTH_RATIO;
+
+  return Math.max(12, Math.floor(textWidth / averageCharWidth));
+};
+
+export const getTodoTextMaxLength = (windowWidth: number) =>
+  getTodoTextCharsPerLine(windowWidth) * TODO_TEXT_LINE_COUNT;
+
+export const truncateTodoText = (text: string, maxLength: number) => {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return text.slice(0, maxLength).trimEnd();
+};
+
 export const normalizeTodoText = (value: string) =>
   value
     .normalize('NFD')
@@ -47,12 +81,15 @@ export const normalizeTodoText = (value: string) =>
     .toLocaleLowerCase()
     .trim();
 
-export const makeTodo = (text: string): Todo => ({
+export const makeTodo = (
+  text: string,
+  filters: TodoFilters = EMPTY_TODO_FILTERS,
+): Todo => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   text,
   done: false,
   createdAt: Date.now(),
-  filters: cloneTodoFilters(),
+  filters: cloneTodoFilters(filters),
 });
 
 export const isTodo = (value: unknown): value is Todo => {

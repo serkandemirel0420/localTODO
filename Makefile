@@ -1,6 +1,6 @@
 PORT ?= 8083
 
-.PHONY: install start start-clear start-dev start-dev-tunnel start-local start-tunnel ios android android-dev android-release android-release-install android-dev-cloud android-preview-cloud web typecheck check audit clean
+.PHONY: install start start-clear start-dev start-dev-tunnel start-dev-usb start-local start-tunnel ios android android-dev android-open-metro android-release android-release-install android-dev-cloud android-preview-cloud web typecheck check audit clean
 
 install:
 	npm install
@@ -16,6 +16,15 @@ start-dev:
 
 start-dev-tunnel:
 	npm run start -- --dev-client --tunnel --port $(PORT) --clear
+
+start-dev-usb:
+	adb reverse tcp:$(PORT) tcp:$(PORT)
+	npm run start -- --dev-client --localhost --port $(PORT) --clear
+
+android-open-metro:
+	adb reverse tcp:$(PORT) tcp:$(PORT)
+	adb shell am force-stop com.localtodo.app
+	adb shell am start -a android.intent.action.VIEW -d "exp+local-todo://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A$(PORT)" com.localtodo.app
 
 start-local:
 	npm run start -- --localhost --port $(PORT)

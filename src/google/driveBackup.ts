@@ -24,6 +24,10 @@ export type BackupTodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' |
 export type BackupListMenuNode = {
   label: string;
   children?: BackupListMenuNode[];
+  sortMode?: BackupTodoSortMode;
+  groupMode?: BackupTodoGroupMode;
+  subsectionSortMode?: BackupTodoSortMode;
+  subsectionGroupMode?: BackupTodoGroupMode;
 };
 
 export type BackupMenuPreset = {
@@ -108,9 +112,74 @@ const normalizeBackupTodoSortMode = (value: unknown): BackupTodoSortMode => {
   return 'newest';
 };
 
+const parseOptionalBackupTodoSortMode = (value: unknown): BackupTodoSortMode | undefined => {
+  if (
+    value === 'alphabetical' ||
+    value === 'date' ||
+    value === 'newest' ||
+    value === 'oldest' ||
+    value === 'priority'
+  ) {
+    return value;
+  }
+
+  return undefined;
+};
+
+const parseOptionalBackupTodoGroupMode = (value: unknown): BackupTodoGroupMode | undefined => {
+  if (
+    value === 'date' ||
+    value === 'list' ||
+    value === 'none' ||
+    value === 'priority' ||
+    value === 'status'
+  ) {
+    return value;
+  }
+
+  return undefined;
+};
+
+const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListMenuNode | null => {
+  if (typeof item.label !== 'string') {
+    return null;
+  }
+
+  const label = item.label.trim();
+  if (!label) {
+    return null;
+  }
+
+  const children = Array.isArray(item.children)
+    ? item.children
+        .map((child) => (
+          isRecord(child) ? normalizeBackupListMenuNode(child) : null
+        ))
+        .filter((child): child is BackupListMenuNode => Boolean(child))
+    : [];
+
+  const sortMode = parseOptionalBackupTodoSortMode(item.sortMode);
+  const groupMode = parseOptionalBackupTodoGroupMode(item.groupMode);
+  const subsectionSortMode = parseOptionalBackupTodoSortMode(item.subsectionSortMode);
+  const subsectionGroupMode = parseOptionalBackupTodoGroupMode(item.subsectionGroupMode);
+
+  return {
+    label,
+    ...(sortMode !== undefined ? { sortMode } : {}),
+    ...(groupMode !== undefined ? { groupMode } : {}),
+    ...(subsectionSortMode !== undefined ? { subsectionSortMode } : {}),
+    ...(subsectionGroupMode !== undefined ? { subsectionGroupMode } : {}),
+    children: children.length > 0 ? children : undefined,
+  };
+};
+
 const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
   nodes.map((node) => ({
     label: node.label,
+    sortMode: node.sortMode,
+    groupMode: node.groupMode,
+    subsectionSortMode: node.subsectionSortMode,
+    subsectionGroupMode: node.subsectionGroupMode,
     children: node.children ? cloneListMenuTree(node.children) : undefined,
   }));
 
@@ -153,37 +222,10 @@ const normalizeBackupListMenuTree = (value: unknown): BackupListMenuNode[] => {
   }
 
   const nodes = value
-    .map((item): BackupListMenuNode | null => {
-      if (!isRecord(item) || typeof item.label !== 'string') {
-        return null;
-      }
-
-      const label = item.label.trim();
-      if (!label) {
-        return null;
-      }
-
-      const children = Array.isArray(item.children)
-        ? item.children
-            .map((child): BackupListMenuNode | null => {
-              if (!isRecord(child) || typeof child.label !== 'string') {
-                return null;
-              }
-
-              const childLabel = child.label.trim();
-              return childLabel ? { label: childLabel } : null;
-            })
-            .filter((child): child is BackupListMenuNode => Boolean(child))
-        : [];
-
-      return {
-        label,
-        children: children.length > 0 ? children : undefined,
-      };
-    })
+    .map((item) => (isRecord(item) ? normalizeBackupListMenuNode(item) : null))
     .filter((item): item is BackupListMenuNode => Boolean(item));
 
-  return flattenBackupListMenuTree(nodes);
+  return nodes.length > 0 ? nodes : [];
 };
 
 const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {

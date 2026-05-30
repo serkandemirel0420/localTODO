@@ -16,6 +16,17 @@ export type TodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' | 'prio
 export type StoredListMenuNode = {
   label: string;
   children?: StoredListMenuNode[];
+  sortMode?: TodoSortMode;
+  groupMode?: TodoGroupMode;
+  subsectionSortMode?: TodoSortMode;
+  subsectionGroupMode?: TodoGroupMode;
+};
+
+export type ActiveListDisplaySettings = {
+  listLabel: string | null;
+  isSubsectionView: boolean;
+  sortMode: TodoSortMode;
+  groupMode: TodoGroupMode;
 };
 
 export type StoredMenuPreset = {
@@ -67,6 +78,10 @@ export type AppSettings = {
 export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNode[] =>
   nodes.map((node) => ({
     label: node.label,
+    sortMode: node.sortMode,
+    groupMode: node.groupMode,
+    subsectionSortMode: node.subsectionSortMode,
+    subsectionGroupMode: node.subsectionGroupMode,
     children: node.children ? cloneListMenuTree(node.children) : undefined,
   }));
 
@@ -133,16 +148,44 @@ const normalizeTodoSortMode = (value: unknown): TodoSortMode => {
   return 'newest';
 };
 
-export const flattenListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNode[] => {
+const parseOptionalTodoSortMode = (value: unknown): TodoSortMode | undefined => {
+  if (
+    value === 'alphabetical' ||
+    value === 'date' ||
+    value === 'newest' ||
+    value === 'oldest' ||
+    value === 'priority'
+  ) {
+    return value;
+  }
+
+  return undefined;
+};
+
+const parseOptionalTodoGroupMode = (value: unknown): TodoGroupMode | undefined => {
+  if (
+    value === 'date' ||
+    value === 'list' ||
+    value === 'none' ||
+    value === 'priority' ||
+    value === 'status'
+  ) {
+    return value;
+  }
+
+  return undefined;
+};
+
+export const collectListNodeLabels = (nodes: StoredListMenuNode[]): string[] => {
+  const labels: string[] = [];
   const seen = new Set<string>();
-  const flattened: StoredListMenuNode[] = [];
 
   const walk = (items: StoredListMenuNode[]) => {
     for (const item of items) {
       const key = item.label.toLocaleLowerCase();
       if (!seen.has(key)) {
         seen.add(key);
-        flattened.push({ label: item.label });
+        labels.push(item.label);
       }
 
       if (item.children?.length) {
@@ -152,18 +195,207 @@ export const flattenListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenu
   };
 
   walk(nodes);
-  return flattened;
+  return labels;
 };
 
-export const normalizeListMenuTree = (
-  value: unknown,
-  fallback: StoredListMenuNode[] = DEFAULT_LIST_MENU_TREE,
-): StoredListMenuNode[] => {
-  if (!Array.isArray(value)) {
-    return cloneListMenuTree(fallback);
+export const findListMenuNode = (
+  nodes: StoredListMenuNode[],
+  label: string,
+): StoredListMenuNode | null => {
+  const target = label.toLocaleLowerCase();
+
+  for (const node of nodes) {
+    if (node.label.toLocaleLowerCase() === target) {
+      return node;
+    }
+
+    if (node.children?.length) {
+      const match = findListMenuNode(node.children, label);
+      if (match) {
+        return match;
+      }
+    }
   }
 
-  const nodes = value
+  return null;
+};
+
+export type ListSubsectionContext = {
+  parentLabel: string;
+  subsectionLabels: string[];
+};
+
+export const resolveListDisplaySettings = (
+  tree: StoredListMenuNode[],
+  selectedListFilters: string[],
+  globalSortMode: TodoSortMode,
+  globalGroupMode: TodoGroupMode,
+): ActiveListDisplaySettings => {
+  if (selectedListFilters.length !== 1) {
+    return {
+      listLabel: null,
+      isSubsectionView: false,
+      sortMode: globalSortMode,
+      groupMode: globalGroupMode,
+    };
+  }
+
+  const listLabel = selectedListFilters[0];
+  const node = findListMenuNode(tree, listLabel);
+  if (!node) {
+    return {
+      listLabel,
+      isSubsectionView: false,
+      sortMode: globalSortMode,
+      groupMode: globalGroupMode,
+    };
+  }
+
+  if (getListSubsectionContext(tree, selectedListFilters)) {
+    return {
+      listLabel,
+      isSubsectionView: true,
+      sortMode: node.subsectionSortMode ?? globalSortMode,
+      groupMode: node.subsectionGroupMode ?? globalGroupMode,
+    };
+  }
+
+  return {
+    listLabel,
+    isSubsectionView: false,
+    sortMode: node.sortMode ?? globalSortMode,
+    groupMode: node.groupMode ?? globalGroupMode,
+  };
+};
+
+export const updateListNodeDisplaySettings = (
+  nodes: StoredListMenuNode[],
+  label: string,
+  isSubsectionView: boolean,
+  update: {
+    sortMode?: TodoSortMode;
+    groupMode?: TodoGroupMode;
+  },
+): StoredListMenuNode[] => {
+  const target = label.toLocaleLowerCase();
+
+  return nodes.map((node) => {
+    if (node.label.toLocaleLowerCase() === target) {
+      if (isSubsectionView) {
+        return {
+          ...node,
+          ...(update.sortMode !== undefined ? { subsectionSortMode: update.sortMode } : {}),
+          ...(update.groupMode !== undefined ? { subsectionGroupMode: update.groupMode } : {}),
+        };
+      }
+
+      return {
+        ...node,
+        ...(update.sortMode !== undefined ? { sortMode: update.sortMode } : {}),
+        ...(update.groupMode !== undefined ? { groupMode: update.groupMode } : {}),
+      };
+    }
+
+    if (!node.children?.length) {
+      return node;
+    }
+
+    const children = updateListNodeDisplaySettings(node.children, label, isSubsectionView, update);
+    return children === node.children ? node : { ...node, children };
+  });
+};
+
+export const clearListNodeDisplaySettings = (
+  nodes: StoredListMenuNode[],
+  label: string,
+  isSubsectionView: boolean,
+  field: 'sort' | 'group' | 'both',
+): StoredListMenuNode[] => {
+  const target = label.toLocaleLowerCase();
+
+  return nodes.map((node) => {
+    if (node.label.toLocaleLowerCase() === target) {
+      if (isSubsectionView) {
+        const next = { ...node };
+        if (field === 'sort' || field === 'both') {
+          delete next.subsectionSortMode;
+        }
+        if (field === 'group' || field === 'both') {
+          delete next.subsectionGroupMode;
+        }
+        return next;
+      }
+
+      const next = { ...node };
+      if (field === 'sort' || field === 'both') {
+        delete next.sortMode;
+      }
+      if (field === 'group' || field === 'both') {
+        delete next.groupMode;
+      }
+      return next;
+    }
+
+    if (!node.children?.length) {
+      return node;
+    }
+
+    const children = clearListNodeDisplaySettings(node.children, label, isSubsectionView, field);
+    return children === node.children ? node : { ...node, children };
+  });
+};
+
+export const getListSubsectionContext = (
+  tree: StoredListMenuNode[],
+  selectedListFilters: string[],
+): ListSubsectionContext | null => {
+  if (selectedListFilters.length !== 1) {
+    return null;
+  }
+
+  const node = findListMenuNode(tree, selectedListFilters[0]);
+  if (!node?.children?.length) {
+    return null;
+  }
+
+  return {
+    parentLabel: node.label,
+    subsectionLabels: node.children.map((child) => child.label),
+  };
+};
+
+export const todoMatchesSelectedListFilters = (
+  listFilters: string[],
+  todoListFilters: string[],
+  tree: StoredListMenuNode[],
+) => {
+  if (listFilters.length === 0) {
+    return true;
+  }
+
+  return listFilters.some((selectedLabel) => {
+    if (todoListFilters.includes(selectedLabel)) {
+      return true;
+    }
+
+    const node = findListMenuNode(tree, selectedLabel);
+    if (!node?.children?.length) {
+      return false;
+    }
+
+    const childLabels = new Set(node.children.map((child) => child.label));
+    return todoListFilters.some((label) => childLabels.has(label));
+  });
+};
+
+const normalizeListMenuTreeNodes = (
+  value: unknown,
+): StoredListMenuNode[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
     .map((item): StoredListMenuNode | null => {
       if (!isRecord(item) || typeof item.label !== 'string') {
         return null;
@@ -174,28 +406,31 @@ export const normalizeListMenuTree = (
         return null;
       }
 
-      const children = Array.isArray(item.children)
-        ? item.children
-            .map((child): StoredListMenuNode | null => {
-              if (!isRecord(child) || typeof child.label !== 'string') {
-                return null;
-              }
+      const children = normalizeListMenuTreeNodes(item.children);
 
-              const childLabel = child.label.trim();
-              return childLabel ? { label: childLabel } : null;
-            })
-            .filter((child): child is StoredListMenuNode => Boolean(child))
-        : [];
+      const sortMode = parseOptionalTodoSortMode(item.sortMode);
+      const groupMode = parseOptionalTodoGroupMode(item.groupMode);
+      const subsectionSortMode = parseOptionalTodoSortMode(item.subsectionSortMode);
+      const subsectionGroupMode = parseOptionalTodoGroupMode(item.subsectionGroupMode);
 
       return {
         label,
+        ...(sortMode !== undefined ? { sortMode } : {}),
+        ...(groupMode !== undefined ? { groupMode } : {}),
+        ...(subsectionSortMode !== undefined ? { subsectionSortMode } : {}),
+        ...(subsectionGroupMode !== undefined ? { subsectionGroupMode } : {}),
         children: children.length > 0 ? children : undefined,
       };
     })
     .filter((item): item is StoredListMenuNode => Boolean(item));
+};
 
-  const flattened = flattenListMenuTree(nodes);
-  return flattened.length > 0 ? flattened : cloneListMenuTree(fallback);
+export const normalizeListMenuTree = (
+  value: unknown,
+  fallback: StoredListMenuNode[] = DEFAULT_LIST_MENU_TREE,
+): StoredListMenuNode[] => {
+  const nodes = normalizeListMenuTreeNodes(value);
+  return nodes.length > 0 ? nodes : cloneListMenuTree(fallback);
 };
 
 export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {

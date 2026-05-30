@@ -3,6 +3,9 @@ import * as Haptics from 'expo-haptics';
 import { TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from '@react-native-community/datetimepicker';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -11,6 +14,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   Modal,
   type GestureResponderEvent,
   NativeModules,
@@ -37,13 +41,24 @@ import {
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
+import {
+  formatDateFilterLabel,
+  getInitialDatePickerValue,
+  isDateFilterOverdue,
+  parseISODateLabel,
+  SOMEDAY_DATE_LABEL,
+  startOfDay,
+  toISODateString,
+} from './src/dates';
 import { createTodoSearchIndex, searchTodos } from './src/search/todoSearch';
 import { localTodoStore } from './src/storage/todoStore';
 import {
   cloneTodoFilters,
+  getTodoTextMaxLength,
   makeTodo,
   normalizeTodoFilters,
   normalizeTodoText,
+  truncateTodoText,
   type Todo,
   type TodoFilters,
 } from './src/todos';
@@ -67,11 +82,19 @@ import {
 } from './src/filterColors';
 import {
   appSettingsStore,
+  clearListNodeDisplaySettings,
   cloneListMenuTree,
   cloneMenuPresets,
+  collectListNodeLabels,
   DEFAULT_LIST_MENU_TREE,
+  findListMenuNode,
+  getListSubsectionContext,
+  resolveListDisplaySettings,
+  todoMatchesSelectedListFilters,
+  updateListNodeDisplaySettings,
   type AppSettings,
   type ListOrderMode,
+  type ListSubsectionContext,
   type StoredListMenuNode,
   type StoredMenuPreset,
   type TodoGroupMode,
@@ -84,18 +107,71 @@ type SwipeTodoItemProps = {
   filterColors: FilterColorSettings;
   item: Todo;
   isMenuTarget: boolean;
+  layout?: 'standalone' | 'grouped';
   onDelete: (id: string) => void;
   onListTap: (event: GestureResponderEvent) => boolean;
   onOpenMenu: (id: string) => void;
   onSetDone: (id: string, done: boolean) => void;
+  sectionLabel?: string;
 };
 
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
 
 type VisibleListMenuItem = {
+  depth: number;
   id: string;
+  isSubsection: boolean;
   label: string;
+  parentLabel?: string;
+};
+
+const buildVisibleListMenuItems = (
+  nodes: ListMenuNode[],
+  showSubsections: boolean,
+): VisibleListMenuItem[] =>
+  nodes.flatMap((node) => {
+    const parentItem: VisibleListMenuItem = {
+      depth: 0,
+      id: node.label,
+      isSubsection: false,
+      label: node.label,
+    };
+
+    if (!showSubsections || !node.children?.length) {
+      return [parentItem];
+    }
+
+    return [
+      parentItem,
+      ...node.children.map((child) => ({
+        depth: 1,
+        id: `${node.label}::${child.label}`,
+        isSubsection: true,
+        label: child.label,
+        parentLabel: node.label,
+      })),
+    ];
+  });
+
+const isListMenuItemSelected = (
+  item: VisibleListMenuItem,
+  listFilters: string[],
+  listMenuTree: ListMenuNode[],
+) => {
+  if (item.isSubsection) {
+    return listFilters.includes(item.label);
+  }
+
+  const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
+    child.label
+  )) ?? [];
+
+  if (childLabels.some((label) => listFilters.includes(label))) {
+    return false;
+  }
+
+  return listFilters.includes(item.label);
 };
 
 type BottomMenuItem = MenuRow | VisibleListMenuItem;
@@ -125,7 +201,8 @@ type TodoListRow =
       count: number;
       id: string;
       label: string;
-      type: 'group';
+      todos: Todo[];
+      type: 'section';
     };
 
 type GoogleDriveAction = 'backup' | 'restore';
@@ -214,6 +291,11 @@ const menuSectionCanClear = (
   activeFilterCount: number,
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
+  listMenuTree: ListMenuNode[],
+  activeListDisplay: {
+    listLabel: string | null;
+    isSubsectionView: boolean;
+  },
 ): boolean => {
   const filterKey = MENU_SECTION_FILTER_KEYS[menuMode];
   if (filterKey) {
@@ -225,10 +307,24 @@ const menuSectionCanClear = (
   }
 
   if (menuMode === 'sort') {
+    if (activeListDisplay.listLabel) {
+      const node = findListMenuNode(listMenuTree, activeListDisplay.listLabel);
+      return activeListDisplay.isSubsectionView
+        ? node?.subsectionSortMode !== undefined
+        : node?.sortMode !== undefined;
+    }
+
     return sortMode !== 'newest';
   }
 
   if (menuMode === 'group') {
+    if (activeListDisplay.listLabel) {
+      const node = findListMenuNode(listMenuTree, activeListDisplay.listLabel);
+      return activeListDisplay.isSubsectionView
+        ? node?.subsectionGroupMode !== undefined
+        : node?.groupMode !== undefined;
+    }
+
     return groupMode !== 'none';
   }
 
@@ -238,18 +334,29 @@ const menuSectionCanClear = (
 const TODO_ACTION_WIDTH = 68;
 const TODO_LEFT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH * 2;
 const TODO_RIGHT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH;
-const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 16 : 20;
-const HORIZONTAL_PADDING = 20;
+const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 16;
+const HORIZONTAL_PADDING = 16;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
+const THEME_BG = '#F4F6F8';
+const THEME_CARD = '#FFFFFF';
+const THEME_TEXT = '#212121';
+const THEME_TEXT_SECONDARY = '#8E8E93';
+const THEME_ACCENT = '#4C78FF';
+const THEME_ACCENT_SOFT = '#E8EEFF';
+const THEME_DANGER = '#D32F2F';
+const THEME_BORDER = '#E8EAED';
 const PULL_MAX = 178;
-const PULL_RELEASE = 34;
 const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
 const TODO_SWIPE_OPEN_DISTANCE = 62;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
-const LIST_MENU_BOTTOM_OFFSET = 24;
+const NAV_ACCENT = THEME_ACCENT;
+const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
+const BOTTOM_NAV_HEIGHT = 56;
+const LIST_MENU_BOTTOM_OFFSET = BOTTOM_NAV_HEIGHT + 10;
+const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const MENU_DISMISS_RELEASE = 52;
 const MENU_DISMISS_VELOCITY = 680;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
@@ -258,9 +365,74 @@ const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
 const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
+const TODO_MENU_TARGET_ESTIMATED_HEIGHT = 104;
+const TODO_MENU_TARGET_GAP = 16;
+const TODO_MENU_TARGET_TOP_OFFSET = 12;
 const PRESET_SWIPE_DELETE_WIDTH = 72;
 const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
 const DATE_MENU_ITEMS = ['Today', 'Tomorrow', 'This week', 'Next week', 'Someday'];
+const NOT_SECTIONED_LABEL = 'Not Sectioned';
+const FILTER_KIND_LABELS: Record<FilterKey, string> = {
+  list: 'List',
+  date: 'Date',
+  priority: 'Priority',
+};
+
+type SearchFilterItem = {
+  filterKey: FilterKey;
+  id: string;
+  label: string;
+};
+
+const buildActiveFilterItems = (filters: SelectedFilters): SearchFilterItem[] =>
+  (Object.entries(filters) as Array<[FilterKey, string[]]>).flatMap(([filterKey, values]) =>
+    values.map((label) => ({
+      filterKey,
+      id: `search-filter-${filterKey}-${label}`,
+      label,
+    })),
+  );
+
+type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
+
+type CreateDrawerPicker = 'date' | 'list' | 'priority';
+
+const getDefaultCreateDraftFilters = (
+  listMenuTree: ListMenuNode[],
+): SelectedFilters => ({
+  date: ['Today'],
+  list: listMenuTree[0]?.label ? [listMenuTree[0].label] : ['Inbox'],
+  priority: [],
+});
+
+const formatCreateDrawerDateLabel = (dateLabels: string[]) => {
+  const primary = dateLabels[0];
+
+  if (!primary) {
+    return 'No date';
+  }
+
+  const today = new Date();
+  const monthDay = today.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+
+  if (primary === 'Today') {
+    return `Today, ${monthDay}`;
+  }
+
+  if (primary === 'Tomorrow') {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return `Tomorrow, ${tomorrow.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    })}`;
+  }
+
+  return formatDateFilterLabel(primary);
+};
 const TODO_SORT_OPTIONS: Array<{ label: string; mode: TodoSortMode }> = [
   { label: 'Newest first', mode: 'newest' },
   { label: 'Oldest first', mode: 'oldest' },
@@ -326,6 +498,14 @@ const isGoogleOAuthConfigured = () => Boolean(getGoogleClientIdForPlatform());
 const formatBackupTime = (value: string | null) =>
   value ? new Date(value).toLocaleString() : null;
 
+const triggerLightTickHaptic = () => {
+  const feedback = Platform.OS === 'android'
+    ? Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Clock_Tick)
+    : Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+  feedback.catch(() => undefined);
+};
+
 const googleAuthToStoredAuth = (auth: TokenResponse): StoredGoogleAuth => ({
   accessToken: auth.accessToken,
   expiresIn: auth.expiresIn,
@@ -375,9 +555,12 @@ const assertNativeGoogleSignInAvailable = () => {
 };
 
 const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
-  [...nodes].sort((first, second) => first.label.localeCompare(second.label));
-
-const collectListNodeLabels = (node: ListMenuNode): string[] => [node.label];
+  [...nodes]
+    .sort((first, second) => first.label.localeCompare(second.label))
+    .map((node) => ({
+      ...node,
+      children: node.children ? sortListMenuTree(node.children) : undefined,
+    }));
 
 const countFilters = (filters: SelectedFilters) =>
   filters.date.length + filters.list.length + filters.priority.length;
@@ -403,11 +586,22 @@ const formatPresetSummary = (
   return parts.join(' · ');
 };
 
-const todoMatchesFilters = (todo: Todo, filters: SelectedFilters) =>
-  (Object.entries(filters) as Array<[FilterKey, string[]]>).every(([filterKey, values]) => (
-    values.length === 0 ||
-    values.some((value) => todo.filters[filterKey].includes(value))
-  ));
+const todoMatchesFilters = (
+  todo: Todo,
+  filters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+) =>
+  (Object.entries(filters) as Array<[FilterKey, string[]]>).every(([filterKey, values]) => {
+    if (values.length === 0) {
+      return true;
+    }
+
+    if (filterKey === 'list') {
+      return todoMatchesSelectedListFilters(values, todo.filters.list, listMenuTree);
+    }
+
+    return values.some((value) => todo.filters[filterKey].includes(value));
+  });
 
 const getFilterRank = (values: string[], orderedLabels: string[]) =>
   values.reduce((bestRank, value) => {
@@ -477,26 +671,65 @@ const compareTodosBySortMode = (
   return compareTodosByFallback(first, second);
 };
 
+const getTodoListGroupLabel = (
+  todo: Todo,
+  orderedListLabels: string[],
+  listMenuTree: ListMenuNode[],
+) => {
+  for (const parent of listMenuTree) {
+    if (!parent.children?.length) {
+      continue;
+    }
+
+    const matchedChild = parent.children.find((child) => (
+      todo.filters.list.includes(child.label)
+    ));
+    if (matchedChild) {
+      const childRank = orderedListLabels.indexOf(matchedChild.label);
+      return {
+        key: matchedChild.label,
+        label: matchedChild.label,
+        rank: childRank >= 0 ? childRank : orderedListLabels.length + 1,
+      };
+    }
+
+    if (todo.filters.list.includes(parent.label)) {
+      const parentRank = orderedListLabels.indexOf(parent.label);
+      return {
+        key: `${parent.label}::${NOT_SECTIONED_LABEL}`,
+        label: NOT_SECTIONED_LABEL,
+        rank: parentRank >= 0 ? parentRank : orderedListLabels.length + 1,
+      };
+    }
+  }
+
+  const label = getBestOrderedFilterLabel(todo.filters.list, orderedListLabels, 'No list');
+  const rank = orderedListLabels.indexOf(label);
+
+  return {
+    key: label,
+    label,
+    rank: rank >= 0 ? rank : orderedListLabels.length + 1,
+  };
+};
+
 const getTodoGroup = (
   todo: Todo,
   groupMode: Exclude<TodoGroupMode, 'none'>,
   orderedListLabels: string[],
+  listMenuTree: ListMenuNode[],
 ) => {
   if (groupMode === 'status') {
+    const label = todo.done ? 'Done' : 'Active';
     return {
-      label: todo.done ? 'Done' : 'Active',
+      key: label,
+      label,
       rank: todo.done ? 1 : 0,
     };
   }
 
   if (groupMode === 'list') {
-    const label = getBestOrderedFilterLabel(todo.filters.list, orderedListLabels, 'No list');
-    const rank = orderedListLabels.indexOf(label);
-
-    return {
-      label,
-      rank: rank >= 0 ? rank : orderedListLabels.length + 1,
-    };
+    return getTodoListGroupLabel(todo, orderedListLabels, listMenuTree);
   }
 
   if (groupMode === 'priority') {
@@ -504,46 +737,106 @@ const getTodoGroup = (
     const rank = PRIORITY_MENU_ITEMS.indexOf(label);
 
     return {
+      key: label,
       label,
       rank: rank >= 0 ? rank : PRIORITY_MENU_ITEMS.length + 1,
     };
   }
 
-  const label = getBestOrderedFilterLabel(todo.filters.date, DATE_MENU_ITEMS, 'No date');
-  const rank = DATE_MENU_ITEMS.indexOf(label);
+  const rawLabel = getBestOrderedFilterLabel(todo.filters.date, DATE_MENU_ITEMS, 'No date');
+  const presetRank = DATE_MENU_ITEMS.indexOf(rawLabel);
+  const customDate = parseISODateLabel(rawLabel);
 
   return {
-    label,
-    rank: rank >= 0 ? rank : DATE_MENU_ITEMS.length + 1,
+    key: rawLabel,
+    label: formatDateFilterLabel(rawLabel),
+    rank: presetRank >= 0
+      ? presetRank
+      : customDate
+        ? DATE_MENU_ITEMS.length + customDate.getTime() / 1e12
+        : DATE_MENU_ITEMS.length + 1,
   };
 };
 
-const buildTodoListRows = (
-  todos: Todo[],
-  groupMode: TodoGroupMode,
-  orderedListLabels: string[],
-  collapsedGroupIds: ReadonlySet<string>,
-): TodoListRow[] => {
-  if (groupMode === 'none') {
-    return todos.map((todo) => ({
-      id: todo.id,
-      todo,
-      type: 'todo',
-    }));
+const todoBelongsToListParent = (
+  todo: Todo,
+  parentLabel: string,
+  subsectionLabels: string[],
+) => {
+  if (todo.filters.list.includes(parentLabel)) {
+    return true;
   }
 
-  const groups = new Map<string, { label: string; rank: number; todos: Todo[] }>();
+  return subsectionLabels.some((label) => todo.filters.list.includes(label));
+};
+
+const getTodoSubsectionLabel = (
+  todo: Todo,
+  context: ListSubsectionContext,
+) => {
+  const matchedSubsection = context.subsectionLabels.find((label) => (
+    todo.filters.list.includes(label)
+  ));
+
+  return matchedSubsection ?? NOT_SECTIONED_LABEL;
+};
+
+const buildSubsectionRows = (
+  todos: Todo[],
+  context: ListSubsectionContext,
+  sortMode: TodoSortMode,
+  collapsedGroupIds: ReadonlySet<string>,
+): TodoListRow[] => {
+  const scopedTodos = todos.filter((todo) => (
+    todoBelongsToListParent(todo, context.parentLabel, context.subsectionLabels)
+  ));
+  const buckets = new Map<string, Todo[]>(
+    [NOT_SECTIONED_LABEL, ...context.subsectionLabels].map((label) => [label, []]),
+  );
+
+  scopedTodos.forEach((todo) => {
+    const bucket = buckets.get(getTodoSubsectionLabel(todo, context)) ?? buckets.get(NOT_SECTIONED_LABEL);
+    bucket?.push(todo);
+  });
+
+  const sectionOrder = [NOT_SECTIONED_LABEL, ...context.subsectionLabels];
+
+  return sectionOrder.map((label) => {
+    const sectionTodos = [...(buckets.get(label) ?? [])].sort((first, second) => (
+      compareTodosBySortMode(first, second, sortMode)
+    ));
+    const sectionId = `subsection-${context.parentLabel}-${label}`;
+
+    return {
+      count: sectionTodos.length,
+      id: sectionId,
+      label,
+      todos: collapsedGroupIds.has(sectionId) ? [] : sectionTodos,
+      type: 'section' as const,
+    };
+  });
+};
+
+const buildGroupedSectionRows = (
+  todos: Todo[],
+  groupMode: Exclude<TodoGroupMode, 'none'>,
+  orderedListLabels: string[],
+  listMenuTree: ListMenuNode[],
+  collapsedGroupIds: ReadonlySet<string>,
+): TodoListRow[] => {
+  const groups = new Map<string, { key: string; label: string; rank: number; todos: Todo[] }>();
 
   todos.forEach((todo) => {
-    const group = getTodoGroup(todo, groupMode, orderedListLabels);
-    const existingGroup = groups.get(group.label);
+    const group = getTodoGroup(todo, groupMode, orderedListLabels, listMenuTree);
+    const existingGroup = groups.get(group.key);
 
     if (existingGroup) {
       existingGroup.todos.push(todo);
       return;
     }
 
-    groups.set(group.label, {
+    groups.set(group.key, {
+      key: group.key,
       label: group.label,
       rank: group.rank,
       todos: [todo],
@@ -552,36 +845,66 @@ const buildTodoListRows = (
 
   return [...groups.values()]
     .sort((first, second) => first.rank - second.rank || first.label.localeCompare(second.label))
-    .flatMap((group) => {
-      const groupId = `group-${groupMode}-${group.label}`;
-      const isCollapsed = collapsedGroupIds.has(groupId);
+    .map((group) => {
+      const groupId = `group-${groupMode}-${group.key}`;
 
-      return [
-        {
-          count: group.todos.length,
-          id: groupId,
-          label: group.label,
-          type: 'group' as const,
-        },
-        ...(isCollapsed
-          ? []
-          : group.todos.map((todo) => ({
-              id: todo.id,
-              todo,
-              type: 'todo' as const,
-            }))),
-      ];
+      return {
+        count: group.todos.length,
+        id: groupId,
+        label: group.label,
+        todos: collapsedGroupIds.has(groupId) ? [] : group.todos,
+        type: 'section' as const,
+      };
     });
 };
+
+const buildTodoListRows = (
+  todos: Todo[],
+  sortMode: TodoSortMode,
+  groupMode: TodoGroupMode,
+  orderedListLabels: string[],
+  listMenuTree: ListMenuNode[],
+  selectedListFilters: string[],
+  collapsedGroupIds: ReadonlySet<string>,
+  useSubsectionLayout: boolean,
+): TodoListRow[] => {
+  const subsectionContext = useSubsectionLayout
+    ? getListSubsectionContext(listMenuTree, selectedListFilters)
+    : null;
+
+  if (subsectionContext) {
+    return buildSubsectionRows(todos, subsectionContext, sortMode, collapsedGroupIds);
+  }
+
+  if (groupMode === 'none') {
+    return todos.map((todo) => ({
+      id: todo.id,
+      todo,
+      type: 'todo',
+    }));
+  }
+
+  return buildGroupedSectionRows(
+    todos,
+    groupMode,
+    orderedListLabels,
+    listMenuTree,
+    collapsedGroupIds,
+  );
+};
+
+const isOverdueStatusLabel = (label: string) => /overdue/i.test(label);
 
 function SwipeTodoItem({
   filterColors,
   item,
   isMenuTarget,
+  layout = 'standalone',
   onDelete,
   onListTap,
   onOpenMenu,
   onSetDone,
+  sectionLabel,
 }: SwipeTodoItemProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
@@ -702,9 +1025,29 @@ function SwipeTodoItem({
   const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
   const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
   const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
+  const isGroupedLayout = layout === 'grouped';
+  const rawDateStatusLabel = getBestOrderedFilterLabel(
+    item.filters.date,
+    DATE_MENU_ITEMS,
+    '',
+  );
+  const dateStatusLabel = rawDateStatusLabel
+    ? formatDateFilterLabel(rawDateStatusLabel)
+    : '';
+  const listStatusLabel = item.filters.list[0] ?? '';
+  const showDateStatus = dateStatusLabel.length > 0;
+  const showListStatus = listStatusLabel.length > 0;
+  const dateStatusIsOverdue = isOverdueStatusLabel(dateStatusLabel)
+    || isDateFilterOverdue(rawDateStatusLabel)
+    || (sectionLabel ? isOverdueStatusLabel(sectionLabel) : false);
+
+  const toggleDoneFromCheckbox = useCallback(() => {
+    onSetDone(item.id, !item.done);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [item.done, item.id, onSetDone]);
 
   return (
-    <View style={styles.swipeShell}>
+    <View style={[styles.swipeShell, isGroupedLayout && styles.swipeShellGrouped]}>
       <Swipeable
         ref={swipeableRef}
         childrenContainerStyle={styles.todoSwipeableChildren}
@@ -725,7 +1068,8 @@ function SwipeTodoItem({
         <View
           style={[
             styles.todoRow,
-            todoColorTheme && !item.done && {
+            isGroupedLayout && styles.todoRowGrouped,
+            !isGroupedLayout && todoColorTheme && !item.done && {
               backgroundColor: todoColorTheme.tint,
               borderColor: todoColorTheme.border,
               shadowColor: todoColorTheme.accent,
@@ -734,7 +1078,7 @@ function SwipeTodoItem({
             isHighlightedForMenu && styles.todoRowMenuTarget,
           ]}
         >
-          {todoColorTheme ? (
+          {!isGroupedLayout && todoColorTheme ? (
             <View
               style={[
                 styles.todoColorRail,
@@ -744,18 +1088,56 @@ function SwipeTodoItem({
             />
           ) : null}
           <GHTouchableOpacity
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: item.done }}
+            accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
+            activeOpacity={0.72}
+            onPress={toggleDoneFromCheckbox}
+            style={styles.todoCheckboxPressable}
+          >
+            <View
+              style={[
+                styles.todoCheckbox,
+                item.done && styles.todoCheckboxChecked,
+              ]}
+            >
+              {item.done ? (
+                <Ionicons color={THEME_CARD} name="checkmark" size={14} />
+              ) : null}
+            </View>
+          </GHTouchableOpacity>
+          <GHTouchableOpacity
             accessibilityRole="button"
             activeOpacity={1}
             onPress={handleTodoPress}
             style={styles.todoTextPressable}
           >
             <Text
-              numberOfLines={3}
+              numberOfLines={2}
               style={[styles.todoText, item.done && styles.todoTextDone]}
             >
               {item.text}
             </Text>
-            {todoColorDots.length > 0 ? (
+            {(showDateStatus || showListStatus) ? (
+              <View style={styles.todoMetaRow}>
+                {showDateStatus ? (
+                  <Text
+                    style={[
+                      styles.todoMetaDate,
+                      dateStatusIsOverdue && styles.todoMetaDateOverdue,
+                    ]}
+                  >
+                    {dateStatusLabel}
+                  </Text>
+                ) : (
+                  <View style={styles.todoMetaSpacer} />
+                )}
+                {showListStatus ? (
+                  <Text style={styles.todoMetaList}>{listStatusLabel}</Text>
+                ) : null}
+              </View>
+            ) : null}
+            {!isGroupedLayout && todoColorDots.length > 0 ? (
               <View style={styles.todoColorDotRow}>
                 {todoColorDots.map((theme) => (
                   <View
@@ -835,11 +1217,29 @@ function MenuPresetSwipeRow({ label, onApply, onDelete, summary }: MenuPresetSwi
 const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
 
 export default function App() {
-  const { height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const todoTextMaxLength = useMemo(
+    () => getTodoTextMaxLength(windowWidth),
+    [windowWidth],
+  );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [createDrawerKeyboardInset, setCreateDrawerKeyboardInset] = useState(0);
   const [query, setQuery] = useState('');
+  const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
+  const [createDraftText, setCreateDraftText] = useState('');
+  const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
+    () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
+  );
+  const [createDrawerPicker, setCreateDrawerPicker] = useState<CreateDrawerPicker | null>(
+    null,
+  );
+  const [createDraftPriorityFromPicker, setCreateDraftPriorityFromPicker] = useState(false);
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [datePickerValue, setDatePickerValue] = useState(() => startOfDay(new Date()));
+  const datePickerApplyRef = useRef<'create' | 'filters'>('filters');
   const [loaded, setLoaded] = useState(false);
+  const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
@@ -868,25 +1268,43 @@ export default function App() {
   );
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
   const [newListName, setNewListName] = useState('');
+  const [newSubsectionName, setNewSubsectionName] = useState('');
+  const [subsectionParentIndex, setSubsectionParentIndex] = useState<number | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
-  const [isListAtTop, setIsListAtTop] = useState(true);
+  const [isListMenuAtTop, setIsListMenuAtTop] = useState(true);
+  const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
+  const createInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
+  const listMenuRef = useRef<FlatList<BottomMenuItem> | null>(null);
   const todoListRef = useRef<FlatList<TodoListRow> | null>(null);
   const scrollOffsetY = useRef(0);
-  const hapticPullStage = useRef(0);
-  const pullDistanceRef = useRef(0);
+  const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
+  const menuModeRef = useRef<MenuMode | null>(null);
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
+  const didApplyTodoListInitialOffsetRef = useRef(false);
+  const hadTodoListRowsRef = useRef(false);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
+  menuModeRef.current = menuMode;
+  const listMenuOneHandedOffset = useMemo(
+    () => Math.max(
+      LIST_MENU_ROW_HEIGHT,
+      Math.round(
+        (listMenuHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO) /
+          LIST_MENU_ROW_HEIGHT,
+      ) * LIST_MENU_ROW_HEIGHT,
+    ),
+    [listMenuHeight],
+  );
   const googleOAuthConfigured = isGoogleOAuthConfigured();
   const googleConnected = Boolean(googleAuth?.accessToken);
 
@@ -1017,6 +1435,26 @@ export default function App() {
   }, [menuMode]);
 
   useEffect(() => {
+    if (menuMode === null) {
+      listMenuScrollOffsetY.current = 0;
+      setIsListMenuAtTop(true);
+      return undefined;
+    }
+
+    listMenuScrollOffsetY.current = listMenuOneHandedOffset;
+    setIsListMenuAtTop(listMenuOneHandedOffset <= 1);
+
+    const frame = requestAnimationFrame(() => {
+      listMenuRef.current?.scrollToOffset({
+        animated: false,
+        offset: listMenuOneHandedOffset,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [listMenuOneHandedOffset, menuMode]);
+
+  useEffect(() => {
     if (!listMenuOpen) {
       menuPullAnim.stopAnimation();
       menuPullAnim.setValue(0);
@@ -1025,11 +1463,15 @@ export default function App() {
     }
   }, [listMenuOpen, menuPullAnim]);
 
-  const closeListMenu = useCallback(() => {
+  const closeListMenuState = useCallback(() => {
     setMenuMode(null);
     setActiveTodoMenuId(null);
-    Haptics.selectionAsync().catch(() => undefined);
   }, []);
+
+  const closeListMenu = useCallback(() => {
+    closeListMenuState();
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [closeListMenuState]);
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
     if (translationY <= 0) {
@@ -1057,26 +1499,63 @@ export default function App() {
     });
   }, [menuPullAnim, resetMenuDismissPull]);
 
+  const goBackFromMenuDismissGesture = useCallback(() => {
+    const currentMenuMode = menuModeRef.current;
+
+    if (currentMenuMode === 'presetsQuickApply') {
+      setMenuMode('presets');
+    } else if (currentMenuMode && currentMenuMode !== 'main') {
+      setMenuMode('main');
+    } else {
+      return false;
+    }
+
+    animateMenuDismissReset();
+    Haptics.selectionAsync().catch(() => undefined);
+    return true;
+  }, [animateMenuDismissReset]);
+
   const animateMenuDismissClose = useCallback(() => {
+    if (goBackFromMenuDismissGesture()) {
+      return;
+    }
+
     Animated.timing(menuPullAnim, {
-      duration: 220,
+      duration: 180,
       easing: Easing.out(Easing.cubic),
-      toValue: listMenuHeight * 0.42 + 56,
+      toValue: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 48,
       useNativeDriver: false,
     }).start(({ finished }) => {
       if (finished) {
-        menuPullAnim.setValue(0);
-        resetMenuDismissPull();
-        closeListMenu();
+        if (goBackFromMenuDismissGesture()) {
+          return;
+        }
+
+        closeListMenuState();
+        requestAnimationFrame(() => {
+          menuPullAnim.setValue(0);
+          resetMenuDismissPull();
+        });
       }
     });
-  }, [closeListMenu, listMenuHeight, menuPullAnim, resetMenuDismissPull]);
+  }, [
+    closeListMenuState,
+    goBackFromMenuDismissGesture,
+    listMenuHeight,
+    menuPullAnim,
+    resetMenuDismissPull,
+  ]);
 
   const handleMenuDismissGesture = useCallback(
     (event: PanGestureHandlerGestureEvent) => {
       const { translationX, translationY } = event.nativeEvent;
 
-      if (translationY <= 0 || Math.abs(translationY) <= Math.abs(translationX)) {
+      if (
+        !isListMenuAtTop ||
+        listMenuScrollOffsetY.current > 1 ||
+        translationY <= 0 ||
+        Math.abs(translationY) <= Math.abs(translationX)
+      ) {
         menuPullAnim.setValue(0);
         menuDismissPullRef.current = 0;
         return;
@@ -1088,10 +1567,10 @@ export default function App() {
 
       if (damped > MENU_DISMISS_RELEASE && menuDismissHapticRef.current === 0) {
         menuDismissHapticRef.current = 1;
-        Haptics.selectionAsync().catch(() => undefined);
+        triggerLightTickHaptic();
       }
     },
-    [dampMenuPullDistance, menuPullAnim],
+    [dampMenuPullDistance, isListMenuAtTop, menuPullAnim],
   );
 
   const handleMenuDismissStateChange = useCallback(
@@ -1103,6 +1582,11 @@ export default function App() {
         state !== State.CANCELLED &&
         state !== State.FAILED
       ) {
+        return;
+      }
+
+      if (!isListMenuAtTop || listMenuScrollOffsetY.current > 1) {
+        animateMenuDismissReset();
         return;
       }
 
@@ -1118,7 +1602,73 @@ export default function App() {
 
       animateMenuDismissReset();
     },
-    [animateMenuDismissClose, animateMenuDismissReset],
+    [
+      animateMenuDismissClose,
+      animateMenuDismissReset,
+      isListMenuAtTop,
+    ],
+  );
+
+  const handleSubmenuBackGestureStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationY, velocityY } = event.nativeEvent;
+
+      if (
+        state !== State.END &&
+        state !== State.CANCELLED &&
+        state !== State.FAILED
+      ) {
+        return;
+      }
+
+      if (!isListMenuAtTop || listMenuScrollOffsetY.current > 1) {
+        animateMenuDismissReset();
+        return;
+      }
+
+      const pulled = menuDismissPullRef.current;
+      const shouldGoBack =
+        pulled > MENU_DISMISS_RELEASE ||
+        (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
+
+      if (shouldGoBack) {
+        goBackFromMenuDismissGesture();
+        return;
+      }
+
+      animateMenuDismissReset();
+    },
+    [
+      animateMenuDismissReset,
+      goBackFromMenuDismissGesture,
+      isListMenuAtTop,
+    ],
+  );
+
+  const handleListMenuScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetY = Math.max(0, event.nativeEvent.contentOffset.y);
+      const nextIsAtTop = offsetY <= 1;
+
+      listMenuScrollOffsetY.current = offsetY;
+      setIsListMenuAtTop((current) => (
+        current === nextIsAtTop ? current : nextIsAtTop
+      ));
+    },
+    [],
+  );
+
+  const handleListMenuScrollSettled = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offsetY = Math.max(0, event.nativeEvent.contentOffset.y);
+      const nextIsAtTop = offsetY <= 1;
+
+      listMenuScrollOffsetY.current = offsetY;
+      setIsListMenuAtTop((current) => (
+        current === nextIsAtTop ? current : nextIsAtTop
+      ));
+    },
+    [],
   );
 
   const listMenuAnimatedStyle = useMemo(
@@ -1156,6 +1706,7 @@ export default function App() {
 
   const closeSettingsModal = useCallback(() => {
     setSettingsModalVisible(false);
+    setNavTab((current) => (current === 'settings' ? null : current));
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
@@ -1165,7 +1716,31 @@ export default function App() {
     setPresetSaveName('');
   }, []);
 
+  const backToCreateDrawerInput = useCallback(() => {
+    Keyboard.dismiss();
+    setCreateDrawerPicker(null);
+  }, []);
+
   const goBackInMenu = useCallback(() => {
+    if (datePickerVisible) {
+      setDatePickerVisible(false);
+      return true;
+    }
+
+    if (createDrawerVisible) {
+      if (createDrawerPicker) {
+        backToCreateDrawerInput();
+        return true;
+      }
+
+      setCreateDrawerVisible(false);
+      setCreateDraftPriorityFromPicker(false);
+      setCreateDraftText('');
+      setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
+      Keyboard.dismiss();
+      return true;
+    }
+
     if (presetSaveModalVisible) {
       closePresetSaveModal();
       return true;
@@ -1195,9 +1770,14 @@ export default function App() {
 
     return false;
   }, [
+    backToCreateDrawerInput,
     closeListMenu,
     closePresetSaveModal,
     closeSettingsModal,
+    createDrawerPicker,
+    createDrawerVisible,
+    datePickerVisible,
+    listMenuTree,
     menuMode,
     presetSaveModalVisible,
     settingsModalVisible,
@@ -1217,11 +1797,87 @@ export default function App() {
 
   const filteredTodos = useMemo(() => {
     return searchTodos(todos, searchIndex, query)
-      .filter((todo) => todoMatchesFilters(todo, selectedFilters));
-  }, [query, searchIndex, selectedFilters, todos]);
+      .filter((todo) => todoMatchesFilters(todo, selectedFilters, listMenuTree));
+  }, [listMenuTree, query, searchIndex, selectedFilters, todos]);
 
-  const addTodo = useCallback(() => {
-    const text = query.trim().replace(/\s+/g, ' ');
+  const closeCreateDrawer = useCallback(() => {
+    Keyboard.dismiss();
+    setCreateDrawerVisible(false);
+    setCreateDrawerPicker(null);
+    setCreateDraftPriorityFromPicker(false);
+    setCreateDraftText('');
+    setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
+  }, [listMenuTree]);
+
+  const handleCreateDrawerClosePress = useCallback(() => {
+    if (createDrawerPicker) {
+      backToCreateDrawerInput();
+      Haptics.selectionAsync().catch(() => undefined);
+      return;
+    }
+
+    closeCreateDrawer();
+  }, [backToCreateDrawerInput, closeCreateDrawer, createDrawerPicker]);
+
+  const openCreateDrawer = useCallback((initialText = '') => {
+    if (listMenuOpen) {
+      closeListMenu();
+    }
+
+    searchInputRef.current?.blur();
+    setCreateDrawerPicker(null);
+    setCreateDraftPriorityFromPicker(false);
+    setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
+    setCreateDraftText(
+      truncateTodoText(
+        initialText.trim().replace(/\s+/g, ' '),
+        todoTextMaxLength,
+      ),
+    );
+    Keyboard.dismiss();
+    setCreateDrawerVisible(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [closeListMenu, listMenuOpen, listMenuTree, todoTextMaxLength]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      const { screenY } = event.endCoordinates;
+      setCreateDrawerKeyboardInset(Math.max(0, windowHeight - screenY));
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setCreateDrawerKeyboardInset(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [windowHeight]);
+
+  useEffect(() => {
+    if (!createDrawerVisible) {
+      setCreateDrawerKeyboardInset(0);
+    }
+  }, [createDrawerVisible]);
+
+  const createDrawerPickerMaxHeight = useMemo(() => {
+    const toolbarReserve = 168;
+
+    if (createDrawerKeyboardInset > 0) {
+      return Math.max(120, windowHeight - createDrawerKeyboardInset - toolbarReserve);
+    }
+
+    return Math.max(120, windowHeight * 0.42);
+  }, [createDrawerKeyboardInset, windowHeight]);
+
+  const submitCreateTodo = useCallback(() => {
+    const text = truncateTodoText(
+      createDraftText.trim().replace(/\s+/g, ' '),
+      todoTextMaxLength,
+    );
 
     if (!text) {
       return;
@@ -1232,12 +1888,86 @@ export default function App() {
     );
     if (exists) {
       Keyboard.dismiss();
+      closeCreateDrawer();
       return;
     }
 
-    setTodos((current) => [makeTodo(text), ...current]);
-    setQuery('');
-  }, [query, todos]);
+    setTodos((current) => [makeTodo(text, createDraftFilters), ...current]);
+    closeCreateDrawer();
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+      () => undefined,
+    );
+  }, [
+    closeCreateDrawer,
+    createDraftFilters,
+    createDraftText,
+    todoTextMaxLength,
+    todos,
+  ]);
+
+  const setCreateDraftFilterValue = useCallback((
+    filterKey: FilterKey,
+    label: string,
+  ) => {
+    if (filterKey === 'priority') {
+      setCreateDraftPriorityFromPicker(label !== 'None');
+    }
+
+    setCreateDraftFilters((current) => ({
+      ...current,
+      [filterKey]:
+        filterKey === 'priority' && label === 'None' ? [] : [label],
+    }));
+    setCreateDrawerPicker(null);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
+    Keyboard.dismiss();
+    setCreateDrawerPicker(picker);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const createDrawerPickerItems = useMemo(() => {
+    if (createDrawerPicker === 'list') {
+      return listMenuTree.map((node) => node.label);
+    }
+
+    if (createDrawerPicker === 'date') {
+      return DATE_MENU_ITEMS;
+    }
+
+    if (createDrawerPicker === 'priority') {
+      return PRIORITY_MENU_ITEMS;
+    }
+
+    return [];
+  }, [createDrawerPicker, listMenuTree]);
+
+  const createDrawerDateLabel = useMemo(
+    () => formatCreateDrawerDateLabel(createDraftFilters.date),
+    [createDraftFilters.date],
+  );
+
+  const createDrawerListLabel = createDraftFilters.list[0] ?? 'Inbox';
+  const createDrawerPriorityHigh = createDraftFilters.priority[0] === 'High';
+
+  const toggleCreateDraftPriority = useCallback(() => {
+    setCreateDraftPriorityFromPicker(false);
+    setCreateDraftFilters((current) => {
+      const currentPriority = current.priority[0];
+      const nextPriority =
+        currentPriority === 'High'
+          ? []
+          : ['High'];
+
+      return {
+        ...current,
+        priority: nextPriority,
+      };
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
 
   const deleteTodo = useCallback((id: string) => {
     setTodos((current) => current.filter((todo) => todo.id !== id));
@@ -1264,10 +1994,67 @@ export default function App() {
     );
   }, []);
 
-  const resetPull = useCallback(() => {
-    pullDistanceRef.current = 0;
-    hapticPullStage.current = 0;
+  const closeDatePicker = useCallback(() => {
+    setDatePickerVisible(false);
   }, []);
+
+  const applyPickedDate = useCallback((date: Date) => {
+    const isoDate = toISODateString(date);
+    const applyDate = (current: SelectedFilters) => ({
+      ...current,
+      date: [isoDate],
+    });
+
+    if (datePickerApplyRef.current === 'create') {
+      setCreateDraftFilters(applyDate);
+      setCreateDrawerPicker(null);
+    } else if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, applyDate);
+    } else {
+      setSelectedFilters(applyDate);
+    }
+
+    closeDatePicker();
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [activeTodoMenuId, closeDatePicker, updateTodoFilters]);
+
+  const openDatePicker = useCallback((
+    source: 'create' | 'filters',
+    dateLabels: string[],
+  ) => {
+    datePickerApplyRef.current = source;
+    setDatePickerValue(getInitialDatePickerValue(dateLabels));
+    setDatePickerVisible(true);
+  }, []);
+
+  const handleDatePickerChange = useCallback((
+    event: DateTimePickerEvent,
+    selectedDate?: Date,
+  ) => {
+    if (event.type === 'dismissed') {
+      closeDatePicker();
+      return;
+    }
+
+    if (!selectedDate) {
+      return;
+    }
+
+    setDatePickerValue(selectedDate);
+
+    if (Platform.OS === 'android') {
+      applyPickedDate(selectedDate);
+    }
+  }, [applyPickedDate, closeDatePicker]);
+
+  const handleCreateDrawerDatePress = useCallback((label: string) => {
+    if (label === SOMEDAY_DATE_LABEL) {
+      openDatePicker('create', createDraftFilters.date);
+      return;
+    }
+
+    setCreateDraftFilterValue('date', label);
+  }, [createDraftFilters.date, openDatePicker, setCreateDraftFilterValue]);
 
   const registerListTap = useCallback(
     (pageX: number, pageY: number, timestamp: number) => {
@@ -1334,51 +2121,6 @@ export default function App() {
     [registerListTap],
   );
 
-  const releasePull = useCallback(() => {
-    if (pullDistanceRef.current > PULL_RELEASE) {
-      searchInputRef.current?.focus();
-    }
-
-    resetPull();
-  }, [resetPull]);
-
-  const handleTopPullGesture = useCallback(
-    (event: PanGestureHandlerGestureEvent) => {
-      const { translationX, translationY } = event.nativeEvent;
-
-      if (
-        !isListAtTop ||
-        translationY <= 0 ||
-        Math.abs(translationY) <= Math.abs(translationX)
-      ) {
-        return;
-      }
-
-      pullDistanceRef.current = Math.max(0, Math.min(PULL_MAX, translationY));
-
-      if (translationY > PULL_RELEASE && hapticPullStage.current === 0) {
-        hapticPullStage.current = 1;
-        Haptics.selectionAsync().catch(() => undefined);
-      }
-    },
-    [isListAtTop],
-  );
-
-  const handleTopPullStateChange = useCallback(
-    (event: PanGestureHandlerStateChangeEvent) => {
-      const { state } = event.nativeEvent;
-
-      if (
-        state === State.END ||
-        state === State.CANCELLED ||
-        state === State.FAILED
-      ) {
-        releasePull();
-      }
-    },
-    [releasePull],
-  );
-
   const handleMenuBackStateChange = useCallback(
     (event: PanGestureHandlerStateChangeEvent) => {
       const { state, translationX, velocityX } = event.nativeEvent;
@@ -1420,29 +2162,31 @@ export default function App() {
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const offsetY = event.nativeEvent.contentOffset.y;
       scrollOffsetY.current = Math.max(0, offsetY);
-      setIsListAtTop(offsetY <= 1);
     },
     [],
   );
+
+  const handleTodoListFrameLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextHeight = event.nativeEvent.layout.height;
+    setTodoListFrameHeight((currentHeight) => (
+      Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
+    ));
+  }, []);
 
   const orderedListMenuTree = useMemo(
     () => (listOrderMode === 'alphabetical' ? sortListMenuTree(listMenuTree) : listMenuTree),
     [listMenuTree, listOrderMode],
   );
   const visibleListMenuItems = useMemo(
-    () =>
-      orderedListMenuTree.map((node) => ({
-        id: node.label,
-        label: node.label,
-      })),
-    [orderedListMenuTree],
+    () => buildVisibleListMenuItems(orderedListMenuTree, Boolean(activeTodoMenuId)),
+    [activeTodoMenuId, orderedListMenuTree],
   );
   const orderedListLabels = useMemo(
-    () => orderedListMenuTree.flatMap(collectListNodeLabels),
+    () => collectListNodeLabels(orderedListMenuTree),
     [orderedListMenuTree],
   );
   const settingsListColorLabels = useMemo(
-    () => Array.from(new Set(listMenuTree.flatMap(collectListNodeLabels))),
+    () => collectListNodeLabels(listMenuTree),
     [listMenuTree],
   );
   const settingsColorGroups = useMemo(
@@ -1469,13 +2213,64 @@ export default function App() {
     (count, group) => count + group.values.length,
     0,
   );
+  const activeListDisplay = useMemo(
+    () => resolveListDisplaySettings(
+      listMenuTree,
+      selectedFilters.list,
+      todoSortMode,
+      todoGroupMode,
+    ),
+    [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode],
+  );
+  const effectiveSortMode = activeListDisplay.sortMode;
+  const effectiveGroupMode = activeListDisplay.groupMode;
+  const useSubsectionLayout = activeListDisplay.isSubsectionView && effectiveGroupMode === 'none';
   const sortedTodos = useMemo(
-    () => [...filteredTodos].sort((first, second) => compareTodosBySortMode(first, second, todoSortMode)),
-    [filteredTodos, todoSortMode],
+    () => [...filteredTodos].sort((first, second) => (
+      compareTodosBySortMode(first, second, effectiveSortMode)
+    )),
+    [effectiveSortMode, filteredTodos],
   );
   const todoListRows = useMemo(
-    () => buildTodoListRows(sortedTodos, todoGroupMode, orderedListLabels, collapsedTodoGroupIds),
-    [collapsedTodoGroupIds, orderedListLabels, sortedTodos, todoGroupMode],
+    () => buildTodoListRows(
+      sortedTodos,
+      effectiveSortMode,
+      effectiveGroupMode,
+      orderedListLabels,
+      listMenuTree,
+      selectedFilters.list,
+      collapsedTodoGroupIds,
+      useSubsectionLayout,
+    ),
+    [
+      collapsedTodoGroupIds,
+      effectiveGroupMode,
+      effectiveSortMode,
+      listMenuTree,
+      orderedListLabels,
+      selectedFilters.list,
+      sortedTodos,
+      useSubsectionLayout,
+    ],
+  );
+  const todoListOneHandedOffset = useMemo(() => {
+    if (todoListRows.length === 0) {
+      return 0;
+    }
+
+    const viewportHeight = todoListFrameHeight || windowHeight;
+
+    return Math.max(
+      LIST_MENU_ROW_HEIGHT,
+      Math.round(
+        (viewportHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO) /
+          LIST_MENU_ROW_HEIGHT,
+      ) * LIST_MENU_ROW_HEIGHT,
+    );
+  }, [todoListFrameHeight, todoListRows.length, windowHeight]);
+  const todoListContentOffset = useMemo(
+    () => ({ x: 0, y: todoListOneHandedOffset }),
+    [todoListOneHandedOffset],
   );
   const activeTodoMenuFilters = useMemo(
     () => todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null,
@@ -1483,11 +2278,25 @@ export default function App() {
   );
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const activeFilterCount = countFilters(menuFilters);
+  const searchFilterItems = useMemo(
+    () => buildActiveFilterItems(selectedFilters),
+    [selectedFilters],
+  );
+  const showSearchFiltersPanel = navTab === 'search' && !query.trim();
+  const searchContextSummary = useMemo(
+    () => formatPresetSummary(
+      selectedFilters,
+      effectiveSortMode,
+      effectiveGroupMode,
+      listOrderMode,
+    ),
+    [effectiveGroupMode, effectiveSortMode, listOrderMode, selectedFilters],
+  );
   const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
   const currentPresetSummary = formatPresetSummary(
     menuFilters,
-    todoSortMode,
-    todoGroupMode,
+    effectiveSortMode,
+    effectiveGroupMode,
     listOrderMode,
   );
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
@@ -1629,7 +2438,7 @@ export default function App() {
         label: 'Sort',
         menuMode: 'sort',
         type: 'menu',
-        valueLabel: TODO_SORT_LABELS[todoSortMode],
+        valueLabel: TODO_SORT_LABELS[effectiveSortMode],
       },
       {
         id: 'main-group',
@@ -1637,7 +2446,7 @@ export default function App() {
         menuMode: 'group',
         type: 'menu',
         valueLabel:
-          todoGroupMode !== 'none' ? TODO_GROUP_LABELS[todoGroupMode] : undefined,
+          effectiveGroupMode !== 'none' ? TODO_GROUP_LABELS[effectiveGroupMode] : undefined,
       },
       {
         count: activeFilterCount || undefined,
@@ -1667,10 +2476,55 @@ export default function App() {
     menuFilters,
     menuMode,
     menuPresets,
-    todoGroupMode,
-    todoSortMode,
+    effectiveGroupMode,
+    effectiveSortMode,
     visibleListMenuItems,
   ]);
+
+  useEffect(() => {
+    const hasTodoRows = todoListOneHandedOffset > 1;
+    const shouldApplyOffset =
+      hasTodoRows &&
+      (!didApplyTodoListInitialOffsetRef.current || !hadTodoListRowsRef.current);
+
+    hadTodoListRowsRef.current = hasTodoRows;
+
+    if (!hasTodoRows) {
+      scrollOffsetY.current = 0;
+      return undefined;
+    }
+
+    if (!shouldApplyOffset) {
+      return undefined;
+    }
+
+    didApplyTodoListInitialOffsetRef.current = true;
+    scrollOffsetY.current = todoListOneHandedOffset;
+
+    const frame = requestAnimationFrame(() => {
+      todoListRef.current?.scrollToOffset({
+        animated: false,
+        offset: todoListOneHandedOffset,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [todoListOneHandedOffset]);
+
+  const alignTodoListForSearchFocus = useCallback(() => {
+    if (todoListOneHandedOffset <= 1) {
+      return;
+    }
+
+    scrollOffsetY.current = todoListOneHandedOffset;
+
+    requestAnimationFrame(() => {
+      todoListRef.current?.scrollToOffset({
+        animated: true,
+        offset: todoListOneHandedOffset,
+      });
+    });
+  }, [todoListOneHandedOffset]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -1692,6 +2546,89 @@ export default function App() {
     }
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, [activeTodoMenuId, updateTodoFilters]);
+
+  const handleDateMenuLabelPress = useCallback((label: string) => {
+    if (label === SOMEDAY_DATE_LABEL) {
+      openDatePicker('filters', menuFilters.date);
+      return;
+    }
+
+    toggleFilterValue('date', label);
+  }, [menuFilters.date, openDatePicker, toggleFilterValue]);
+
+  const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
+    const toggleValue = (current: SelectedFilters): SelectedFilters => {
+      const list = current.list;
+
+      if (item.isSubsection && item.parentLabel) {
+        const parentNode = findListMenuNode(listMenuTree, item.parentLabel);
+        const siblingLabels = parentNode?.children?.map((child) => child.label) ?? [];
+        const hasSubsection = list.includes(item.label);
+        const withoutFamily = list.filter(
+          (label) => label !== item.parentLabel && !siblingLabels.includes(label),
+        );
+
+        if (hasSubsection) {
+          return { ...current, list: withoutFamily };
+        }
+
+        return { ...current, list: [...withoutFamily, item.label] };
+      }
+
+      const parentNode = findListMenuNode(listMenuTree, item.label);
+      const childLabels = parentNode?.children?.map((child) => child.label) ?? [];
+      const hasParentOnly = list.includes(item.label)
+        && !childLabels.some((label) => list.includes(label));
+
+      if (hasParentOnly) {
+        return {
+          ...current,
+          list: list.filter((label) => label !== item.label && !childLabels.includes(label)),
+        };
+      }
+
+      const withoutFamily = list.filter(
+        (label) => label !== item.label && !childLabels.includes(label),
+      );
+
+      return { ...current, list: [...withoutFamily, item.label] };
+    };
+
+    if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, toggleValue);
+    } else {
+      setSelectedFilters(toggleValue);
+    }
+
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, listMenuTree, updateTodoFilters]);
+
+  const removeListMenuItem = useCallback((item: VisibleListMenuItem) => {
+    const removeValue = (current: SelectedFilters) => {
+      if (item.isSubsection) {
+        return {
+          ...current,
+          list: current.list.filter((label) => label !== item.label),
+        };
+      }
+
+      const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
+        child.label
+      )) ?? [];
+
+      return {
+        ...current,
+        list: current.list.filter((label) => label !== item.label && !childLabels.includes(label)),
+      };
+    };
+
+    if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, removeValue);
+    } else {
+      setSelectedFilters(removeValue);
+    }
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, listMenuTree, updateTodoFilters]);
 
   const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
     const removeValue = (current: SelectedFilters) => {
@@ -1732,9 +2669,26 @@ export default function App() {
   }, []);
 
   const selectTodoSortMode = useCallback((sortMode: TodoSortMode) => {
-    setTodoSortMode(sortMode);
+    const display = resolveListDisplaySettings(
+      listMenuTree,
+      selectedFilters.list,
+      todoSortMode,
+      todoGroupMode,
+    );
+
+    if (display.listLabel) {
+      setListMenuTree((current) => updateListNodeDisplaySettings(
+        current,
+        display.listLabel!,
+        display.isSubsectionView,
+        { sortMode },
+      ));
+    } else {
+      setTodoSortMode(sortMode);
+    }
+
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, []);
+  }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
     setCollapsedTodoGroupIds((current) => {
@@ -1751,9 +2705,26 @@ export default function App() {
   }, []);
 
   const selectTodoGroupMode = useCallback((groupMode: TodoGroupMode) => {
-    setTodoGroupMode(groupMode);
+    const display = resolveListDisplaySettings(
+      listMenuTree,
+      selectedFilters.list,
+      todoSortMode,
+      todoGroupMode,
+    );
+
+    if (display.listLabel) {
+      setListMenuTree((current) => updateListNodeDisplaySettings(
+        current,
+        display.listLabel!,
+        display.isSubsectionView,
+        { groupMode },
+      ));
+    } else {
+      setTodoGroupMode(groupMode);
+    }
+
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, []);
+  }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const clearMenuSection = useCallback((section: MenuMode) => {
     const filterKey = MENU_SECTION_FILTER_KEYS[section];
@@ -1779,14 +2750,58 @@ export default function App() {
     }
 
     if (section === 'sort') {
-      selectTodoSortMode('newest');
+      const display = resolveListDisplaySettings(
+        listMenuTree,
+        selectedFilters.list,
+        todoSortMode,
+        todoGroupMode,
+      );
+
+      if (display.listLabel) {
+        setListMenuTree((current) => clearListNodeDisplaySettings(
+          current,
+          display.listLabel!,
+          display.isSubsectionView,
+          'sort',
+        ));
+      } else {
+        setTodoSortMode('newest');
+      }
+
+      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
       return;
     }
 
     if (section === 'group') {
-      selectTodoGroupMode('none');
+      const display = resolveListDisplaySettings(
+        listMenuTree,
+        selectedFilters.list,
+        todoSortMode,
+        todoGroupMode,
+      );
+
+      if (display.listLabel) {
+        setListMenuTree((current) => clearListNodeDisplaySettings(
+          current,
+          display.listLabel!,
+          display.isSubsectionView,
+          'group',
+        ));
+      } else {
+        setTodoGroupMode('none');
+      }
+
+      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
     }
-  }, [activeTodoMenuId, clearFilters, selectTodoGroupMode, selectTodoSortMode, updateTodoFilters]);
+  }, [
+    activeTodoMenuId,
+    clearFilters,
+    listMenuTree,
+    selectedFilters.list,
+    todoGroupMode,
+    todoSortMode,
+    updateTodoFilters,
+  ]);
 
   const commitMenuPreset = useCallback((rawName: string) => {
     const label = normalizeTodoText(rawName);
@@ -1892,6 +2907,71 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const addSettingsListSubsection = useCallback((parentIndex: number) => {
+    const label = normalizeTodoText(newSubsectionName);
+
+    if (!label) {
+      return;
+    }
+
+    setListMenuTree((current) => {
+      const parent = current[parentIndex];
+      if (!parent) {
+        return current;
+      }
+
+      const existingLabels = new Set(
+        collectListNodeLabels(current).map((entry) => entry.toLowerCase()),
+      );
+      if (existingLabels.has(label)) {
+        return current;
+      }
+
+      const children = [...(parent.children ?? []), { label }];
+      return current.map((item, index) => (
+        index === parentIndex ? { ...item, children } : item
+      ));
+    });
+    setNewSubsectionName('');
+    setSubsectionParentIndex(null);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [newSubsectionName]);
+
+  const removeSettingsListSubsection = useCallback((parentIndex: number, childIndex: number) => {
+    setListMenuTree((current) => {
+      const parent = current[parentIndex];
+      if (!parent?.children?.length) {
+        return current;
+      }
+
+      const removed = parent.children[childIndex];
+      if (!removed) {
+        return current;
+      }
+
+      const removedLabels = new Set(collectListNodeLabels([removed]));
+      setSelectedFilters((filters) => ({
+        ...filters,
+        list: filters.list.filter((label) => !removedLabels.has(label)),
+      }));
+      setTodos((items) => items.map((todo) => ({
+        ...todo,
+        filters: {
+          ...todo.filters,
+          list: todo.filters.list.filter((label) => !removedLabels.has(label)),
+        },
+      })));
+
+      const children = parent.children.filter((_, index) => index !== childIndex);
+      return current.map((item, index) => (
+        index === parentIndex
+          ? { ...item, children: children.length > 0 ? children : undefined }
+          : item
+      ));
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
   const removeSettingsList = useCallback((index: number) => {
     setListMenuTree((current) => {
       const node = current[index];
@@ -1899,7 +2979,7 @@ export default function App() {
         return current;
       }
 
-      const removedLabels = new Set(collectListNodeLabels(node));
+      const removedLabels = new Set(collectListNodeLabels([node]));
       setSelectedFilters((filters) => ({
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
@@ -1930,6 +3010,66 @@ export default function App() {
     setSettingsModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
+
+  const appHeaderTitle = useMemo(() => {
+    const activeListTitle =
+      activeListDisplay.listLabel
+      ?? (selectedFilters.list.length === 1 ? selectedFilters.list[0] : null);
+
+    if (activeListTitle) {
+      return activeListTitle;
+    }
+
+    if (menuMode === 'lists') {
+      return 'Lists';
+    }
+
+    return 'TODO';
+  }, [activeListDisplay.listLabel, menuMode, selectedFilters.list]);
+
+  const focusHeaderSearch = useCallback(() => {
+    setNavTab('search');
+    setMenuMode(null);
+    setActiveTodoMenuId(null);
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const handleNavTabPress = useCallback((tab: NavTab) => {
+    setActiveTodoMenuId(null);
+
+    switch (tab) {
+      case 'calendar':
+        setNavTab('calendar');
+        Keyboard.dismiss();
+        setMenuMode('date');
+        break;
+      case 'menu':
+        setNavTab('menu');
+        Keyboard.dismiss();
+        setMenuMode('main');
+        break;
+      case 'search':
+        focusHeaderSearch();
+        return;
+      case 'settings':
+        setNavTab('settings');
+        openSettingsModal();
+        return;
+      default:
+        break;
+    }
+
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [focusHeaderSearch, openSettingsModal]);
+
+  useEffect(() => {
+    if (!listMenuOpen && (navTab === 'calendar' || navTab === 'menu')) {
+      setNavTab(null);
+    }
+  }, [listMenuOpen, navTab]);
 
   const toggleGoogleDriveBackup = useCallback(() => {
     setGoogleDriveBackupEnabled((current) => !current);
@@ -2257,8 +3397,33 @@ export default function App() {
     await performGoogleDriveAction('restore');
   }, [performGoogleDriveAction]);
 
+  const getTodoMenuScrollOptions = useCallback(() => {
+    const viewportHeight = todoListFrameHeight || windowHeight;
+    const menuTop = Math.max(
+      TODO_MENU_TARGET_TOP_OFFSET,
+      viewportHeight - listMenuHeight - LIST_MENU_BOTTOM_OFFSET,
+    );
+    const targetTop = Math.max(
+      TODO_MENU_TARGET_TOP_OFFSET,
+      menuTop - TODO_MENU_TARGET_ESTIMATED_HEIGHT - TODO_MENU_TARGET_GAP,
+    );
+    const viewPosition = Math.min(
+      0.34,
+      targetTop / Math.max(1, viewportHeight),
+    );
+
+    return {
+      viewOffset: TODO_MENU_TARGET_TOP_OFFSET,
+      viewPosition: Math.max(0, viewPosition),
+    };
+  }, [listMenuHeight, todoListFrameHeight, windowHeight]);
+
   const scrollTodoAboveMenu = useCallback((id: string) => {
-    const index = todoListRows.findIndex((row) => row.type === 'todo' && row.todo.id === id);
+    const index = todoListRows.findIndex((row) => (
+      row.type === 'todo'
+        ? row.todo.id === id
+        : row.todos.some((todo) => todo.id === id)
+    ));
 
     if (index < 0) {
       return;
@@ -2267,10 +3432,9 @@ export default function App() {
     todoListRef.current?.scrollToIndex({
       animated: true,
       index,
-      viewOffset: 12,
-      viewPosition: 0.34,
+      ...getTodoMenuScrollOptions(),
     });
-  }, [todoListRows]);
+  }, [getTodoMenuScrollOptions, todoListRows]);
 
   const handleTodoListScrollToIndexFailed = useCallback((info: ScrollToIndexFailedInfo) => {
     todoListRef.current?.scrollToOffset({
@@ -2282,11 +3446,10 @@ export default function App() {
       todoListRef.current?.scrollToIndex({
         animated: true,
         index: info.index,
-        viewOffset: 12,
-        viewPosition: 0.34,
+        ...getTodoMenuScrollOptions(),
       });
     }, 100);
-  }, []);
+  }, [getTodoMenuScrollOptions]);
 
   const openMenuForTodoAction = useCallback((id: string) => {
     setActiveTodoMenuId(id);
@@ -2302,33 +3465,53 @@ export default function App() {
 
   const renderTodoItem = useCallback(
     ({ item }: { item: TodoListRow }) => {
-      if (item.type === 'group') {
+      if (item.type === 'section') {
         const isCollapsed = collapsedTodoGroupIds.has(item.id);
 
         return (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ expanded: !isCollapsed }}
-            accessibilityLabel={`${item.label}, ${item.count} items`}
-            onPress={() => toggleTodoGroupCollapsed(item.id)}
-            style={({ pressed }) => [
-              styles.todoGroupHeader,
-              pressed && styles.todoGroupHeaderPressed,
-            ]}
-          >
-            <View style={styles.todoGroupHeaderMain}>
-              <Text
-                style={[
-                  styles.todoGroupChevron,
-                  !isCollapsed && styles.todoGroupChevronExpanded,
-                ]}
-              >
-                ›
-              </Text>
-              <Text style={styles.todoGroupTitle}>{item.label}</Text>
-            </View>
-            <Text style={styles.todoGroupCount}>{item.count}</Text>
-          </Pressable>
+          <View style={styles.todoSectionCard}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: !isCollapsed }}
+              accessibilityLabel={`${item.label}, ${item.count} items`}
+              onPress={() => toggleTodoGroupCollapsed(item.id)}
+              style={({ pressed }) => [
+                styles.todoSectionHeader,
+                pressed && styles.todoGroupHeaderPressed,
+              ]}
+            >
+              <Text style={styles.todoSectionTitle}>{item.label}</Text>
+              <View style={styles.todoSectionHeaderMeta}>
+                <Text style={styles.todoGroupCount}>{item.count}</Text>
+                <Ionicons
+                  color={THEME_TEXT_SECONDARY}
+                  name="chevron-down"
+                  size={18}
+                  style={!isCollapsed ? styles.todoGroupChevronExpanded : undefined}
+                />
+              </View>
+            </Pressable>
+            {!isCollapsed && item.todos.length > 0 ? (
+              <View style={styles.todoSectionBody}>
+                {item.todos.map((todo, todoIndex) => (
+                  <View key={todo.id}>
+                    {todoIndex > 0 ? <View style={styles.todoRowDivider} /> : null}
+                    <MemoizedSwipeTodoItem
+                      filterColors={filterColors}
+                      item={todo}
+                      isMenuTarget={menuMode !== null && activeTodoMenuId === todo.id}
+                      layout="grouped"
+                      onDelete={deleteTodo}
+                      onListTap={handleListTap}
+                      onOpenMenu={openMenuForTodoAction}
+                      onSetDone={setTodoDone}
+                      sectionLabel={item.label}
+                    />
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
         );
       }
 
@@ -2361,65 +3544,91 @@ export default function App() {
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaView style={styles.safeArea}>
         <StatusBar barStyle="dark-content" />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.screen}
-        >
-        <View style={styles.topBar}>
+        <View style={styles.screen}>
+        <View style={styles.appHeader}>
+          <Text numberOfLines={1} style={styles.appHeaderTitle}>
+            {appHeaderTitle}
+          </Text>
+        </View>
+
+        <View style={styles.headerSearchRow}>
           <View style={styles.searchBox}>
-            <Text style={styles.searchIcon}>⌕</Text>
+            <Ionicons
+              color={THEME_TEXT_SECONDARY}
+              name="search"
+              size={18}
+              style={styles.navSearchIcon}
+            />
             <TextInput
               ref={searchInputRef}
               autoCapitalize="sentences"
               autoCorrect
               clearButtonMode="while-editing"
+              onBlur={() => {
+                setNavTab((current) => (current === 'search' ? null : current));
+              }}
               onChangeText={setQuery}
-              onSubmitEditing={addTodo}
-              placeholder="Search or add a todo…"
-              placeholderTextColor="#A9A19A"
-              returnKeyType="done"
-              selectionColor="#2F6F62"
+              onFocus={() => {
+                setNavTab('search');
+                alignTodoListForSearchFocus();
+              }}
+              placeholder="Search todos…"
+              placeholderTextColor={THEME_TEXT_SECONDARY}
+              returnKeyType="search"
+              selectionColor={NAV_ACCENT}
               style={styles.searchInput}
+              textAlignVertical="center"
               value={query}
             />
-            {query.trim().length > 0 ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add todo"
-                hitSlop={10}
-                onPress={addTodo}
-                style={({ pressed }) => [styles.addButton, pressed && styles.addButtonPressed]}
-              >
-                <Text style={styles.addButtonText}>+</Text>
-              </Pressable>
-            ) : null}
           </View>
         </View>
 
+        <KeyboardAvoidingView
+          behavior={
+            Platform.OS === 'ios' && !createDrawerVisible ? 'padding' : undefined
+          }
+          style={styles.mainKeyboardAvoiding}
+        >
         <View style={styles.listShell}>
           {listMenuOpen ? (
             <>
               <PanGestureHandler
-                activeOffsetY={[8, 10000]}
-                enabled={listMenuOpen}
+                key={submenuOpen ? 'submenu-backdrop-back-pan' : 'root-backdrop-close-pan'}
+                activeOffsetY={8}
+                enabled={listMenuOpen && isListMenuAtTop}
                 failOffsetX={[-36, 36]}
                 onGestureEvent={handleMenuDismissGesture}
-                onHandlerStateChange={handleMenuDismissStateChange}
+                onHandlerStateChange={
+                  submenuOpen
+                    ? handleSubmenuBackGestureStateChange
+                    : handleMenuDismissStateChange
+                }
               >
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Close lists menu"
-                  onPress={closeListMenu}
+                  accessibilityLabel={submenuOpen ? 'Back to main filter menu' : 'Close lists menu'}
+                  onPress={() => {
+                    if (submenuOpen) {
+                      goBackInMenu();
+                    } else {
+                      closeListMenu();
+                    }
+                  }}
                   style={styles.listMenuBackdrop}
                 />
               </PanGestureHandler>
               <View pointerEvents="box-none" style={styles.listMenuLayer}>
                 <PanGestureHandler
-                  activeOffsetY={[8, 10000]}
-                  enabled={listMenuOpen}
+                  key={submenuOpen ? 'submenu-menu-back-pan' : 'root-menu-close-pan'}
+                  activeOffsetY={8}
+                  enabled={listMenuOpen && isListMenuAtTop}
                   failOffsetX={[-36, 36]}
                   onGestureEvent={handleMenuDismissGesture}
-                  onHandlerStateChange={handleMenuDismissStateChange}
+                  onHandlerStateChange={
+                    submenuOpen
+                      ? handleSubmenuBackGestureStateChange
+                      : handleMenuDismissStateChange
+                  }
                 >
                   <Animated.View
                     collapsable={false}
@@ -2440,25 +3649,46 @@ export default function App() {
                     >
                       <View collapsable={false} style={styles.listMenuBody}>
                         <FlatList
-                      data={bottomMenuItems}
-                      decelerationRate="fast"
-                      directionalLockEnabled
-                      getItemLayout={(_, index) => ({
-                        length: LIST_MENU_ROW_HEIGHT,
-                        offset: LIST_MENU_ROW_HEIGHT * index,
-                        index,
-                      })}
-                      keyExtractor={(item) => item.id}
-                      keyboardShouldPersistTaps="handled"
-                      ListEmptyComponent={
-                        <View style={styles.menuEmptyState}>
-                          <Text style={styles.menuEmptyText}>No active filters</Text>
-                        </View>
-                      }
-                      nestedScrollEnabled
-                      overScrollMode="never"
-                      style={styles.listMenuList}
-                      renderItem={({ item }) => {
+                          ref={listMenuRef}
+                          key={menuMode ?? 'closed'}
+                          alwaysBounceVertical={false}
+                          bounces={false}
+                          contentOffset={{ x: 0, y: listMenuOneHandedOffset }}
+                          data={bottomMenuItems}
+                          decelerationRate="fast"
+                          directionalLockEnabled
+                          getItemLayout={(_, index) => ({
+                            length: LIST_MENU_ROW_HEIGHT,
+                            offset: listMenuOneHandedOffset + LIST_MENU_ROW_HEIGHT * index,
+                            index,
+                          })}
+                          keyExtractor={(item) => item.id}
+                          keyboardShouldPersistTaps="handled"
+                          ListEmptyComponent={
+                            <View style={styles.menuEmptyState}>
+                              <Text style={styles.menuEmptyText}>No active filters</Text>
+                            </View>
+                          }
+                          ListFooterComponent={
+                            <View
+                              pointerEvents="none"
+                              style={{ height: listMenuOneHandedOffset }}
+                            />
+                          }
+                          ListHeaderComponent={
+                            <View
+                              pointerEvents="none"
+                              style={{ height: listMenuOneHandedOffset }}
+                            />
+                          }
+                          nestedScrollEnabled
+                          onMomentumScrollEnd={handleListMenuScrollSettled}
+                          onScroll={handleListMenuScroll}
+                          onScrollEndDrag={handleListMenuScrollSettled}
+                          overScrollMode="never"
+                          scrollEventThrottle={16}
+                          style={styles.listMenuList}
+                          renderItem={({ item }) => {
                         if ('type' in item) {
                           if (item.type === 'clearFilters') {
                             return (
@@ -2545,7 +3775,7 @@ export default function App() {
                           }
 
                           if (item.type === 'sortOption') {
-                            const isSelected = todoSortMode === item.sortMode;
+                            const isSelected = effectiveSortMode === item.sortMode;
 
                             return (
                               <Pressable
@@ -2567,7 +3797,7 @@ export default function App() {
                           }
 
 	                          if (item.type === 'groupOption') {
-	                            const isSelected = todoGroupMode === item.groupMode;
+	                            const isSelected = effectiveGroupMode === item.groupMode;
 
 	                            return (
                               <Pressable
@@ -2646,8 +3876,10 @@ export default function App() {
 	                              item.menuMode,
 	                              menuFilters,
 	                              activeFilterCount,
-	                              todoSortMode,
-	                              todoGroupMode,
+	                              effectiveSortMode,
+	                              effectiveGroupMode,
+	                              listMenuTree,
+	                              activeListDisplay,
 	                            );
 
 	                            return (
@@ -2723,7 +3955,11 @@ export default function App() {
                             >
                               <Pressable
                                 accessibilityRole="button"
-                                onPress={() => toggleFilterValue(item.filterKey, item.label)}
+                                onPress={() => (
+                                  item.filterKey === 'date'
+                                    ? handleDateMenuLabelPress(item.label)
+                                    : toggleFilterValue(item.filterKey, item.label)
+                                )}
                                 style={({ pressed }) => [
                                   styles.listMenuRowMainPress,
                                   pressed && styles.listMenuRowPressed,
@@ -2759,13 +3995,18 @@ export default function App() {
                           );
                         }
 
-                        const isSelected = menuFilters.list.includes(item.label);
-                        const listColorTheme = getFilterColorTheme(filterColors, 'list', item.label);
+                        const isSelected = isListMenuItemSelected(item, menuFilters.list, listMenuTree);
+                        const listColorTheme = getFilterColorTheme(
+                          filterColors,
+                          'list',
+                          item.isSubsection && item.parentLabel ? item.parentLabel : item.label,
+                        );
 
                         return (
                           <View
                             style={[
                               styles.listMenuRow,
+                              item.depth > 0 && styles.listMenuRowIndented,
                               isSelected && styles.listMenuRowSelected,
                               isSelected && {
                                 backgroundColor: listColorTheme.tint,
@@ -2775,22 +4016,36 @@ export default function App() {
                           >
                             <Pressable
                               accessibilityRole="button"
-                              onPress={() => {
-                                toggleFilterValue('list', item.label);
-                              }}
+                              accessibilityLabel={
+                                item.isSubsection
+                                  ? `${item.label} subsection of ${item.parentLabel}`
+                                  : item.label
+                              }
+                              onPress={() => toggleListMenuItem(item)}
                               style={({ pressed }) => [
                                 styles.listMenuRowMainPress,
                                 pressed && styles.listMenuRowPressed,
                               ]}
                             >
                               <View style={styles.listMenuRowTextWrap}>
-                                <View
+                                {item.isSubsection ? (
+                                  <Text style={styles.listMenuSubsectionMarker}>└</Text>
+                                ) : (
+                                  <View
+                                    style={[
+                                      styles.listMenuColorDot,
+                                      { backgroundColor: listColorTheme.accent },
+                                    ]}
+                                  />
+                                )}
+                                <Text
                                   style={[
-                                    styles.listMenuColorDot,
-                                    { backgroundColor: listColorTheme.accent },
+                                    styles.listMenuRowTitle,
+                                    item.isSubsection && styles.listMenuRowTitleSubsection,
                                   ]}
-                                />
-                                <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                >
+                                  {item.label}
+                                </Text>
                               </View>
                             </Pressable>
                             {isSelected ? (
@@ -2798,7 +4053,7 @@ export default function App() {
                                 accessibilityRole="button"
                                 accessibilityLabel={`Clear ${item.label}`}
                                 hitSlop={LIST_MENU_ICON_HIT_SLOP}
-                                onPress={() => removeFilter('list', item.label)}
+                                onPress={() => removeListMenuItem(item)}
                                 style={({ pressed }) => [
                                   styles.listMenuClearButton,
                                   pressed && styles.listMenuClearButtonPressed,
@@ -2874,17 +4129,54 @@ export default function App() {
             onTouchStart={handleListFrameTouchStart}
             style={styles.todoListTapFrame}
           >
-            <PanGestureHandler
-              activeOffsetY={8}
-              enabled={isListAtTop && !listMenuOpen}
-              failOffsetX={[-24, 24]}
-              onGestureEvent={handleTopPullGesture}
-              onHandlerStateChange={handleTopPullStateChange}
+            <View
+              collapsable={false}
+              onLayout={handleTodoListFrameLayout}
+              style={styles.todoListFrame}
             >
-              <View
-                collapsable={false}
-                style={styles.todoListFrame}
-              >
+              {showSearchFiltersPanel ? (
+                <ScrollView
+                  contentContainerStyle={styles.searchFiltersContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  style={styles.searchFiltersPanel}
+                >
+                  {searchFilterItems.length === 0 ? (
+                    <View style={styles.searchFiltersEmpty}>
+                      <Text style={styles.searchFiltersEmptyTitle}>No active filters</Text>
+                      <Text style={styles.searchFiltersEmptyText}>
+                        Type in the search field to find todos.
+                      </Text>
+                    </View>
+                  ) : (
+                    searchFilterItems.map((item) => {
+                      const colorTheme = getFilterColorTheme(
+                        filterColors,
+                        item.filterKey,
+                        item.label,
+                      );
+
+                      return (
+                        <View key={item.id} style={styles.searchFilterRow}>
+                          <View
+                            style={[
+                              styles.listMenuColorDot,
+                              { backgroundColor: colorTheme.accent },
+                            ]}
+                          />
+                          <View style={styles.searchFilterRowText}>
+                            <Text style={styles.searchFilterLabel}>{item.label}</Text>
+                            <Text style={styles.filterTypeText}>
+                              {FILTER_KIND_LABELS[item.filterKey]}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })
+                  )}
+                  <Text style={styles.searchFiltersMeta}>{searchContextSummary}</Text>
+                </ScrollView>
+              ) : (
                 <FlatList
                   ref={todoListRef}
                   alwaysBounceVertical={false}
@@ -2897,6 +4189,7 @@ export default function App() {
                       },
                     filteredTodos.length === 0 && styles.emptyListContent,
                   ]}
+                  contentOffset={todoListContentOffset}
                   data={todoListRows}
                   keyboardDismissMode="on-drag"
                   keyboardShouldPersistTaps="handled"
@@ -2911,22 +4204,368 @@ export default function App() {
                       </Text>
                       <Text style={styles.emptyText}>
                         {query.trim()
-                          ? 'Press return to add this as a new todo.'
-                          : 'Type above and press return to create one.'}
+                          ? 'Try a different search term.'
+                          : 'Tap the + button to add a todo.'}
                       </Text>
                     </View>
                   }
+                  ListFooterComponent={
+                    todoListOneHandedOffset > 0 ? (
+                      <View
+                        pointerEvents="none"
+                        style={{ height: todoListOneHandedOffset }}
+                      />
+                    ) : null
+                  }
+                  ListHeaderComponent={
+                    todoListOneHandedOffset > 0 ? (
+                      <View
+                        pointerEvents="none"
+                        style={{ height: todoListOneHandedOffset }}
+                      />
+                    ) : null
+                  }
                   onScroll={handleListScroll}
-                  onScrollEndDrag={releasePull}
                   onScrollToIndexFailed={handleTodoListScrollToIndexFailed}
                   renderItem={renderTodoItem}
                   scrollEventThrottle={16}
                   showsVerticalScrollIndicator={false}
                 />
-              </View>
-            </PanGestureHandler>
+              )}
+            </View>
           </View>
+
+          {!listMenuOpen && !createDrawerVisible && !showSearchFiltersPanel ? (
+            <View pointerEvents="box-none" style={styles.createFabLayer}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityHint="Opens the new todo drawer"
+                accessibilityLabel="Add todo"
+                onPress={() => openCreateDrawer(query)}
+                style={({ pressed }) => [
+                  styles.createFab,
+                  pressed && styles.createFabPressed,
+                ]}
+              >
+                <Text style={styles.createFabText}>+</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
+
+        <View style={styles.bottomNav}>
+          <View style={styles.bottomNavItem} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Calendar"
+            accessibilityState={{ selected: navTab === 'calendar' || menuMode === 'date' }}
+            onPress={() => handleNavTabPress('calendar')}
+            style={({ pressed }) => [
+              styles.bottomNavItem,
+              pressed && styles.bottomNavItemPressed,
+            ]}
+          >
+            <Ionicons
+              color={navTab === 'calendar' || menuMode === 'date' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+              name="calendar-outline"
+              size={24}
+            />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open filter menu"
+            accessibilityState={{ selected: navTab === 'menu' || menuMode === 'main' }}
+            onPress={() => handleNavTabPress('menu')}
+            style={({ pressed }) => [
+              styles.bottomNavItem,
+              pressed && styles.bottomNavItemPressed,
+            ]}
+          >
+            <Ionicons
+              color={navTab === 'menu' || menuMode === 'main' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+              name="apps-outline"
+              size={24}
+            />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Search"
+            accessibilityState={{ selected: navTab === 'search' }}
+            onPress={() => handleNavTabPress('search')}
+            style={({ pressed }) => [
+              styles.bottomNavItem,
+              pressed && styles.bottomNavItemPressed,
+            ]}
+          >
+            <Ionicons
+              color={navTab === 'search' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+              name="search-outline"
+              size={24}
+            />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            accessibilityState={{ selected: navTab === 'settings' }}
+            onPress={() => handleNavTabPress('settings')}
+            style={({ pressed }) => [
+              styles.bottomNavItem,
+              pressed && styles.bottomNavItemPressed,
+            ]}
+          >
+            <Ionicons
+              color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+              name="settings-outline"
+              size={24}
+            />
+          </Pressable>
+        </View>
+
+        </KeyboardAvoidingView>
+
+        <Modal
+          animationType="fade"
+          onRequestClose={closeCreateDrawer}
+          statusBarTranslucent={Platform.OS === 'android'}
+          transparent
+          visible={createDrawerVisible}
+        >
+          <View style={styles.createDrawerModalRoot}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close new todo"
+              onPress={closeCreateDrawer}
+              style={styles.createDrawerBackdrop}
+            />
+            <View
+              pointerEvents="box-none"
+              style={[styles.createDrawerLayer, { bottom: createDrawerKeyboardInset }]}
+            >
+              <View style={styles.createDrawer}>
+                <View style={styles.menuDragHandle} accessibilityRole="adjustable">
+                  <View style={styles.menuDragPill} />
+                </View>
+                {createDrawerPicker ? (
+                  <ScrollView
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                    style={[styles.createDrawerPicker, { maxHeight: createDrawerPickerMaxHeight }]}
+                  >
+                    {createDrawerPickerItems.map((label) => {
+                      const selected =
+                        createDrawerPicker === 'priority'
+                          ? (
+                            label === 'None'
+                              ? createDraftFilters.priority.length === 0
+                              : createDraftFilters.priority[0] === label
+                          )
+                          : createDraftFilters[createDrawerPicker][0] === label;
+
+                      return (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          key={`${createDrawerPicker}-${label}`}
+                          onPress={() => (
+                            createDrawerPicker === 'date'
+                              ? handleCreateDrawerDatePress(label)
+                              : setCreateDraftFilterValue(createDrawerPicker, label)
+                          )}
+                          style={({ pressed }) => [
+                            styles.createDrawerPickerRow,
+                            selected && styles.createDrawerPickerRowSelected,
+                            pressed && styles.createDrawerPickerRowPressed,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.createDrawerPickerRowText,
+                              selected && styles.createDrawerPickerRowTextSelected,
+                            ]}
+                          >
+                            {label}
+                          </Text>
+                          {selected ? (
+                            <Ionicons color={THEME_ACCENT} name="checkmark" size={18} />
+                          ) : null}
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                ) : (
+                  <TextInput
+                    ref={createInputRef}
+                    autoCapitalize="sentences"
+                    autoCorrect
+                    blurOnSubmit={false}
+                    multiline
+                    onChangeText={setCreateDraftText}
+                    onSubmitEditing={submitCreateTodo}
+                    placeholder="What would you like to do?"
+                    placeholderTextColor="#B5ADA5"
+                    returnKeyType="done"
+                    selectionColor="#2F6F62"
+                    style={styles.createDrawerInput}
+                    textAlignVertical="top"
+                    value={createDraftText}
+                  />
+                )}
+                <View style={styles.createDrawerToolbar}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Date: ${createDrawerDateLabel}`}
+                    onPress={() => openCreateDrawerPicker('date')}
+                    style={({ pressed }) => [
+                      styles.createDrawerToolbarButton,
+                      pressed && styles.createDrawerToolbarButtonPressed,
+                      createDrawerPicker === 'date' && styles.createDrawerToolbarButtonActive,
+                    ]}
+                  >
+                    <Ionicons
+                      color={createDraftFilters.date.length > 0 ? '#2F6F62' : '#8C847C'}
+                      name="calendar-outline"
+                      size={22}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      createDrawerPriorityHigh ? 'Remove high priority' : 'Set high priority'
+                    }
+                    onPress={toggleCreateDraftPriority}
+                    style={({ pressed }) => [
+                      styles.createDrawerToolbarButton,
+                      pressed && styles.createDrawerToolbarButtonPressed,
+                    ]}
+                  >
+                    <Ionicons
+                      color={createDrawerPriorityHigh ? '#CF413A' : '#8C847C'}
+                      name={createDrawerPriorityHigh ? 'flag' : 'flag-outline'}
+                      size={22}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Set priority"
+                    onPress={() => openCreateDrawerPicker('priority')}
+                    style={({ pressed }) => [
+                      styles.createDrawerToolbarButton,
+                      pressed && styles.createDrawerToolbarButtonPressed,
+                      createDrawerPicker === 'priority' && styles.createDrawerToolbarButtonActive,
+                    ]}
+                  >
+                    <Ionicons
+                      color={
+                        createDraftPriorityFromPicker &&
+                        createDraftFilters.priority.length > 0
+                          ? '#2F6F62'
+                          : '#8C847C'
+                      }
+                      name="pricetag-outline"
+                      size={22}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`List: ${createDrawerListLabel}`}
+                    onPress={() => openCreateDrawerPicker('list')}
+                    style={({ pressed }) => [
+                      styles.createDrawerInboxChip,
+                      pressed && styles.createDrawerToolbarButtonPressed,
+                      createDrawerPicker === 'list' && styles.createDrawerInboxChipActive,
+                    ]}
+                  >
+                    <Ionicons color={THEME_ACCENT} name="file-tray-outline" size={18} />
+                    <Text numberOfLines={1} style={styles.createDrawerInboxChipText}>
+                      {createDrawerListLabel}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.createDrawerToolbarSpacer} />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      createDrawerPicker
+                        ? 'Back to task title'
+                        : 'Close new todo'
+                    }
+                    hitSlop={8}
+                    onPress={handleCreateDrawerClosePress}
+                    style={({ pressed }) => [
+                      styles.createDrawerToolbarButton,
+                      pressed && styles.createDrawerToolbarButtonPressed,
+                    ]}
+                  >
+                    <Ionicons
+                      color="#8C847C"
+                      name={createDrawerPicker ? 'arrow-back' : 'close'}
+                      size={24}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {datePickerVisible && Platform.OS === 'android' ? (
+          <DateTimePicker
+            display="calendar"
+            mode="date"
+            onChange={handleDatePickerChange}
+            value={datePickerValue}
+          />
+        ) : null}
+
+        <Modal
+          animationType="fade"
+          onRequestClose={closeDatePicker}
+          transparent
+          visible={datePickerVisible && Platform.OS === 'ios'}
+        >
+          <View style={styles.datePickerModalRoot}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss date picker"
+              onPress={closeDatePicker}
+              style={styles.datePickerBackdrop}
+            />
+            <View style={styles.datePickerSheet}>
+              <View style={styles.datePickerHeader}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={closeDatePicker}
+                  style={({ pressed }) => [
+                    styles.datePickerHeaderButton,
+                    pressed && styles.datePickerHeaderButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.datePickerHeaderButtonText}>Cancel</Text>
+                </Pressable>
+                <Text style={styles.datePickerHeaderTitle}>Pick a date</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => applyPickedDate(datePickerValue)}
+                  style={({ pressed }) => [
+                    styles.datePickerHeaderButton,
+                    pressed && styles.datePickerHeaderButtonPressed,
+                  ]}
+                >
+                  <Text style={[styles.datePickerHeaderButtonText, styles.datePickerHeaderDone]}>
+                    Done
+                  </Text>
+                </Pressable>
+              </View>
+              <DateTimePicker
+                display="inline"
+                mode="date"
+                onChange={handleDatePickerChange}
+                style={styles.datePickerControl}
+                value={datePickerValue}
+              />
+            </View>
+          </View>
+        </Modal>
+
         <Modal
           animationType="slide"
           onRequestClose={closeSettingsModal}
@@ -3165,64 +4804,146 @@ export default function App() {
 
                     <View style={styles.settingsListEditor}>
                       {listMenuTree.map((item, index) => (
-                        <View key={`${item.label}-${index}`} style={styles.settingsListEditRow}>
-                          <PanGestureHandler
-                            activeOffsetY={[-6, 6]}
-                            failOffsetX={[-18, 18]}
-                            onHandlerStateChange={(event) => {
-                              const { state, translationY } = event.nativeEvent;
-                              if (state === State.END && Math.abs(translationY) > 18) {
-                                moveSettingsList(index, translationY > 0 ? 1 : -1);
-                              }
-                            }}
-                          >
-                            <View collapsable={false} style={styles.settingsListDragZone}>
-                              <Text style={styles.settingsListDragHandle}>☰</Text>
+                        <View key={`${item.label}-${index}`} style={styles.settingsListGroup}>
+                          <View style={styles.settingsListEditRow}>
+                            <PanGestureHandler
+                              activeOffsetY={[-6, 6]}
+                              failOffsetX={[-18, 18]}
+                              onHandlerStateChange={(event) => {
+                                const { state, translationY } = event.nativeEvent;
+                                if (state === State.END && Math.abs(translationY) > 18) {
+                                  moveSettingsList(index, translationY > 0 ? 1 : -1);
+                                }
+                              }}
+                            >
+                              <View collapsable={false} style={styles.settingsListDragZone}>
+                                <Text style={styles.settingsListDragHandle}>☰</Text>
+                              </View>
+                            </PanGestureHandler>
+                            <View style={styles.settingsListTextWrap}>
+                              <Text style={styles.settingsListTitle}>{item.label}</Text>
+                              {item.children?.length ? (
+                                <Text style={styles.settingsListSubtitle}>
+                                  {item.children.length} subsection{item.children.length === 1 ? '' : 's'}
+                                </Text>
+                              ) : null}
                             </View>
-                          </PanGestureHandler>
-                          <View style={styles.settingsListTextWrap}>
-                            <Text style={styles.settingsListTitle}>{item.label}</Text>
+                            <View style={styles.settingsListActions}>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Add subsection to ${item.label}`}
+                                onPress={() => {
+                                  setSubsectionParentIndex(index);
+                                  setNewSubsectionName('');
+                                }}
+                                style={({ pressed }) => [
+                                  styles.settingsIconButton,
+                                  subsectionParentIndex === index && styles.settingsIconButtonActive,
+                                  pressed && styles.settingsOptionRowPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsIconButtonText}>+</Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Move ${item.label} up`}
+                                disabled={index === 0}
+                                onPress={() => moveSettingsList(index, -1)}
+                                style={({ pressed }) => [
+                                  styles.settingsIconButton,
+                                  index === 0 && styles.settingsButtonDisabled,
+                                  pressed && styles.settingsOptionRowPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsIconButtonText}>↑</Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Move ${item.label} down`}
+                                disabled={index === listMenuTree.length - 1}
+                                onPress={() => moveSettingsList(index, 1)}
+                                style={({ pressed }) => [
+                                  styles.settingsIconButton,
+                                  index === listMenuTree.length - 1 && styles.settingsButtonDisabled,
+                                  pressed && styles.settingsOptionRowPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsIconButtonText}>↓</Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Remove ${item.label}`}
+                                onPress={() => removeSettingsList(index)}
+                                style={({ pressed }) => [
+                                  styles.settingsIconButton,
+                                  styles.settingsDangerIconButton,
+                                  pressed && styles.settingsOptionRowPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsDangerIconButtonText}>×</Text>
+                              </Pressable>
+                            </View>
                           </View>
-                          <View style={styles.settingsListActions}>
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel={`Move ${item.label} up`}
-                              disabled={index === 0}
-                              onPress={() => moveSettingsList(index, -1)}
-                              style={({ pressed }) => [
-                                styles.settingsIconButton,
-                                index === 0 && styles.settingsButtonDisabled,
-                                pressed && styles.settingsOptionRowPressed,
-                              ]}
+                          {item.children?.map((child, childIndex) => (
+                            <View
+                              key={`${item.label}-${child.label}-${childIndex}`}
+                              style={styles.settingsListSubsectionRow}
                             >
-                              <Text style={styles.settingsIconButtonText}>↑</Text>
-                            </Pressable>
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel={`Move ${item.label} down`}
-                              disabled={index === listMenuTree.length - 1}
-                              onPress={() => moveSettingsList(index, 1)}
-                              style={({ pressed }) => [
-                                styles.settingsIconButton,
-                                index === listMenuTree.length - 1 && styles.settingsButtonDisabled,
-                                pressed && styles.settingsOptionRowPressed,
-                              ]}
-                            >
-                              <Text style={styles.settingsIconButtonText}>↓</Text>
-                            </Pressable>
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel={`Remove ${item.label}`}
-                              onPress={() => removeSettingsList(index)}
-                              style={({ pressed }) => [
-                                styles.settingsIconButton,
-                                styles.settingsDangerIconButton,
-                                pressed && styles.settingsOptionRowPressed,
-                              ]}
-                            >
-                              <Text style={styles.settingsDangerIconButtonText}>×</Text>
-                            </Pressable>
-                          </View>
+                              <Text style={styles.settingsListSubsectionLabel}>{child.label}</Text>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Remove subsection ${child.label}`}
+                                onPress={() => removeSettingsListSubsection(index, childIndex)}
+                                style={({ pressed }) => [
+                                  styles.settingsIconButton,
+                                  styles.settingsDangerIconButton,
+                                  pressed && styles.settingsOptionRowPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsDangerIconButtonText}>×</Text>
+                              </Pressable>
+                            </View>
+                          ))}
+                          {subsectionParentIndex === index ? (
+                            <View style={styles.settingsSubsectionComposer}>
+                              <TextInput
+                                autoCapitalize="sentences"
+                                autoCorrect
+                                onChangeText={setNewSubsectionName}
+                                onSubmitEditing={() => addSettingsListSubsection(index)}
+                                placeholder="Subsection name"
+                                placeholderTextColor={THEME_TEXT_SECONDARY}
+                                returnKeyType="done"
+                                style={styles.settingsSubsectionInput}
+                                value={newSubsectionName}
+                              />
+                              <Pressable
+                                accessibilityRole="button"
+                                disabled={!newSubsectionName.trim()}
+                                onPress={() => addSettingsListSubsection(index)}
+                                style={({ pressed }) => [
+                                  styles.settingsAddListButton,
+                                  !newSubsectionName.trim() && styles.settingsButtonDisabled,
+                                  pressed && styles.settingsPrimaryButtonPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsAddListButtonText}>Add</Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityRole="button"
+                                onPress={() => {
+                                  setSubsectionParentIndex(null);
+                                  setNewSubsectionName('');
+                                }}
+                                style={({ pressed }) => [
+                                  styles.settingsIconButton,
+                                  pressed && styles.settingsOptionRowPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsIconButtonText}>×</Text>
+                              </Pressable>
+                            </View>
+                          ) : null}
                         </View>
                       ))}
                     </View>
@@ -3400,7 +5121,7 @@ export default function App() {
             </KeyboardAvoidingView>
           </View>
         </Modal>
-        </KeyboardAvoidingView>
+        </View>
       </SafeAreaView>
     </GestureHandlerRootView>
   );
@@ -3412,15 +5133,19 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    backgroundColor: '#F8F6F2',
+    backgroundColor: THEME_BG,
   },
   screen: {
     flex: 1,
-    backgroundColor: '#F8F6F2',
+    backgroundColor: THEME_BG,
+  },
+  mainKeyboardAvoiding: {
+    flex: 1,
+    minHeight: 0,
   },
   settingsModal: {
     flex: 1,
-    backgroundColor: '#F8F6F2',
+    backgroundColor: THEME_BG,
   },
   presetSaveModalBackdrop: {
     flex: 1,
@@ -3442,13 +5167,13 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   presetSaveModalTitle: {
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 18,
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 24,
   },
   presetSaveModalMessage: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 14,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
@@ -3457,10 +5182,10 @@ const styles = StyleSheet.create({
   presetSaveModalInput: {
     minHeight: 46,
     borderRadius: 14,
-    backgroundColor: '#F8F6F2',
+    backgroundColor: THEME_BG,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E8E2DA',
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 15,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
@@ -3481,12 +5206,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   presetSaveModalButtonSecondary: {
-    backgroundColor: '#F8F6F2',
+    backgroundColor: THEME_BG,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E8E2DA',
   },
   presetSaveModalButtonPrimary: {
-    backgroundColor: '#2F6F62',
+    backgroundColor: THEME_ACCENT,
   },
   presetSaveModalButtonPressed: {
     opacity: 0.78,
@@ -3521,14 +5246,14 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   settingsTitle: {
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 24,
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 30,
     letterSpacing: 0,
   },
   settingsSubtitle: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 13,
     fontWeight: FONT_REGULAR,
     lineHeight: 18,
@@ -3575,14 +5300,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   settingsSectionTitle: {
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 16,
     fontWeight: FONT_MEDIUM,
     lineHeight: 21,
     letterSpacing: 0.1,
   },
   settingsSectionSubtitle: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 13,
     fontWeight: FONT_REGULAR,
     lineHeight: 18,
@@ -3590,7 +5315,7 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   settingsSectionChevron: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 25,
     fontWeight: FONT_REGULAR,
     lineHeight: 27,
@@ -3634,14 +5359,14 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   settingsSegmentButtonText: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 14,
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
     letterSpacing: 0.1,
   },
   settingsSegmentButtonTextSelected: {
-    color: '#1E1B18',
+    color: THEME_TEXT,
   },
   settingsAddListRow: {
     alignItems: 'center',
@@ -3653,10 +5378,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 46,
     borderRadius: 14,
-    backgroundColor: '#F8F6F2',
+    backgroundColor: THEME_BG,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E8E2DA',
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 15,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
@@ -3668,7 +5393,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2F6F62',
+    backgroundColor: THEME_ACCENT,
     paddingHorizontal: 14,
   },
   settingsAddListButtonText: {
@@ -3682,13 +5407,55 @@ const styles = StyleSheet.create({
     borderTopColor: '#F2EBE3',
     marginTop: 14,
   },
+  settingsListGroup: {
+    borderBottomColor: '#F2EBE3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   settingsListEditRow: {
     minHeight: 56,
     alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F2EBE3',
     flexDirection: 'row',
     paddingVertical: 8,
+  },
+  settingsListSubsectionRow: {
+    alignItems: 'center',
+    borderTopColor: '#F7F1EA',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 44,
+    paddingLeft: 36,
+    paddingRight: 8,
+    paddingVertical: 6,
+  },
+  settingsListSubsectionLabel: {
+    color: '#5C554E',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+  },
+  settingsSubsectionComposer: {
+    alignItems: 'center',
+    borderTopColor: '#F7F1EA',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 10,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  settingsSubsectionInput: {
+    backgroundColor: '#F7F3EE',
+    borderRadius: 12,
+    color: THEME_TEXT,
+    flex: 1,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   settingsListDragZone: {
     width: 28,
@@ -3708,14 +5475,14 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   settingsListTitle: {
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 15,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
     letterSpacing: 0.1,
   },
   settingsListSubtitle: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 12,
     fontWeight: FONT_REGULAR,
     lineHeight: 16,
@@ -3738,7 +5505,7 @@ const styles = StyleSheet.create({
     marginTop: 0,
   },
   settingsColorGroupTitle: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 12,
     fontWeight: FONT_MEDIUM,
     lineHeight: 16,
@@ -3767,7 +5534,7 @@ const styles = StyleSheet.create({
   },
   settingsColorLabel: {
     flex: 1,
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 14,
     fontWeight: FONT_REGULAR,
     lineHeight: 18,
@@ -3803,6 +5570,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F3EEE7',
   },
+  settingsIconButtonActive: {
+    backgroundColor: '#DCE8E4',
+  },
   settingsIconButtonText: {
     color: '#2A2520',
     fontSize: 16,
@@ -3830,14 +5600,14 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   settingsRowTitle: {
-    color: '#1E1B18',
+    color: THEME_TEXT,
     fontSize: 16,
     fontWeight: FONT_MEDIUM,
     lineHeight: 21,
     letterSpacing: 0.1,
   },
   settingsRowSubtitle: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 13,
     fontWeight: FONT_REGULAR,
     lineHeight: 18,
@@ -3853,17 +5623,17 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   settingsStatusPillEnabled: {
-    backgroundColor: '#EDF4F0',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   settingsStatusText: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 12,
     fontWeight: FONT_MEDIUM,
     lineHeight: 16,
     letterSpacing: 0.1,
   },
   settingsStatusTextEnabled: {
-    color: '#1C5A4E',
+    color: THEME_ACCENT,
   },
   settingsWarningText: {
     color: '#8F4D46',
@@ -3900,7 +5670,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
   },
   settingsOptionValue: {
-    color: '#2F6F62',
+    color: THEME_ACCENT,
     fontSize: 14,
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
@@ -3911,7 +5681,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2F6F62',
+    backgroundColor: THEME_ACCENT,
     marginTop: 14,
     paddingHorizontal: 16,
   },
@@ -3957,48 +5727,89 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
   },
   settingsBackupStatus: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 13,
     fontWeight: FONT_REGULAR,
     lineHeight: 18,
     letterSpacing: 0.1,
     marginTop: 12,
   },
-  topBar: {
+  appHeader: {
+    alignItems: 'center',
+    backgroundColor: THEME_BG,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingBottom: 4,
     paddingHorizontal: HORIZONTAL_PADDING,
-    paddingTop: TOP_SAFE_GAP,
-    paddingBottom: 16,
+    paddingTop: Platform.OS === 'android' ? TOP_SAFE_GAP : 8,
+  },
+  appHeaderTitle: {
+    color: THEME_TEXT,
+    fontSize: 20,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 26,
+    letterSpacing: -0.2,
+    textAlign: 'center',
+  },
+  headerSearchRow: {
+    backgroundColor: THEME_BG,
+    paddingBottom: 12,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 4,
+  },
+  navSearchIcon: {
+    marginRight: 8,
+  },
+  bottomNav: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderTopColor: '#E5E5EA',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    height: BOTTOM_NAV_HEIGHT,
+    justifyContent: 'space-around',
+    paddingBottom: Platform.OS === 'ios' ? 2 : 0,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: -2 },
+    elevation: 8,
+  },
+  bottomNavItem: {
+    alignItems: 'center',
+    flex: 1,
+    height: '100%',
+    justifyContent: 'center',
+  },
+  bottomNavItemPressed: {
+    opacity: 0.72,
   },
   searchBox: {
-    minHeight: 52,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: THEME_CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E8E2DA',
+    borderColor: THEME_BORDER,
     alignItems: 'center',
     flexDirection: 'row',
     paddingHorizontal: 14,
-    shadowColor: '#3D3428',
+    shadowColor: '#000000',
     shadowOpacity: 0.06,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 2,
-  },
-  searchIcon: {
-    fontSize: 18,
-    color: '#B5ADA5',
-    marginRight: 10,
   },
   searchInput: {
     flex: 1,
-    color: '#1E1B18',
-    fontSize: 15,
+    color: THEME_TEXT,
+    fontSize: 16,
     fontWeight: FONT_REGULAR,
-    lineHeight: 20,
-    paddingVertical: 14,
-    letterSpacing: 0.1,
+    height: 48,
+    letterSpacing: 0,
+    paddingVertical: 0,
   },
   listShell: {
+    backgroundColor: THEME_BG,
     flex: 1,
   },
   todoListFrame: {
@@ -4011,6 +5822,151 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 19,
     backgroundColor: 'rgba(0,0,0,0.04)',
+  },
+  createDrawerModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  createDrawerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(34, 28, 24, 0.36)',
+  },
+  createDrawerLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 24,
+    elevation: 8,
+  },
+  createDrawer: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E4DDD4',
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'android' ? 10 : 8,
+    shadowColor: '#000000',
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: -8 },
+    elevation: 10,
+  },
+  createDrawerInput: {
+    color: THEME_TEXT,
+    fontSize: 18,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 26,
+    marginTop: 4,
+    maxHeight: 112,
+    minHeight: 56,
+    paddingVertical: 6,
+  },
+  createDrawerPicker: {
+    marginTop: 4,
+  },
+  createDrawerPickerRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 46,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+  },
+  createDrawerPickerRowSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  createDrawerPickerRowPressed: {
+    backgroundColor: THEME_BG,
+  },
+  createDrawerPickerRowText: {
+    color: '#2A2520',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+  },
+  createDrawerPickerRowTextSelected: {
+    color: THEME_ACCENT,
+    fontWeight: FONT_MEDIUM,
+  },
+  createDrawerToolbar: {
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F0E9E1',
+    flexDirection: 'row',
+    gap: 2,
+    marginTop: 10,
+    minHeight: 48,
+    paddingTop: 6,
+  },
+  createDrawerToolbarButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createDrawerToolbarButtonPressed: {
+    backgroundColor: '#F3EEE7',
+  },
+  createDrawerToolbarButtonActive: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  createDrawerInboxChip: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    height: 40,
+    maxWidth: 132,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+  },
+  createDrawerInboxChipActive: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  createDrawerInboxChipText: {
+    color: THEME_ACCENT,
+    flexShrink: 1,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
+  createDrawerToolbarSpacer: {
+    flex: 1,
+  },
+  createFabLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+    elevation: 30,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    paddingRight: HORIZONTAL_PADDING,
+    paddingBottom: LIST_MENU_BOTTOM_OFFSET + 10,
+  },
+  createFab: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: NAV_ACCENT,
+    shadowColor: NAV_ACCENT,
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  createFabPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.96 }],
+  },
+  createFabText: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 32,
+    marginTop: -2,
   },
   edgeBackZone: {
     position: 'absolute',
@@ -4076,7 +6032,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   listMenuBackIcon: {
-    color: '#2F6F62',
+    color: THEME_ACCENT,
     fontSize: 24,
     fontWeight: FONT_REGULAR,
     lineHeight: 26,
@@ -4102,6 +6058,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
   },
+  listMenuRowIndented: {
+    paddingLeft: 28,
+  },
+  listMenuSubsectionMarker: {
+    color: '#B4AAA0',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    width: 16,
+  },
+  listMenuRowTitleSubsection: {
+    color: '#5C554E',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+  },
   listMenuRowMainPress: {
     flex: 1,
     minWidth: 0,
@@ -4113,7 +6084,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F2ED',
   },
   listMenuRowSelected: {
-    backgroundColor: '#EDF4F0',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   clearFiltersRow: {
     marginTop: 2,
@@ -4134,7 +6105,7 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   listMenuValueText: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 12,
     fontWeight: FONT_REGULAR,
     lineHeight: 16,
@@ -4165,7 +6136,7 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   listMenuRowSummary: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 12,
     fontWeight: FONT_REGULAR,
     lineHeight: 16,
@@ -4173,7 +6144,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   listMenuApplyText: {
-    color: '#2F6F62',
+    color: THEME_ACCENT,
     fontSize: 13,
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
@@ -4240,14 +6211,14 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   listMenuCheck: {
-    color: '#1C5A4E',
+    color: THEME_ACCENT,
     fontSize: 16,
     fontWeight: FONT_MEDIUM,
     lineHeight: 20,
     marginLeft: 12,
   },
   listMenuInlineCheck: {
-    color: '#1C5A4E',
+    color: THEME_ACCENT,
     fontSize: 15,
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
@@ -4293,7 +6264,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   listMenuArrowButtonPressed: {
-    backgroundColor: '#EDF4F0',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   listMenuChildCount: {
     color: '#B5ADA5',
@@ -4330,7 +6301,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   pullStageActive: {
-    backgroundColor: '#EDF4F0',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   pullStageDisabled: {
     opacity: 0.45,
@@ -4343,7 +6314,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   pullStageTextActive: {
-    color: '#1C5A4E',
+    color: THEME_ACCENT,
   },
   pullStageTextDisabled: {
     color: '#B5ADA5',
@@ -4356,7 +6327,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   pullStageMarkActive: {
-    color: '#2F6F62',
+    color: THEME_ACCENT,
   },
   pullStageMarkDisabled: {
     color: '#C4BCB3',
@@ -4367,7 +6338,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2F6F62',
+    backgroundColor: THEME_ACCENT,
     marginLeft: 10,
   },
   addButtonPressed: {
@@ -4383,63 +6354,77 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingBottom: 100,
-    paddingTop: 4,
-    gap: 8,
+    paddingTop: 8,
+    gap: 12,
   },
   emptyListContent: {
     flexGrow: 1,
     justifyContent: 'center',
   },
-  todoGroupHeader: {
-    minHeight: 30,
+  todoSectionCard: {
+    backgroundColor: THEME_CARD,
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  todoSectionHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 4,
-    paddingTop: 8,
+    minHeight: 52,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   todoGroupHeaderPressed: {
     opacity: 0.72,
   },
-  todoGroupHeaderMain: {
+  todoSectionHeaderMeta: {
     alignItems: 'center',
     flexDirection: 'row',
-    flexShrink: 1,
-    gap: 4,
-  },
-  todoGroupChevron: {
-    color: '#A9A19A',
-    fontSize: 18,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 18,
-    width: 14,
+    gap: 8,
   },
   todoGroupChevronExpanded: {
-    transform: [{ rotate: '90deg' }],
+    transform: [{ rotate: '180deg' }],
   },
-  todoGroupTitle: {
-    color: '#706860',
-    fontSize: 12,
+  todoSectionTitle: {
+    color: THEME_TEXT,
+    flexShrink: 1,
+    fontSize: 18,
     fontWeight: FONT_SEMIBOLD,
-    lineHeight: 16,
-    letterSpacing: 0.2,
-    textTransform: 'uppercase',
+    lineHeight: 22,
   },
   todoGroupCount: {
-    color: '#A9A19A',
-    fontSize: 12,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 16,
-    letterSpacing: 0.1,
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    minWidth: 16,
+    textAlign: 'right',
+  },
+  todoSectionBody: {
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingTop: 0,
+  },
+  todoRowDivider: {
+    backgroundColor: THEME_BORDER,
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 38,
   },
   swipeShell: {
-    minHeight: 60,
-    borderRadius: 14,
+    minHeight: 56,
     backgroundColor: 'transparent',
     position: 'relative',
   },
+  swipeShellGrouped: {
+    minHeight: 52,
+  },
   todoSwipeableContainer: {
-    minHeight: 60,
+    minHeight: 56,
     borderRadius: 14,
     overflow: 'visible',
   },
@@ -4470,7 +6455,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   todoActionDone: {
-    backgroundColor: '#2F6F62',
+    backgroundColor: '#3A63E8',
   },
   todoActionDelete: {
     backgroundColor: '#CF413A',
@@ -4488,20 +6473,48 @@ const styles = StyleSheet.create({
     lineHeight: 28,
   },
   todoRow: {
-    minHeight: 60,
+    minHeight: 56,
     borderRadius: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: THEME_CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E8E2DA',
-    alignItems: 'center',
+    borderColor: THEME_BORDER,
+    alignItems: 'flex-start',
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    shadowColor: '#3D3428',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    shadowColor: '#000000',
     shadowOpacity: 0.04,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 1,
+  },
+  todoRowGrouped: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    minHeight: 52,
+    paddingHorizontal: 0,
+    paddingVertical: 12,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  todoCheckboxPressable: {
+    marginRight: 12,
+    marginTop: 2,
+  },
+  todoCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: '#C7C7CC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: THEME_CARD,
+  },
+  todoCheckboxChecked: {
+    backgroundColor: THEME_ACCENT,
+    borderColor: THEME_ACCENT,
   },
   todoTextPressable: {
     flex: 1,
@@ -4510,17 +6523,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   todoRowDone: {
-    backgroundColor: '#FAF9F6',
-    borderColor: '#EEEAE4',
+    backgroundColor: '#FAFBFC',
+    borderColor: THEME_BORDER,
   },
   todoRowMenuTarget: {
-    backgroundColor: '#FFF7E5',
+    backgroundColor: THEME_ACCENT_SOFT,
     borderWidth: 1,
-    borderColor: '#E4BE63',
-    shadowColor: '#D89328',
-    shadowOpacity: 0.18,
-    shadowRadius: 14,
-    elevation: 3,
+    borderColor: '#B8C9FF',
+    shadowColor: THEME_ACCENT,
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 2,
   },
   todoColorRail: {
     alignSelf: 'stretch',
@@ -4546,16 +6559,102 @@ const styles = StyleSheet.create({
     opacity: 0.35,
   },
   todoText: {
-    color: '#1E1B18',
-    fontSize: 15,
-    fontWeight: FONT_REGULAR,
+    color: THEME_TEXT,
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
     lineHeight: 22,
-    letterSpacing: 0.1,
+    letterSpacing: 0,
   },
   todoTextDone: {
-    color: '#A9A19A',
+    color: THEME_TEXT_SECONDARY,
+    fontWeight: FONT_REGULAR,
     textDecorationLine: 'line-through',
-    textDecorationColor: '#C4BCB3',
+    textDecorationColor: '#C7C7CC',
+  },
+  todoMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    minHeight: 16,
+  },
+  todoMetaSpacer: {
+    flex: 1,
+  },
+  todoMetaDate: {
+    color: THEME_ACCENT,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+  },
+  todoMetaDateOverdue: {
+    color: THEME_DANGER,
+  },
+  todoMetaList: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginLeft: 12,
+  },
+  searchFiltersPanel: {
+    flex: 1,
+  },
+  searchFiltersContent: {
+    flexGrow: 1,
+    gap: 8,
+    paddingBottom: 24,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 8,
+  },
+  searchFiltersEmpty: {
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 48,
+  },
+  searchFiltersEmptyTitle: {
+    color: THEME_TEXT,
+    fontSize: 17,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: -0.2,
+  },
+  searchFiltersEmptyText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  searchFilterRow: {
+    alignItems: 'center',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  searchFilterRowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  searchFilterLabel: {
+    color: THEME_TEXT,
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: -0.1,
+    lineHeight: 22,
+  },
+  searchFiltersMeta: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    marginTop: 8,
+    textAlign: 'center',
   },
   emptyState: {
     alignItems: 'center',
@@ -4574,11 +6673,59 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   emptyText: {
-    color: '#8C847C',
+    color: THEME_TEXT_SECONDARY,
     fontSize: 14,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
     letterSpacing: 0.1,
     textAlign: 'center',
+  },
+  datePickerModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  datePickerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+  },
+  datePickerSheet: {
+    backgroundColor: THEME_CARD,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 24,
+  },
+  datePickerHeader: {
+    alignItems: 'center',
+    borderBottomColor: THEME_BORDER,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  datePickerHeaderTitle: {
+    color: THEME_TEXT,
+    fontSize: 16,
+    fontWeight: FONT_SEMIBOLD,
+  },
+  datePickerHeaderButton: {
+    minWidth: 64,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  datePickerHeaderButtonPressed: {
+    opacity: 0.65,
+  },
+  datePickerHeaderButtonText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+  },
+  datePickerHeaderDone: {
+    color: THEME_ACCENT,
+    textAlign: 'right',
+  },
+  datePickerControl: {
+    alignSelf: 'center',
   },
 });

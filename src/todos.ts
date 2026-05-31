@@ -15,6 +15,10 @@ export type Todo = {
   filters: TodoFilters;
 };
 
+export type DeletedTodo = Todo & {
+  deletedAt: number;
+};
+
 export const EMPTY_TODO_FILTERS: TodoFilters = {
   date: [],
   list: [],
@@ -161,4 +165,54 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     createdAt: todo.createdAt,
     filters: normalizeTodoFilters(todo.filters),
   };
+};
+
+export const cloneTodo = (todo: Todo): Todo => ({
+  ...todo,
+  filters: cloneTodoFilters(todo.filters),
+});
+
+export const cloneDeletedTodos = (todos: DeletedTodo[]): DeletedTodo[] =>
+  todos.map((todo) => ({
+    ...cloneTodo(todo),
+    deletedAt: todo.deletedAt,
+  }));
+
+export const normalizeDeletedTodo = (value: unknown): DeletedTodo | null => {
+  const todo = normalizeTodo(value);
+  if (!todo || typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const deletedAt = (value as Partial<DeletedTodo>).deletedAt;
+
+  return {
+    ...todo,
+    deletedAt: typeof deletedAt === 'number' && Number.isFinite(deletedAt)
+      ? deletedAt
+      : 0,
+  };
+};
+
+export const normalizeDeletedTodos = (value: unknown): DeletedTodo[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seenIds = new Set<string>();
+
+  return value
+    .map(normalizeDeletedTodo)
+    .filter((todo): todo is DeletedTodo => Boolean(todo))
+    .filter((todo) => {
+      if (seenIds.has(todo.id)) {
+        return false;
+      }
+
+      seenIds.add(todo.id);
+      return true;
+    })
+    .sort((first, second) =>
+      second.deletedAt - first.deletedAt || second.createdAt - first.createdAt
+    );
 };

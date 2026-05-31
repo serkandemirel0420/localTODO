@@ -11,9 +11,12 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
+  cloneDeletedTodos,
   cloneTodoFilters,
   formatListLabel,
+  normalizeDeletedTodos,
   normalizeTodoFilters,
+  type DeletedTodo,
   type TodoFilters,
 } from '../todos';
 
@@ -73,6 +76,7 @@ export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
 
 export type AppSettings = {
   collapsedTodoGroupIds: string[];
+  deletedTodos: DeletedTodo[];
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
@@ -109,6 +113,7 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   collapsedTodoGroupIds: [],
+  deletedTodos: [],
   filterColors: cloneFilterColors(),
   googleDriveBackupEnabled: false,
   googleDriveLastBackupAt: null,
@@ -483,6 +488,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
   if (!isRecord(value)) {
     return {
       ...DEFAULT_APP_SETTINGS,
+      deletedTodos: [],
       filterColors: cloneFilterColors(),
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
       menuPresets: [],
@@ -494,6 +500,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
+    deletedTodos: normalizeDeletedTodos(value.deletedTodos),
     filterColors: normalizeFilterColors(value.filterColors),
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
     googleDriveLastBackupAt:
@@ -517,6 +524,13 @@ export const appSettingsStore = {
   },
 
   async save(settings: AppSettings) {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeAppSettings(settings)));
+    const normalized = normalizeAppSettings(settings);
+    await AsyncStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        ...normalized,
+        deletedTodos: cloneDeletedTodos(normalized.deletedTodos),
+      }),
+    );
   },
 };

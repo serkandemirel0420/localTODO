@@ -140,11 +140,11 @@ Android credentials for this project.
 
 ## Search
 
-Search uses `minisearch`, an in-memory Lucene-style full-text index with prefix
-matching, fuzzy matching, and `AND` term combination.
+Search uses SQLite full-text search over todo titles and notes, with prefix
+matching and `AND` term combination.
 
 ## Storage
 
-Todos and app settings are stored locally through AsyncStorage. Google OAuth
-tokens are stored through SecureStore. Google Drive backup stores todos and app
-settings, but not OAuth tokens.
+Todos are stored locally through SQLite. App settings are stored through
+AsyncStorage. Google OAuth tokens are stored through SecureStore. Google Drive
+backup stores todos and app settings, but not OAuth tokens.

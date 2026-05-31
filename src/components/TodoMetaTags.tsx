@@ -168,15 +168,21 @@ export const TodoMetaTags = React.memo(TodoMetaTagsComponent);
 const styles = StyleSheet.create({
   metaRow: {
     alignItems: 'center',
+    alignSelf: 'stretch',
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     gap: 4,
     marginTop: 4,
+    minWidth: 0,
+    overflow: 'hidden',
+    width: '100%',
   },
   tag: {
     borderRadius: 4,
     borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 1,
     maxWidth: '100%',
+    minWidth: 0,
     paddingHorizontal: 5,
     paddingVertical: 1,
   },
@@ -184,9 +190,11 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   tagText: {
+    flexShrink: 1,
     fontSize: 10,
     fontWeight: FONT_MEDIUM,
     lineHeight: 13,
+    minWidth: 0,
   },
   tagTextDone: {
     opacity: 0.9,

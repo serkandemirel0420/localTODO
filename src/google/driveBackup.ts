@@ -1,8 +1,11 @@
 import {
+  cloneDeletedTodos,
   cloneTodoFilters,
   formatListLabel,
+  normalizeDeletedTodos,
   normalizeTodo,
   normalizeTodoFilters,
+  type DeletedTodo,
   type Todo,
   type TodoFilters,
 } from '../todos';
@@ -48,6 +51,7 @@ export type BackupMenuPreset = {
 
 export type BackupSettings = {
   collapsedTodoGroupIds: string[];
+  deletedTodos: DeletedTodo[];
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
@@ -331,6 +335,7 @@ export const createBackupPayload = (
     schemaVersion: 1,
     settings: {
       collapsedTodoGroupIds: [...settings.collapsedTodoGroupIds],
+      deletedTodos: cloneDeletedTodos(settings.deletedTodos),
       filterColors: cloneFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
       googleDriveLastBackupAt: exportedAt,
@@ -361,6 +366,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
     schemaVersion: 1,
     settings: {
       collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
+      deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
       filterColors: normalizeFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,
       googleDriveLastBackupAt:

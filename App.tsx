@@ -8,6 +8,7 @@ import DateTimePicker, {
 } from '@react-native-community/datetimepicker';
 import React, {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -64,7 +65,6 @@ import {
   startOfDay,
   toISODateString,
 } from './src/dates';
-import { createTodoSearchIndex, searchTodos } from './src/search/todoSearch';
 import { localTodoStore } from './src/storage/todoStore';
 import {
   cloneTodoFilters,
@@ -390,6 +390,7 @@ const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const MENU_DISMISS_RELEASE = 52;
 const MENU_DISMISS_VELOCITY = 680;
+const TODO_DELETE_HIDE_DELAY_MS = 3000;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
@@ -505,12 +506,10 @@ const INITIAL_TODOS = Array.from({ length: 50 }, (_, index) => ({
   filters: cloneTodoFilters(),
 }));
 
-const withInitialTodos = (storedTodos: Todo[]) => {
-  const storedIds = new Set(storedTodos.map((todo) => todo.id));
-  const missingSeeds = INITIAL_TODOS.filter((todo) => !storedIds.has(todo.id));
-
-  return [...storedTodos, ...missingSeeds];
-};
+const cloneInitialTodos = () => INITIAL_TODOS.map((todo) => ({
+  ...todo,
+  filters: cloneTodoFilters(todo.filters),
+}));
 
 const getGoogleClientIdForPlatform = () => {
   if (Platform.OS === 'ios') {
@@ -718,9 +717,13 @@ export default function App() {
     [windowWidth],
   );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
+  const todoDetailCardMaxHeight = Math.round(windowHeight * 0.72);
+  const todoDetailContentInputMaxHeight = Math.max(160, Math.round(windowHeight * 0.38));
   const [todos, setTodos] = useState<Todo[]>([]);
   const [createDrawerKeyboardInset, setCreateDrawerKeyboardInset] = useState(0);
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+  const [searchResultIds, setSearchResultIds] = useState<string[] | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
@@ -738,6 +741,9 @@ export default function App() {
   const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
+  const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
+  const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
+  const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
   const [presetSaveName, setPresetSaveName] = useState('');
@@ -758,6 +764,9 @@ export default function App() {
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
@@ -778,8 +787,14 @@ export default function App() {
   const createContentInputRef = useRef<TextInput>(null);
   const createInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
+  const todoDetailContentInputRef = useRef<TextInput>(null);
+  const todoDetailDraftTodoIdRef = useRef<string | null>(null);
   const listMenuRef = useRef<GestureFlatList<BottomMenuItem> | null>(null);
   const todoListRef = useRef<FlashListRef<VisibleTodoListRow> | null>(null);
+  const pendingDeleteTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  const searchRequestIdRef = useRef(0);
   const scrollOffsetY = useRef(0);
   const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
@@ -824,14 +839,33 @@ export default function App() {
   useEffect(() => {
     let alive = true;
 
-    localTodoStore
-      .load()
-      .then((storedTodos) => {
+    const loadTodos = async () => {
+      const [storedTodos, initialSeeded] = await Promise.all([
+        localTodoStore.load(),
+        localTodoStore.hasInitialSeeded(),
+      ]);
+
+      if (!initialSeeded && storedTodos.length === 0) {
+        const seededTodos = cloneInitialTodos();
+        await localTodoStore.replaceAll(seededTodos);
+        await localTodoStore.markInitialSeeded();
+        return seededTodos;
+      }
+
+      if (!initialSeeded) {
+        await localTodoStore.markInitialSeeded();
+      }
+
+      return storedTodos;
+    };
+
+    loadTodos()
+      .then((loadedTodos) => {
         if (!alive) {
           return;
         }
 
-        setTodos(withInitialTodos(storedTodos));
+        setTodos(loadedTodos);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -845,17 +879,13 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!loaded) {
-      return;
-    }
-
-    const saveTimer = setTimeout(() => {
-      localTodoStore.save(todos).catch(() => undefined);
-    }, 300);
-
-    return () => clearTimeout(saveTimer);
-  }, [loaded, todos]);
+  useEffect(
+    () => () => {
+      pendingDeleteTimersRef.current.forEach((timer) => clearTimeout(timer));
+      pendingDeleteTimersRef.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -916,6 +946,7 @@ export default function App() {
       selectedFilters,
       todoGroupMode,
       todoSortMode,
+      deletedTodos: [],
     };
 
     appSettingsStore.save(settings).catch(() => undefined);
@@ -980,6 +1011,36 @@ export default function App() {
     closeListMenuState();
     Haptics.selectionAsync().catch(() => undefined);
   }, [closeListMenuState]);
+
+  const closeTodoDetailModal = useCallback(() => {
+    Keyboard.dismiss();
+    setActiveTodoDetailId(null);
+    setActiveTodoDetailDraftContent('');
+    setActiveTodoDetailDraftText('');
+    todoDetailDraftTodoIdRef.current = null;
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const openTodoDetailModal = useCallback((id: string) => {
+    if (pendingDeleteIds.has(id)) {
+      return;
+    }
+
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    const todo = todos.find((item) => item.id === id);
+
+    if (listMenuOpen) {
+      closeListMenu();
+    }
+
+    setNavTab((current) => (current === 'search' ? null : current));
+    setActiveTodoDetailDraftContent(todo?.content ?? '');
+    setActiveTodoDetailDraftText(todo?.text ?? '');
+    todoDetailDraftTodoIdRef.current = id;
+    setActiveTodoDetailId(id);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [closeListMenu, listMenuOpen, pendingDeleteIds, todos]);
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
     if (translationY <= 0) {
@@ -1208,6 +1269,11 @@ export default function App() {
   }, []);
 
   const goBackInMenu = useCallback(() => {
+    if (activeTodoDetailId) {
+      closeTodoDetailModal();
+      return true;
+    }
+
     if (datePickerVisible) {
       setDatePickerVisible(false);
       return true;
@@ -1256,10 +1322,12 @@ export default function App() {
 
     return false;
   }, [
+    activeTodoDetailId,
     backToCreateDrawerInput,
     closeListMenu,
     closePresetSaveModal,
     closeSettingsModal,
+    closeTodoDetailModal,
     createDrawerPicker,
     createDrawerVisible,
     datePickerVisible,
@@ -1279,22 +1347,51 @@ export default function App() {
     return () => subscription.remove();
   }, [goBackInMenu]);
 
-  const searchIndex = useMemo(() => {
-    if (!query.trim()) {
-      return null;
+  const searchQuery = deferredQuery.trim();
+  const todosById = useMemo(
+    () => new Map(todos.map((todo) => [todo.id, todo])),
+    [todos],
+  );
+
+  useEffect(() => {
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+
+    if (!searchQuery) {
+      setSearchResultIds(null);
+      return undefined;
     }
 
-    return createTodoSearchIndex(todos);
-  }, [query, todos]);
+    setSearchResultIds([]);
+
+    let alive = true;
+    localTodoStore.search(searchQuery)
+      .then((matchedTodos) => {
+        if (alive && searchRequestIdRef.current === requestId) {
+          setSearchResultIds(matchedTodos.map((todo) => todo.id));
+        }
+      })
+      .catch(() => {
+        if (alive && searchRequestIdRef.current === requestId) {
+          setSearchResultIds([]);
+        }
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [searchQuery]);
 
   const filteredTodos = useMemo(() => {
-    const matchedTodos = searchIndex
-      ? searchTodos(todos, searchIndex, query)
+    const matchedTodos = searchQuery
+      ? (searchResultIds ?? [])
+        .map((id) => todosById.get(id))
+        .filter((todo): todo is Todo => Boolean(todo))
       : todos;
 
     return matchedTodos
       .filter((todo) => todoMatchesFilters(todo, selectedFilters, listMenuTree));
-  }, [listMenuTree, query, searchIndex, selectedFilters, todos]);
+  }, [listMenuTree, searchQuery, searchResultIds, selectedFilters, todos, todosById]);
 
   const closeCreateDrawer = useCallback(() => {
     Keyboard.dismiss();
@@ -1373,7 +1470,10 @@ export default function App() {
     }
 
     const exists = todos.some(
-      (todo) => normalizeTodoText(todo.text) === normalizeTodoText(text),
+      (todo) => (
+        !pendingDeleteIds.has(todo.id) &&
+        normalizeTodoText(todo.text) === normalizeTodoText(text)
+      ),
     );
     if (exists) {
       Keyboard.dismiss();
@@ -1381,7 +1481,10 @@ export default function App() {
       return;
     }
 
-    setTodos((current) => [makeTodo(text, createDraftFilters, content), ...current]);
+    const todo = makeTodo(text, createDraftFilters, content);
+
+    setTodos((current) => [todo, ...current]);
+    localTodoStore.upsert(todo).catch(() => undefined);
     closeCreateDrawer();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
       () => undefined,
@@ -1391,6 +1494,7 @@ export default function App() {
     createDraftContent,
     createDraftFilters,
     createDraftText,
+    pendingDeleteIds,
     todoTextMaxLength,
     todos,
   ]);
@@ -1483,29 +1587,85 @@ export default function App() {
   }, []);
 
   const deleteTodo = useCallback((id: string) => {
-    setTodos((current) => current.filter((todo) => todo.id !== id));
-  }, []);
+    if (!todos.some((todo) => todo.id === id) || pendingDeleteIds.has(id)) {
+      return;
+    }
+
+    localTodoStore.delete(id).catch(() => undefined);
+
+    setPendingDeleteIds((current) => {
+      if (current.has(id)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.add(id);
+      return next;
+    });
+    setActiveTodoMenuId((current) => (current === id ? null : current));
+    setActiveTodoDetailId((current) => (current === id ? null : current));
+
+    const existingTimer = pendingDeleteTimersRef.current.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      pendingDeleteTimersRef.current.delete(id);
+      setTodos((current) => current.filter((todo) => todo.id !== id));
+      setPendingDeleteIds((current) => {
+        if (!current.has(id)) {
+          return current;
+        }
+
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }, TODO_DELETE_HIDE_DELAY_MS);
+
+    pendingDeleteTimersRef.current.set(id, timer);
+  }, [pendingDeleteIds, todos]);
 
   const setTodoDone = useCallback((id: string, done: boolean) => {
+    if (pendingDeleteIds.has(id)) {
+      return;
+    }
+
     setTodos((current) =>
       current.map((todo) => (
         todo.id === id && todo.done !== done ? { ...todo, done } : todo
       )),
     );
-  }, []);
+    localTodoStore.updateDone(id, done).catch(() => undefined);
+  }, [pendingDeleteIds]);
 
   const updateTodoFilters = useCallback((
     id: string,
     updater: (filters: SelectedFilters) => SelectedFilters,
   ) => {
-    setTodos((current) =>
-      current.map((todo) => (
-        todo.id === id
-          ? { ...todo, filters: updater(cloneTodoFilters(todo.filters)) }
-          : todo
-      )),
-    );
-  }, []);
+    if (pendingDeleteIds.has(id)) {
+      return;
+    }
+
+    setTodos((current) => {
+      let nextFilters: TodoFilters | null = null;
+      const nextTodos = current.map((todo) => {
+        if (todo.id !== id) {
+          return todo;
+        }
+
+        nextFilters = updater(cloneTodoFilters(todo.filters));
+        return { ...todo, filters: nextFilters };
+      });
+
+      if (nextFilters) {
+        localTodoStore.updateFilters(id, nextFilters).catch(() => undefined);
+      }
+
+      return nextTodos;
+    });
+  }, [pendingDeleteIds]);
 
   const closeDatePicker = useCallback(() => {
     setDatePickerVisible(false);
@@ -1790,9 +1950,13 @@ export default function App() {
     () => [...collapsedTodoGroupIds].sort().join('|'),
     [collapsedTodoGroupIds],
   );
+  const pendingDeleteKey = useMemo(
+    () => [...pendingDeleteIds].sort().join('|'),
+    [pendingDeleteIds],
+  );
   const todoListExtraData = useMemo(
-    () => ({ activeTodoMenuId, collapsedTodoGroupKey, menuMode }),
-    [activeTodoMenuId, collapsedTodoGroupKey, menuMode],
+    () => ({ activeTodoMenuId, collapsedTodoGroupKey, menuMode, pendingDeleteKey }),
+    [activeTodoMenuId, collapsedTodoGroupKey, menuMode, pendingDeleteKey],
   );
   const todoListOneHandedOffset = useMemo(() => {
     if (visibleTodoListRows.length === 0) {
@@ -1817,6 +1981,85 @@ export default function App() {
     () => todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null,
     [activeTodoMenuId, todos],
   );
+  const activeTodoDetail = useMemo(
+    () => todos.find((todo) => todo.id === activeTodoDetailId) ?? null,
+    [activeTodoDetailId, todos],
+  );
+  useEffect(() => {
+    if (!activeTodoDetail) {
+      if (activeTodoDetailId !== null) {
+        setActiveTodoDetailId(null);
+      }
+      setActiveTodoDetailDraftContent('');
+      setActiveTodoDetailDraftText('');
+      todoDetailDraftTodoIdRef.current = null;
+      return;
+    }
+
+    if (todoDetailDraftTodoIdRef.current === activeTodoDetail.id) {
+      return;
+    }
+
+    setActiveTodoDetailDraftContent(activeTodoDetail.content);
+    setActiveTodoDetailDraftText(activeTodoDetail.text);
+    todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
+  }, [activeTodoDetail, activeTodoDetailId]);
+  const activeTodoDetailDraftTextForSave = useMemo(
+    () => truncateTodoText(
+      activeTodoDetailDraftText.trim().replace(/\s+/g, ' '),
+      todoTextMaxLength,
+    ),
+    [activeTodoDetailDraftText, todoTextMaxLength],
+  );
+  const activeTodoDetailDraftContentForSave = useMemo(
+    () => normalizeTodoContent(activeTodoDetailDraftContent),
+    [activeTodoDetailDraftContent],
+  );
+  const activeTodoDetailHasChanges = Boolean(
+    activeTodoDetail &&
+      (
+        activeTodoDetail.text !== activeTodoDetailDraftTextForSave ||
+        activeTodoDetail.content !== activeTodoDetailDraftContentForSave
+      ),
+  );
+  const activeTodoDetailCanSave = Boolean(
+    activeTodoDetail &&
+      activeTodoDetailHasChanges &&
+      activeTodoDetailDraftTextForSave.length > 0,
+  );
+  const saveActiveTodoDetail = useCallback(() => {
+    if (!activeTodoDetail || !activeTodoDetailCanSave) {
+      return;
+    }
+
+    const todoId = activeTodoDetail.id;
+    const updatedTodo: Todo = {
+      ...activeTodoDetail,
+      content: activeTodoDetailDraftContentForSave,
+      text: activeTodoDetailDraftTextForSave,
+    };
+    setTodos((current) =>
+      current.map((todo) => (
+        todo.id === todoId
+          ? { ...todo, content: updatedTodo.content, text: updatedTodo.text }
+          : todo
+      )),
+    );
+    localTodoStore.upsert(updatedTodo).catch(() => undefined);
+    Keyboard.dismiss();
+    setActiveTodoDetailId(null);
+    setActiveTodoDetailDraftContent('');
+    setActiveTodoDetailDraftText('');
+    todoDetailDraftTodoIdRef.current = null;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+      () => undefined,
+    );
+  }, [
+    activeTodoDetail,
+    activeTodoDetailCanSave,
+    activeTodoDetailDraftContentForSave,
+    activeTodoDetailDraftTextForSave,
+  ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const activeFilterCount = countFilters(menuFilters);
   const searchFilterItems = useMemo(
@@ -2575,13 +2818,19 @@ export default function App() {
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
-      setTodos((items) => items.map((todo) => ({
-        ...todo,
-        filters: {
-          ...todo.filters,
-          list: todo.filters.list.filter((label) => !removedLabels.has(label)),
-        },
-      })));
+      setTodos((items) => {
+        const nextItems = items.map((todo) => ({
+          ...todo,
+          filters: {
+            ...todo.filters,
+            list: todo.filters.list.filter((label) => !removedLabels.has(label)),
+          },
+        }));
+        localTodoStore
+          .upsertMany(nextItems.filter((todo) => !pendingDeleteIds.has(todo.id)))
+          .catch(() => undefined);
+        return nextItems;
+      });
 
       const children = parent.children.filter((_, index) => index !== childIndex);
       return current.map((item, index) => (
@@ -2591,7 +2840,7 @@ export default function App() {
       ));
     });
     Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+  }, [pendingDeleteIds]);
 
   const removeSettingsList = useCallback((index: number) => {
     setListMenuTree((current) => {
@@ -2605,13 +2854,19 @@ export default function App() {
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
-      setTodos((items) => items.map((todo) => ({
-        ...todo,
-        filters: {
-          ...todo.filters,
-          list: todo.filters.list.filter((label) => !removedLabels.has(label)),
-        },
-      })));
+      setTodos((items) => {
+        const nextItems = items.map((todo) => ({
+          ...todo,
+          filters: {
+            ...todo.filters,
+            list: todo.filters.list.filter((label) => !removedLabels.has(label)),
+          },
+        }));
+        localTodoStore
+          .upsertMany(nextItems.filter((todo) => !pendingDeleteIds.has(todo.id)))
+          .catch(() => undefined);
+        return nextItems;
+      });
       setFilterColors((colors) => ({
         ...colors,
         list: Object.fromEntries(
@@ -2622,7 +2877,7 @@ export default function App() {
       return current.filter((_, itemIndex) => itemIndex !== index);
     });
     Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+  }, [pendingDeleteIds]);
 
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
@@ -2882,8 +3137,10 @@ export default function App() {
   const uploadBackupWithToken = useCallback(async (accessToken: string) => {
     setGoogleDriveBackupStatus('Backing up to Google Drive...');
 
-    const payload = createBackupPayload(todos, {
+    const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
+    const payload = createBackupPayload(backupTodos, {
       collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+      deletedTodos: [],
       filterColors,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
@@ -2898,7 +3155,9 @@ export default function App() {
     });
     await uploadDriveBackup(accessToken, payload);
     setGoogleDriveLastBackupAt(payload.exportedAt);
-    setGoogleDriveBackupStatus(`Backed up ${todos.length} items · ${formatBackupTime(payload.exportedAt)}`);
+    setGoogleDriveBackupStatus(
+      `Backed up ${backupTodos.length} items · ${formatBackupTime(payload.exportedAt)}`,
+    );
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   }, [
     collapsedTodoGroupIds,
@@ -2910,6 +3169,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    pendingDeleteIds,
     selectedFilters,
     todoGroupMode,
     todoSortMode,
@@ -2927,7 +3187,12 @@ export default function App() {
     }
 
     const restoredAt = new Date().toISOString();
-    setTodos(withInitialTodos(backup.payload.todos));
+    setPendingDeleteIds(new Set());
+    pendingDeleteTimersRef.current.forEach((timer) => clearTimeout(timer));
+    pendingDeleteTimersRef.current.clear();
+    await localTodoStore.replaceAll(backup.payload.todos);
+    await localTodoStore.markInitialSeeded();
+    setTodos(backup.payload.todos);
     setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
     setFilterColors(backup.payload.settings.filterColors);
     setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
@@ -3150,6 +3415,10 @@ export default function App() {
   ]);
 
   const openMenuForTodoAction = useCallback((id: string) => {
+    if (pendingDeleteIds.has(id)) {
+      return;
+    }
+
     setActiveTodoMenuId(id);
     Keyboard.dismiss();
     setMenuMode('main');
@@ -3161,7 +3430,7 @@ export default function App() {
     });
 
     Haptics.selectionAsync().catch(() => undefined);
-  }, [scrollTodoAboveMenu]);
+  }, [pendingDeleteIds, scrollTodoAboveMenu]);
 
   const groupedHiddenMetaTagKinds = useMemo((): HiddenMetaTagKind[] => {
     if (effectiveGroupMode === 'date') return ['date'];
@@ -3224,6 +3493,8 @@ export default function App() {
       }
 
       if (item.type === 'groupedTodo') {
+        const isPendingDelete = pendingDeleteIds.has(item.todo.id);
+
         return (
           <View>
             {renderVisibleTodoRowGap(item.gapBefore)}
@@ -3238,10 +3509,16 @@ export default function App() {
                 filterColors={filterColors}
                 hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
                 item={item.todo}
-                isMenuTarget={menuMode !== null && activeTodoMenuId === item.todo.id}
+                isMenuTarget={
+                  !isPendingDelete &&
+                  menuMode !== null &&
+                  activeTodoMenuId === item.todo.id
+                }
+                isPendingDelete={isPendingDelete}
                 layout="grouped"
                 metaTagVisibility={metaTagVisibility}
                 onDelete={deleteTodo}
+                onOpenDetail={openTodoDetailModal}
                 onOpenMenu={openMenuForTodoAction}
                 onSetDone={setTodoDone}
                 sectionLabel={item.sectionLabel}
@@ -3251,15 +3528,23 @@ export default function App() {
         );
       }
 
+      const isPendingDelete = pendingDeleteIds.has(item.todo.id);
+
       return (
         <View>
           {renderVisibleTodoRowGap(item.gapBefore)}
           <TodoRow
             filterColors={filterColors}
             item={item.todo}
-            isMenuTarget={menuMode !== null && activeTodoMenuId === item.todo.id}
+            isMenuTarget={
+              !isPendingDelete &&
+              menuMode !== null &&
+              activeTodoMenuId === item.todo.id
+            }
+            isPendingDelete={isPendingDelete}
             metaTagVisibility={metaTagVisibility}
             onDelete={deleteTodo}
+            onOpenDetail={openTodoDetailModal}
             onOpenMenu={openMenuForTodoAction}
             onSetDone={setTodoDone}
           />
@@ -3274,7 +3559,9 @@ export default function App() {
       groupedHiddenMetaTagKinds,
       menuMode,
       metaTagVisibility,
+      openTodoDetailModal,
       openMenuForTodoAction,
+      pendingDeleteIds,
       renderVisibleTodoRowGap,
       setTodoDone,
       toggleTodoGroupCollapsed,
@@ -4096,6 +4383,99 @@ export default function App() {
 
         <Modal
           animationType="fade"
+          onRequestClose={closeTodoDetailModal}
+          statusBarTranslucent={Platform.OS === 'android'}
+          transparent
+          visible={activeTodoDetail !== null}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.todoDetailModalRoot}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close todo details"
+              onPress={closeTodoDetailModal}
+              style={styles.todoDetailBackdrop}
+            />
+            <View
+              accessibilityViewIsModal
+              style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
+            >
+              <View style={styles.todoDetailHeader}>
+                <TextInput
+                  autoCapitalize="sentences"
+                  autoCorrect
+                  multiline
+                  onChangeText={setActiveTodoDetailDraftText}
+                  onSubmitEditing={() => todoDetailContentInputRef.current?.focus()}
+                  placeholder="Task title"
+                  placeholderTextColor="#B5ADA5"
+                  returnKeyType="next"
+                  selectionColor="#2F6F62"
+                  scrollEnabled={false}
+                  style={styles.todoDetailTitleInput}
+                  textAlignVertical="top"
+                  value={activeTodoDetailDraftText}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    activeTodoDetailHasChanges ? 'Save todo changes' : 'Close todo details'
+                  }
+                  accessibilityState={{
+                    disabled: activeTodoDetailHasChanges && !activeTodoDetailCanSave,
+                  }}
+                  disabled={activeTodoDetailHasChanges && !activeTodoDetailCanSave}
+                  hitSlop={8}
+                  onPress={activeTodoDetailHasChanges ? saveActiveTodoDetail : closeTodoDetailModal}
+                  style={({ pressed }) => [
+                    styles.todoDetailCloseButton,
+                    activeTodoDetailHasChanges && styles.todoDetailSaveButton,
+                    activeTodoDetailHasChanges &&
+                      !activeTodoDetailCanSave &&
+                      styles.todoDetailSaveButtonDisabled,
+                    pressed && styles.todoDetailCloseButtonPressed,
+                  ]}
+                >
+                  <Ionicons
+                    color={
+                      activeTodoDetailHasChanges
+                        ? activeTodoDetailCanSave
+                          ? THEME_ACCENT
+                          : '#AFA8A0'
+                        : '#2A2520'
+                    }
+                    name={activeTodoDetailHasChanges ? 'checkmark' : 'close'}
+                    size={21}
+                  />
+                </Pressable>
+              </View>
+              <View style={styles.todoDetailContentContainer}>
+                <TextInput
+                  ref={todoDetailContentInputRef}
+                  autoCapitalize="sentences"
+                  autoCorrect
+                  multiline
+                  onChangeText={setActiveTodoDetailDraftContent}
+                  placeholder="Content"
+                  placeholderTextColor="#B5ADA5"
+                  selectionColor="#2F6F62"
+                  scrollEnabled
+                  style={[
+                    styles.todoDetailContentInput,
+                    { maxHeight: todoDetailContentInputMaxHeight },
+                  ]}
+                  textAlignVertical="top"
+                  value={activeTodoDetailDraftContent}
+                />
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+
+        <Modal
+          animationType="fade"
           onRequestClose={closeCreateDrawer}
           statusBarTranslucent={Platform.OS === 'android'}
           transparent
@@ -4428,7 +4808,7 @@ export default function App() {
                       <View style={styles.settingsRowTextWrap}>
                         <Text style={styles.settingsRowTitle}>Backup all data</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          {todos.length} todos · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
+                          {Math.max(0, todos.length - pendingDeleteIds.size)} items · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
                         </Text>
                       </View>
                       <View
@@ -4518,20 +4898,19 @@ export default function App() {
                   </View>
                 ) : null}
               </View>
-
-              <View style={styles.settingsSection}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: settingsListsExpanded }}
-                  {...getInstantPressHandlers(
-                    'settings:lists',
-                    () => setSettingsListsExpanded((current) => !current),
-                  )}
-                  style={({ pressed }) => [
-                    styles.settingsSectionHeader,
-                    pressed && styles.settingsOptionRowPressed,
-                  ]}
-                >
+                <View style={styles.settingsSection}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsListsExpanded }}
+                    {...getInstantPressHandlers(
+                      'settings:lists',
+                      () => setSettingsListsExpanded((current) => !current),
+                    )}
+                    style={({ pressed }) => [
+                      styles.settingsSectionHeader,
+                      pressed && styles.settingsOptionRowPressed,
+                    ]}
+                  >
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Lists</Text>
                     <Text style={styles.settingsSectionSubtitle}>
@@ -4971,6 +5350,91 @@ const styles = StyleSheet.create({
   settingsModal: {
     flex: 1,
     backgroundColor: THEME_BG,
+  },
+  todoDetailModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingVertical: TOP_SAFE_GAP + 24,
+  },
+  todoDetailBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(30, 27, 24, 0.42)',
+  },
+  todoDetailCard: {
+    alignSelf: 'stretch',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4DDD4',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  todoDetailHeader: {
+    alignItems: 'flex-start',
+    borderBottomColor: '#F0E9E1',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 12,
+    paddingBottom: 14,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+  },
+  todoDetailTitleInput: {
+    color: THEME_TEXT,
+    flex: 1,
+    fontSize: 21,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0,
+    lineHeight: 27,
+    maxHeight: 88,
+    minHeight: 34,
+    minWidth: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
+  todoDetailCloseButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_BG,
+    borderColor: '#E8E2DA',
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 34,
+    justifyContent: 'center',
+    marginTop: -2,
+    width: 34,
+  },
+  todoDetailCloseButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.96 }],
+  },
+  todoDetailSaveButton: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#D6E0FF',
+  },
+  todoDetailSaveButtonDisabled: {
+    backgroundColor: '#F2EFEA',
+    borderColor: '#E8E2DA',
+  },
+  todoDetailContentContainer: {
+    paddingBottom: 20,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
+  todoDetailContentInput: {
+    color: '#3A332E',
+    fontSize: 17,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 25,
+    minHeight: 150,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
   },
   presetSaveModalBackdrop: {
     flex: 1,

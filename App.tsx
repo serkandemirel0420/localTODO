@@ -399,6 +399,8 @@ const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
 const TODO_MENU_TARGET_TOP_OFFSET = 12;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
+const TODO_GROUP_EXPANSION_SETTLE_MS = 120;
+const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
   if (item.type === 'sectionHeader') {
@@ -771,6 +773,7 @@ export default function App() {
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [settlingTodoGroupId, setSettlingTodoGroupId] = useState<string | null>(null);
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
   const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
     () => cloneMetaTagVisibility(),
@@ -835,6 +838,16 @@ export default function App() {
   const googleDriveActionReady =
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
   const getInstantPressHandlers = useInstantPress();
+  const settlingTodoGroupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (settlingTodoGroupTimerRef.current) {
+        clearTimeout(settlingTodoGroupTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -949,7 +962,11 @@ export default function App() {
       deletedTodos: [],
     };
 
-    appSettingsStore.save(settings).catch(() => undefined);
+    const saveTimer = setTimeout(() => {
+      appSettingsStore.save(settings).catch(() => undefined);
+    }, SETTINGS_SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(saveTimer);
   }, [
     collapsedTodoGroupIds,
     filterColors,
@@ -1946,17 +1963,13 @@ export default function App() {
     () => flattenTodoListRows(todoListRows, collapsedTodoGroupIds),
     [collapsedTodoGroupIds, todoListRows],
   );
-  const collapsedTodoGroupKey = useMemo(
-    () => [...collapsedTodoGroupIds].sort().join('|'),
-    [collapsedTodoGroupIds],
-  );
   const pendingDeleteKey = useMemo(
     () => [...pendingDeleteIds].sort().join('|'),
     [pendingDeleteIds],
   );
   const todoListExtraData = useMemo(
-    () => ({ activeTodoMenuId, collapsedTodoGroupKey, menuMode, pendingDeleteKey }),
-    [activeTodoMenuId, collapsedTodoGroupKey, menuMode, pendingDeleteKey],
+    () => ({ activeTodoMenuId, menuMode, pendingDeleteKey, settlingTodoGroupId }),
+    [activeTodoMenuId, menuMode, pendingDeleteKey, settlingTodoGroupId],
   );
   const todoListOneHandedOffset = useMemo(() => {
     if (visibleTodoListRows.length === 0) {
@@ -2506,7 +2519,23 @@ export default function App() {
   }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
-    todoListRef.current?.clearLayoutCacheOnUpdate();
+    const isOpening = collapsedTodoGroupIds.has(groupId);
+
+    if (settlingTodoGroupTimerRef.current) {
+      clearTimeout(settlingTodoGroupTimerRef.current);
+      settlingTodoGroupTimerRef.current = null;
+    }
+
+    if (isOpening) {
+      setSettlingTodoGroupId(groupId);
+      settlingTodoGroupTimerRef.current = setTimeout(() => {
+        setSettlingTodoGroupId((current) => (current === groupId ? null : current));
+        settlingTodoGroupTimerRef.current = null;
+      }, TODO_GROUP_EXPANSION_SETTLE_MS);
+    } else {
+      todoListRef.current?.clearLayoutCacheOnUpdate();
+      setSettlingTodoGroupId((current) => (current === groupId ? null : current));
+    }
 
     setCollapsedTodoGroupIds((current) => {
       const next = new Set(current);
@@ -2518,7 +2547,7 @@ export default function App() {
 
       return next;
     });
-  }, []);
+  }, [collapsedTodoGroupIds]);
 
   const toggleMetaTagVisibility = useCallback((key: MetaTagKey) => {
     setMetaTagVisibility((current) => ({
@@ -3522,6 +3551,10 @@ export default function App() {
                 onOpenMenu={openMenuForTodoAction}
                 onSetDone={setTodoDone}
                 sectionLabel={item.sectionLabel}
+                deferSwipeable={
+                  settlingTodoGroupId !== null &&
+                  item.id.startsWith(`${settlingTodoGroupId}::`)
+                }
               />
             </View>
           </View>
@@ -3564,6 +3597,7 @@ export default function App() {
       pendingDeleteIds,
       renderVisibleTodoRowGap,
       setTodoDone,
+      settlingTodoGroupId,
       toggleTodoGroupCollapsed,
     ],
   );

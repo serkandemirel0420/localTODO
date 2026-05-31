@@ -60,6 +60,7 @@ type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
 let openTodoSwipeable: Swipeable | null = null;
 
 export type TodoRowProps = {
+  deferSwipeable?: boolean;
   filterColors: FilterColorSettings;
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
   item: Todo;
@@ -75,6 +76,7 @@ export type TodoRowProps = {
 };
 
 function TodoRowComponent({
+  deferSwipeable = false,
   filterColors,
   hiddenMetaTagKinds = [],
   item,
@@ -93,7 +95,7 @@ function TodoRowComponent({
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
   const fallbackRowHeight = isGroupedLayout ? 52 : 56;
-  const swipeActionAreaHeight = rowHeight ?? fallbackRowHeight;
+  const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
   const swipeActionInset = isGroupedLayout ? 2 : 0;
   const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
   const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
@@ -115,7 +117,7 @@ function TodoRowComponent({
   const content = item.content.trim();
   const contentPreview = content.replace(/\s+/g, ' ');
   const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
-  const swipeEnabled = !isPendingDelete && !isMenuTarget;
+  const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget;
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -516,6 +518,123 @@ function TodoRowComponent({
     ],
   );
 
+  const rowContent = (
+    <View
+      onLayout={isGroupedLayout ? undefined : handleRowLayout}
+      style={[
+        styles.row,
+        isGroupedLayout && styles.rowGrouped,
+        !isHighlightedForMenu && !isGroupedLayout && todoColorTheme && !item.done && {
+          backgroundColor: todoColorTheme.tint,
+          borderColor: todoColorTheme.border,
+          shadowColor: todoColorTheme.accent,
+        },
+        isPendingDelete && styles.rowPendingDelete,
+        isHighlightedForMenu && (
+          isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
+        ),
+      ]}
+    >
+      {!isGroupedLayout && todoColorTheme ? (
+        <View
+          style={[
+            styles.colorRail,
+            { backgroundColor: todoColorTheme.accent },
+            item.done && styles.colorRailDone,
+          ]}
+        />
+      ) : null}
+      <GestureTouchableOpacity
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: item.done }}
+        accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
+        activeOpacity={0.72}
+        disabled={isPendingDelete}
+        onPress={toggleDoneFromCheckbox}
+        style={styles.checkboxPressable}
+      >
+        <View
+          style={[
+            styles.checkbox,
+            item.done && styles.checkboxChecked,
+          ]}
+        >
+          {item.done ? (
+            <Ionicons color={THEME_CARD} name="checkmark" size={14} />
+          ) : null}
+        </View>
+      </GestureTouchableOpacity>
+      <GestureTouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={
+          isPendingDelete ? `Deleting todo: ${item.text}` : `Open todo details: ${item.text}`
+        }
+        activeOpacity={1}
+        delayLongPress={280}
+        disabled={isPendingDelete}
+        onLongPress={openRowActions}
+        onPress={handleTodoPress}
+        style={styles.textPressable}
+      >
+        <View style={styles.contentColumn}>
+          <Text
+            numberOfLines={2}
+            style={[
+              styles.text,
+              item.done && styles.textDone,
+              isPendingDelete && styles.textPendingDelete,
+            ]}
+          >
+            {item.text}
+          </Text>
+          {contentPreview ? (
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.content,
+                item.done && styles.contentDone,
+                isPendingDelete && styles.contentPendingDelete,
+              ]}
+            >
+              {contentPreview}
+            </Text>
+          ) : null}
+          {isPendingDelete ? (
+            <Text style={styles.pendingDeleteText}>Deleting...</Text>
+          ) : (
+            <TodoMetaTags
+              createdAt={item.createdAt}
+              dateLabel={rawDateStatusLabel || undefined}
+              done={item.done}
+              filterColors={filterColors}
+              listLabel={listStatusLabel || undefined}
+              priorityLabel={
+                priorityStatusLabel && priorityStatusLabel !== 'None'
+                  ? priorityStatusLabel
+                  : undefined
+              }
+              visibility={effectiveMetaTagVisibility}
+            />
+          )}
+          {!isPendingDelete && !isGroupedLayout && todoColorDots.length > 0 ? (
+            <View style={styles.colorDotRow}>
+              {todoColorDots.map((theme) => (
+                <View
+                  key={`${theme.filterKey}-${theme.value}`}
+                  style={[
+                    styles.colorDot,
+                    { backgroundColor: theme.accent },
+                    item.done && styles.colorDotDone,
+                  ]}
+                />
+              ))}
+            </View>
+          ) : null}
+        </View>
+      </GestureTouchableOpacity>
+    </View>
+  );
+
   return (
     <View
       style={[
@@ -525,150 +644,56 @@ function TodoRowComponent({
         isHighlightedForMenu && isGroupedLayout && styles.shellMenuTargetGrouped,
       ]}
     >
-      <Swipeable
-        key={isMenuTarget ? `${item.id}-menu` : item.id}
-        ref={swipeableRef}
-        animationOptions={{ bounciness: 2, speed: 18 }}
-        childrenContainerStyle={[
-          styles.swipeableChildren,
-          isGroupedLayout && styles.swipeableChildrenGrouped,
-        ]}
-        containerStyle={[
-          styles.swipeableContainer,
-          isGroupedLayout && styles.swipeableContainerGrouped,
-          { minHeight: swipeActionAreaHeight },
-        ]}
-        dragOffsetFromLeftEdge={12}
-        dragOffsetFromRightEdge={12}
-        enabled={swipeEnabled}
-        friction={1.35}
-        leftThreshold={LEFT_SWIPE_OPEN_DISTANCE}
-        onSwipeableClose={handleSwipeableClose}
-        onSwipeableOpen={handleSwipeableOpen}
-        onSwipeableOpenStartDrag={handleSwipeableOpenStartDrag}
-        onSwipeableWillClose={handleSwipeableWillClose}
-        onSwipeableWillOpen={handleSwipeableWillOpen}
-        overshootLeft={false}
-        overshootRight={false}
-        renderLeftActions={swipeEnabled ? renderLeftActions : undefined}
-        renderRightActions={swipeEnabled ? renderRightActions : undefined}
-        rightThreshold={RIGHT_SWIPE_OPEN_DISTANCE}
-      >
+      {deferSwipeable ? (
         <View
-          onLayout={handleRowLayout}
           style={[
-            styles.row,
-            isGroupedLayout && styles.rowGrouped,
-            !isHighlightedForMenu && !isGroupedLayout && todoColorTheme && !item.done && {
-              backgroundColor: todoColorTheme.tint,
-              borderColor: todoColorTheme.border,
-              shadowColor: todoColorTheme.accent,
-            },
-            isPendingDelete && styles.rowPendingDelete,
-            isHighlightedForMenu && (
-              isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
-            ),
+            styles.swipeableContainer,
+            isGroupedLayout && styles.swipeableContainerGrouped,
+            { minHeight: swipeActionAreaHeight },
           ]}
         >
-          {!isGroupedLayout && todoColorTheme ? (
-            <View
-              style={[
-                styles.colorRail,
-                { backgroundColor: todoColorTheme.accent },
-                item.done && styles.colorRailDone,
-              ]}
-            />
-          ) : null}
-          <GestureTouchableOpacity
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: item.done }}
-            accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
-            activeOpacity={0.72}
-            disabled={isPendingDelete}
-            onPress={toggleDoneFromCheckbox}
-            style={styles.checkboxPressable}
+          <View
+            style={[
+              styles.swipeableChildren,
+              isGroupedLayout && styles.swipeableChildrenGrouped,
+            ]}
           >
-            <View
-              style={[
-                styles.checkbox,
-                item.done && styles.checkboxChecked,
-              ]}
-            >
-              {item.done ? (
-                <Ionicons color={THEME_CARD} name="checkmark" size={14} />
-              ) : null}
-            </View>
-          </GestureTouchableOpacity>
-          <GestureTouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={
-              isPendingDelete ? `Deleting todo: ${item.text}` : `Open todo details: ${item.text}`
-            }
-            activeOpacity={1}
-            delayLongPress={280}
-            disabled={isPendingDelete}
-            onLongPress={openRowActions}
-            onPress={handleTodoPress}
-            style={styles.textPressable}
-          >
-            <View style={styles.contentColumn}>
-              <Text
-                numberOfLines={2}
-                style={[
-                  styles.text,
-                  item.done && styles.textDone,
-                  isPendingDelete && styles.textPendingDelete,
-                ]}
-              >
-                {item.text}
-              </Text>
-              {contentPreview ? (
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.content,
-                    item.done && styles.contentDone,
-                    isPendingDelete && styles.contentPendingDelete,
-                  ]}
-                >
-                  {contentPreview}
-                </Text>
-              ) : null}
-              {isPendingDelete ? (
-                <Text style={styles.pendingDeleteText}>Deleting...</Text>
-              ) : (
-                <TodoMetaTags
-                  createdAt={item.createdAt}
-                  dateLabel={rawDateStatusLabel || undefined}
-                  done={item.done}
-                  filterColors={filterColors}
-                  listLabel={listStatusLabel || undefined}
-                  priorityLabel={
-                    priorityStatusLabel && priorityStatusLabel !== 'None'
-                      ? priorityStatusLabel
-                      : undefined
-                  }
-                  visibility={effectiveMetaTagVisibility}
-                />
-              )}
-              {!isPendingDelete && !isGroupedLayout && todoColorDots.length > 0 ? (
-                <View style={styles.colorDotRow}>
-                  {todoColorDots.map((theme) => (
-                    <View
-                      key={`${theme.filterKey}-${theme.value}`}
-                      style={[
-                        styles.colorDot,
-                        { backgroundColor: theme.accent },
-                        item.done && styles.colorDotDone,
-                      ]}
-                    />
-                  ))}
-                </View>
-              ) : null}
-            </View>
-          </GestureTouchableOpacity>
+            {rowContent}
+          </View>
         </View>
-      </Swipeable>
+      ) : (
+        <Swipeable
+          key={isMenuTarget ? `${item.id}-menu` : item.id}
+          ref={swipeableRef}
+          animationOptions={{ bounciness: 2, speed: 18 }}
+          childrenContainerStyle={[
+            styles.swipeableChildren,
+            isGroupedLayout && styles.swipeableChildrenGrouped,
+          ]}
+          containerStyle={[
+            styles.swipeableContainer,
+            isGroupedLayout && styles.swipeableContainerGrouped,
+            { minHeight: swipeActionAreaHeight },
+          ]}
+          dragOffsetFromLeftEdge={12}
+          dragOffsetFromRightEdge={12}
+          enabled={swipeEnabled}
+          friction={1.35}
+          leftThreshold={LEFT_SWIPE_OPEN_DISTANCE}
+          onSwipeableClose={handleSwipeableClose}
+          onSwipeableOpen={handleSwipeableOpen}
+          onSwipeableOpenStartDrag={handleSwipeableOpenStartDrag}
+          onSwipeableWillClose={handleSwipeableWillClose}
+          onSwipeableWillOpen={handleSwipeableWillOpen}
+          overshootLeft={false}
+          overshootRight={false}
+          renderLeftActions={swipeEnabled ? renderLeftActions : undefined}
+          renderRightActions={swipeEnabled ? renderRightActions : undefined}
+          rightThreshold={RIGHT_SWIPE_OPEN_DISTANCE}
+        >
+          {rowContent}
+        </Swipeable>
+      )}
     </View>
   );
 }

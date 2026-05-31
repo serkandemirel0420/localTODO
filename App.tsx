@@ -42,7 +42,6 @@ import {
 } from 'react-native-gesture-handler';
 
 import {
-  formatCompactDateFilterLabel,
   formatDateFilterLabel,
   getInitialDatePickerValue,
   isDateFilterOverdue,
@@ -79,7 +78,6 @@ import {
   getFilterColorTheme,
   getTodoColorThemes,
   getTodoPrimaryColorTheme,
-  type FilterColorKey,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
@@ -107,7 +105,6 @@ WebBrowser.maybeCompleteAuthSession();
 
 type SwipeTodoItemProps = {
   filterColors: FilterColorSettings;
-  hiddenMetaFilterKeys?: FilterColorKey[];
   item: Todo;
   isMenuTarget: boolean;
   layout?: 'standalone' | 'grouped';
@@ -349,6 +346,7 @@ const THEME_TEXT_SECONDARY = '#8E8E93';
 const THEME_ACCENT = '#4C78FF';
 const THEME_ACCENT_SOFT = '#E8EEFF';
 const THEME_DANGER = '#D32F2F';
+const THEME_DANGER_SOFT = '#D9645A';
 const THEME_BORDER = '#E8EAED';
 const PULL_MAX = 178;
 const DOUBLE_TAP_DELAY = 300;
@@ -752,7 +750,7 @@ const getTodoGroup = (
 
   return {
     key: rawLabel,
-    label: formatCompactDateFilterLabel(rawLabel),
+    label: formatDateFilterLabel(rawLabel),
     rank: presetRank >= 0
       ? presetRank
       : customDate
@@ -900,7 +898,6 @@ const isOverdueStatusLabel = (label: string) => /overdue/i.test(label);
 
 function SwipeTodoItem({
   filterColors,
-  hiddenMetaFilterKeys = [],
   item,
   isMenuTarget,
   layout = 'standalone',
@@ -1041,7 +1038,8 @@ function SwipeTodoItem({
   const listStatusLabel = item.filters.list[0] ?? '';
   const showDateStatus = dateStatusLabel.length > 0;
   const showListStatus = listStatusLabel.length > 0;
-  const dateStatusIsOverdue = isDateFilterOverdue(rawDateStatusLabel)
+  const dateStatusIsOverdue = isOverdueStatusLabel(dateStatusLabel)
+    || isDateFilterOverdue(rawDateStatusLabel)
     || (sectionLabel ? isOverdueStatusLabel(sectionLabel) : false);
 
   const toggleDoneFromCheckbox = useCallback(() => {
@@ -1125,7 +1123,6 @@ function SwipeTodoItem({
               <View style={styles.todoMetaRow}>
                 {showDateStatus ? (
                   <Text
-                    numberOfLines={1}
                     style={[
                       styles.todoMetaDate,
                       dateStatusIsOverdue && styles.todoMetaDateOverdue,
@@ -1137,9 +1134,7 @@ function SwipeTodoItem({
                   <View style={styles.todoMetaSpacer} />
                 )}
                 {showListStatus ? (
-                  <Text numberOfLines={1} style={styles.todoMetaList}>
-                    {listStatusLabel}
-                  </Text>
+                  <Text style={styles.todoMetaList}>{listStatusLabel}</Text>
                 ) : null}
               </View>
             ) : null}
@@ -3474,22 +3469,6 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [scrollTodoAboveMenu]);
 
-  const groupedHiddenMetaFilterKeys = useMemo((): FilterColorKey[] => {
-    if (effectiveGroupMode === 'date') {
-      return ['date'];
-    }
-
-    if (effectiveGroupMode === 'list') {
-      return ['list'];
-    }
-
-    if (effectiveGroupMode === 'priority') {
-      return ['priority'];
-    }
-
-    return [];
-  }, [effectiveGroupMode]);
-
   const renderTodoItem = useCallback(
     ({ item }: { item: TodoListRow }) => {
       if (item.type === 'section') {
@@ -3525,7 +3504,6 @@ export default function App() {
                     {todoIndex > 0 ? <View style={styles.todoRowDivider} /> : null}
                     <MemoizedSwipeTodoItem
                       filterColors={filterColors}
-                      hiddenMetaFilterKeys={groupedHiddenMetaFilterKeys}
                       item={todo}
                       isMenuTarget={menuMode !== null && activeTodoMenuId === todo.id}
                       layout="grouped"
@@ -3559,7 +3537,6 @@ export default function App() {
       collapsedTodoGroupIds,
       deleteTodo,
       filterColors,
-      groupedHiddenMetaFilterKeys,
       handleListTap,
       activeTodoMenuId,
       menuMode,
@@ -6614,30 +6591,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 3,
-    minHeight: 12,
+    marginTop: 6,
+    minHeight: 16,
   },
   todoMetaSpacer: {
     flex: 1,
   },
   todoMetaDate: {
     color: THEME_ACCENT,
-    flexShrink: 1,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: FONT_REGULAR,
-    lineHeight: 13,
+    lineHeight: 16,
   },
   todoMetaDateOverdue: {
     color: THEME_DANGER,
   },
   todoMetaList: {
     color: THEME_TEXT_SECONDARY,
-    flexShrink: 1,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: FONT_REGULAR,
-    lineHeight: 13,
-    marginLeft: 8,
-    textAlign: 'right',
+    lineHeight: 16,
+    marginLeft: 12,
   },
   searchFiltersPanel: {
     flex: 1,

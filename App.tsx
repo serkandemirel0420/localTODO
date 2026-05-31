@@ -43,6 +43,7 @@ import {
 
 import {
   formatCompactDateFilterLabel,
+  formatCreatedMetaLabel,
   formatDateFilterLabel,
   getInitialDatePickerValue,
   isDateFilterOverdue,
@@ -80,6 +81,7 @@ import {
   getTodoColorThemes,
   getTodoPrimaryColorTheme,
   type FilterColorKey,
+  type FilterColorTheme,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
@@ -105,9 +107,19 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
+type TodoMetaTagKind = FilterColorKey | 'created';
+
+type TodoMetaTag = {
+  id: string;
+  kind: TodoMetaTagKind;
+  label: string;
+  overdue?: boolean;
+  theme: FilterColorTheme;
+};
+
 type SwipeTodoItemProps = {
   filterColors: FilterColorSettings;
-  hiddenMetaFilterKeys?: FilterColorKey[];
+  hiddenMetaTagKinds?: TodoMetaTagKind[];
   item: Todo;
   isMenuTarget: boolean;
   layout?: 'standalone' | 'grouped';
@@ -900,9 +912,65 @@ const buildTodoListRows = (
 
 const isOverdueStatusLabel = (label: string) => /overdue/i.test(label);
 
+const CREATED_META_THEME: FilterColorTheme = {
+  ...FILTER_COLOR_SWATCHES.find((swatch) => swatch.id === 'rose')!,
+  filterKey: 'list',
+  value: 'created',
+};
+
+const buildTodoMetaTags = (
+  item: Todo,
+  filterColors: FilterColorSettings,
+  hiddenKinds: ReadonlySet<TodoMetaTagKind>,
+): TodoMetaTag[] => {
+  const tags: TodoMetaTag[] = [];
+
+  if (!hiddenKinds.has('created')) {
+    tags.push({
+      id: 'created',
+      kind: 'created',
+      label: formatCreatedMetaLabel(item.createdAt),
+      theme: CREATED_META_THEME,
+    });
+  }
+
+  const dateValue = getBestOrderedFilterLabel(item.filters.date, DATE_MENU_ITEMS, '');
+  if (!hiddenKinds.has('date') && dateValue) {
+    tags.push({
+      id: `date-${dateValue}`,
+      kind: 'date',
+      label: formatDateFilterLabel(dateValue),
+      overdue: isDateFilterOverdue(dateValue),
+      theme: getFilterColorTheme(filterColors, 'date', dateValue),
+    });
+  }
+
+  const listValue = item.filters.list[0];
+  if (!hiddenKinds.has('list') && listValue) {
+    tags.push({
+      id: `list-${listValue}`,
+      kind: 'list',
+      label: listValue,
+      theme: getFilterColorTheme(filterColors, 'list', listValue),
+    });
+  }
+
+  const priorityValue = item.filters.priority[0];
+  if (!hiddenKinds.has('priority') && priorityValue) {
+    tags.push({
+      id: `priority-${priorityValue}`,
+      kind: 'priority',
+      label: priorityValue,
+      theme: getFilterColorTheme(filterColors, 'priority', priorityValue),
+    });
+  }
+
+  return tags;
+};
+
 function SwipeTodoItem({
   filterColors,
-  hiddenMetaFilterKeys = [],
+  hiddenMetaTagKinds = [],
   item,
   isMenuTarget,
   layout = 'standalone',
@@ -1029,25 +1097,13 @@ function SwipeTodoItem({
     [openMenuFromAction],
   );
   const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
-  const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
   const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
   const isGroupedLayout = layout === 'grouped';
-  const rawDateStatusLabel = getBestOrderedFilterLabel(
-    item.filters.date,
-    DATE_MENU_ITEMS,
-    '',
-  );
-  const hiddenMetaKeys = new Set(hiddenMetaFilterKeys);
-  const dateStatusLabel = rawDateStatusLabel && !hiddenMetaKeys.has('date')
-    ? formatCompactDateFilterLabel(rawDateStatusLabel)
-    : '';
-  const listStatusLabel = !hiddenMetaKeys.has('list')
-    ? item.filters.list[0] ?? ''
-    : '';
-  const showDateStatus = dateStatusLabel.length > 0;
-  const showListStatus = listStatusLabel.length > 0;
-  const dateStatusIsOverdue = isDateFilterOverdue(rawDateStatusLabel)
-    || (sectionLabel ? isOverdueStatusLabel(sectionLabel) : false);
+  const hiddenMetaKinds = new Set(hiddenMetaTagKinds);
+  const todoMetaTags = buildTodoMetaTags(item, filterColors, hiddenMetaKinds);
+  const todoMetaAccessibilityLabel = todoMetaTags
+    .map((tag) => tag.label)
+    .join(', ');
 
   const toggleDoneFromCheckbox = useCallback(() => {
     onSetDone(item.id, !item.done);
@@ -1126,36 +1182,35 @@ function SwipeTodoItem({
             >
               {item.text}
             </Text>
-            {(showDateStatus || showListStatus) ? (
-              <View style={styles.todoMetaRow}>
-                {showDateStatus ? (
-                  <Text
+            {todoMetaTags.length > 0 ? (
+              <View
+                accessibilityLabel={todoMetaAccessibilityLabel}
+                style={styles.todoMetaTagRow}
+              >
+                {todoMetaTags.map((tag) => (
+                  <View
+                    key={tag.id}
                     style={[
-                      styles.todoMetaDate,
-                      dateStatusIsOverdue && styles.todoMetaDateOverdue,
+                      styles.todoMetaTag,
+                      {
+                        backgroundColor: tag.theme.tint,
+                        borderColor: tag.theme.border,
+                      },
+                      item.done && styles.todoMetaTagDone,
                     ]}
                   >
-                    {dateStatusLabel}
-                  </Text>
-                ) : (
-                  <View style={styles.todoMetaSpacer} />
-                )}
-                {showListStatus ? (
-                  <Text style={styles.todoMetaList}>{listStatusLabel}</Text>
-                ) : null}
-              </View>
-            ) : null}
-            {!isGroupedLayout && todoColorDots.length > 0 ? (
-              <View style={styles.todoColorDotRow}>
-                {todoColorDots.map((theme) => (
-                  <View
-                    key={`${theme.filterKey}-${theme.value}`}
-                    style={[
-                      styles.todoColorDot,
-                      { backgroundColor: theme.accent },
-                      item.done && styles.todoColorDotDone,
-                    ]}
-                  />
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.todoMetaTagText,
+                        {
+                          color: tag.overdue ? THEME_DANGER_SOFT : tag.theme.text,
+                        },
+                      ]}
+                    >
+                      {tag.label}
+                    </Text>
+                  </View>
                 ))}
               </View>
             ) : null}
@@ -3476,7 +3531,7 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [scrollTodoAboveMenu]);
 
-  const groupedHiddenMetaFilterKeys = useMemo((): FilterColorKey[] => {
+  const groupedHiddenMetaTagKinds = useMemo((): FilterColorKey[] => {
     if (effectiveGroupMode === 'date') return ['date'];
     if (effectiveGroupMode === 'list') return ['list'];
     if (effectiveGroupMode === 'priority') return ['priority'];
@@ -3518,7 +3573,7 @@ export default function App() {
                     {todoIndex > 0 ? <View style={styles.todoRowDivider} /> : null}
                     <MemoizedSwipeTodoItem
                       filterColors={filterColors}
-                      hiddenMetaFilterKeys={groupedHiddenMetaFilterKeys}
+                      hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
                       item={todo}
                       isMenuTarget={menuMode !== null && activeTodoMenuId === todo.id}
                       layout="grouped"
@@ -3552,7 +3607,7 @@ export default function App() {
       collapsedTodoGroupIds,
       deleteTodo,
       filterColors,
-      groupedHiddenMetaFilterKeys,
+      groupedHiddenMetaTagKinds,
       handleListTap,
       activeTodoMenuId,
       menuMode,
@@ -6577,18 +6632,28 @@ const styles = StyleSheet.create({
   todoColorRailDone: {
     opacity: 0.35,
   },
-  todoColorDotRow: {
+  todoMetaTagRow: {
     flexDirection: 'row',
-    gap: 5,
-    marginTop: 8,
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 4,
   },
-  todoColorDot: {
-    width: 7,
-    height: 7,
+  todoMetaTag: {
     borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: '100%',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
   },
-  todoColorDotDone: {
-    opacity: 0.35,
+  todoMetaTagText: {
+    fontSize: 8,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 10,
+    opacity: 0.82,
+  },
+  todoMetaTagDone: {
+    opacity: 0.4,
   },
   todoText: {
     color: THEME_TEXT,

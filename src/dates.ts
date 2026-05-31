@@ -90,6 +90,26 @@ export const formatCompactDateFilterLabel = (label: string): string => {
   return label;
 };
 
+export const formatCreatedMetaLabel = (createdAt: number): string => {
+  const createdDay = startOfDay(new Date(createdAt));
+  const dayOffset = Math.round(
+    (createdDay.getTime() - startOfDay(new Date()).getTime()) / DAY_MS,
+  );
+
+  if (dayOffset === 0) {
+    return 'Today';
+  }
+
+  if (dayOffset === -1) {
+    return 'Yesterday';
+  }
+
+  return createdDay.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
 export const isDateFilterOverdue = (label: string): boolean => {
   const parsed = parseISODateLabel(label);
   if (!parsed) {

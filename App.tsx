@@ -6607,8 +6607,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 2,
-    minHeight: 11,
+    marginTop: 1,
+    minHeight: 9,
   },
   todoMetaSpacer: {
     flex: 1,
@@ -6616,9 +6616,10 @@ const styles = StyleSheet.create({
   todoMetaDate: {
     color: THEME_TEXT_TERTIARY,
     flexShrink: 1,
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: FONT_REGULAR,
-    lineHeight: 12,
+    letterSpacing: 0.1,
+    lineHeight: 10,
   },
   todoMetaDateOverdue: {
     color: THEME_DANGER_SOFT,
@@ -6626,10 +6627,11 @@ const styles = StyleSheet.create({
   todoMetaList: {
     color: THEME_TEXT_TERTIARY,
     flexShrink: 1,
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: FONT_REGULAR,
-    lineHeight: 12,
-    marginLeft: 8,
+    letterSpacing: 0.1,
+    lineHeight: 10,
+    marginLeft: 6,
     textAlign: 'right',
   },
   searchFiltersPanel: {

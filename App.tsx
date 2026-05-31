@@ -7,7 +7,6 @@ import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import React, {
-  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -50,12 +49,9 @@ import {
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
-import { TodoMetaTags } from './src/components/TodoMetaTags';
 import { TodoRow } from './src/components/TodoRow';
 
 import {
-  DATE_FILTER_PRESETS,
-  formatCompactDateFilterLabel,
   formatDateFilterLabel,
   formatDateFilterValue,
   getDateMenuClearValue,
@@ -64,7 +60,6 @@ import {
   getInitialDatePickerValue,
   isDateFilterOverdue,
   isDateMenuItemSelected,
-  parseISODateLabel,
   SOMEDAY_DATE_LABEL,
   startOfDay,
   toISODateString,
@@ -82,6 +77,7 @@ import {
   type Todo,
   type TodoFilters,
 } from './src/todos';
+import { useInstantPress } from './src/hooks/useInstantPress';
 import {
   createBackupPayload,
   downloadDriveBackup,
@@ -96,14 +92,11 @@ import {
   cloneFilterColors,
   FILTER_COLOR_SWATCHES,
   getFilterColorTheme,
-  getTodoColorThemes,
-  getTodoPrimaryColorTheme,
   type FilterColorKey,
   type FilterColorTheme,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
-  applyHiddenMetaTagKinds,
   cloneMetaTagVisibility,
   DEFAULT_META_TAG_VISIBILITY,
   formatMetaTagVisibilitySummary,
@@ -122,34 +115,36 @@ import {
   collectListNodeLabels,
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
-  getListSubsectionContext,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
   type AppSettings,
   type ListOrderMode,
-  type ListSubsectionContext,
   type StoredListMenuNode,
   type StoredMenuPreset,
   type TodoGroupMode,
   type TodoSortMode,
 } from './src/storage/appSettingsStore';
+import {
+  buildTodoListRows,
+  compareTodosBySortMode,
+  estimateTodoListOffsetForId,
+  flattenTodoListRows,
+  TODO_LIST_CONTENT_TOP_PADDING,
+  TODO_LIST_ROW_GAP,
+  TODO_ROW_DIVIDER_HEIGHT,
+  type VisibleTodoListRow,
+} from './src/todoListRows';
+import {
+  DATE_MENU_ITEMS,
+  PRIORITY_MENU_ITEMS,
+  TODO_GROUP_LABELS,
+  TODO_GROUP_OPTIONS,
+  TODO_SORT_LABELS,
+  TODO_SORT_OPTIONS,
+} from './src/todoOptions';
 
 WebBrowser.maybeCompleteAuthSession();
-
-type SwipeTodoItemProps = {
-  filterColors: FilterColorSettings;
-  hiddenMetaTagKinds?: HiddenMetaTagKind[];
-  item: Todo;
-  isMenuTarget: boolean;
-  layout?: 'standalone' | 'grouped';
-  metaTagVisibility: MetaTagVisibility;
-  onDelete: (id: string) => void;
-  onListTap: (event: GestureResponderEvent) => boolean;
-  onOpenMenu: (id: string) => void;
-  onSetDone: (id: string, done: boolean) => void;
-  sectionLabel?: string;
-};
 
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
@@ -227,35 +222,6 @@ type MenuMode =
   | 'sort';
 
 type SelectedFilters = TodoFilters;
-
-type TodoListRow =
-  | {
-      id: string;
-      todo: Todo;
-      type: 'todo';
-    }
-  | {
-      count: number;
-      id: string;
-      label: string;
-      todos: Todo[];
-      type: 'section';
-    };
-
-const appendSectionRows = (
-  rows: TodoListRow[],
-  sectionId: string,
-  label: string,
-  sectionTodos: Todo[],
-): void => {
-  rows.push({
-    count: sectionTodos.length,
-    id: sectionId,
-    label,
-    todos: sectionTodos,
-    type: 'section',
-  });
-};
 
 type GoogleDriveAction = 'backup' | 'restore';
 
@@ -393,9 +359,6 @@ const menuSectionCanClear = (
   return false;
 };
 
-const TODO_ACTION_WIDTH = 68;
-const TODO_LEFT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH * 2;
-const TODO_RIGHT_ACTION_MENU_WIDTH = TODO_ACTION_WIDTH;
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 16;
 const HORIZONTAL_PADDING = 16;
 const FONT_REGULAR = '400' as const;
@@ -408,8 +371,6 @@ const THEME_TEXT_SECONDARY = '#8E8E93';
 const THEME_TEXT_TERTIARY = '#A8ABB3';
 const THEME_ACCENT = '#4C78FF';
 const THEME_ACCENT_SOFT = '#E8EEFF';
-const THEME_ACCENT_SELECTION = 'rgba(76, 120, 255, 0.07)';
-const THEME_ACCENT_SELECTION_BORDER = 'rgba(76, 120, 255, 0.2)';
 const THEME_DANGER = '#D32F2F';
 const THEME_DANGER_SOFT = '#D9645A';
 const THEME_BORDER = '#E8EAED';
@@ -418,7 +379,6 @@ const CONTROL_BORDER_RADIUS = 10;
 const PULL_MAX = 178;
 const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
-const TODO_SWIPE_OPEN_DISTANCE = 62;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
 const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
@@ -438,16 +398,8 @@ const LIST_MENU_ICON_HIT_SLOP = 14;
 const TODO_MENU_TARGET_ESTIMATED_HEIGHT = 104;
 const TODO_MENU_TARGET_GAP = 16;
 const TODO_MENU_TARGET_TOP_OFFSET = 12;
-const TODO_LIST_ROW_GAP = 12;
-const TODO_LIST_CONTENT_TOP_PADDING = 8;
-const TODO_STANDALONE_ROW_ESTIMATE = 76;
-const TODO_GROUPED_ROW_ESTIMATE = 64;
-const TODO_SECTION_HEADER_ESTIMATE = 52;
-const TODO_SECTION_BODY_BOTTOM_PADDING = 12;
+const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const PRESET_SWIPE_DELETE_WIDTH = 72;
-const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
-const DATE_MENU_ITEMS: string[] = [...DATE_FILTER_PRESETS];
-const NOT_SECTIONED_LABEL = 'Not Sectioned';
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
   list: 'List',
   date: 'Date',
@@ -508,34 +460,6 @@ const formatCreateDrawerDateLabel = (dateLabels: string[]) => {
   }
 
   return formatDateFilterLabel(primary);
-};
-const TODO_SORT_OPTIONS: Array<{ label: string; mode: TodoSortMode }> = [
-  { label: 'Newest first', mode: 'newest' },
-  { label: 'Oldest first', mode: 'oldest' },
-  { label: 'A to Z', mode: 'alphabetical' },
-  { label: 'Priority', mode: 'priority' },
-  { label: 'Date', mode: 'date' },
-];
-const TODO_GROUP_OPTIONS: Array<{ label: string; mode: TodoGroupMode }> = [
-  { label: 'None', mode: 'none' },
-  { label: 'Priority', mode: 'priority' },
-  { label: 'Date', mode: 'date' },
-  { label: 'List', mode: 'list' },
-  { label: 'Status', mode: 'status' },
-];
-const TODO_SORT_LABELS: Record<TodoSortMode, string> = {
-  alphabetical: 'A to Z',
-  date: 'Date',
-  newest: 'Newest',
-  oldest: 'Oldest',
-  priority: 'Priority',
-};
-const TODO_GROUP_LABELS: Record<TodoGroupMode, string> = {
-  date: 'Date',
-  list: 'List',
-  none: 'None',
-  priority: 'Priority',
-  status: 'Status',
 };
 const EMPTY_SELECTED_FILTERS: SelectedFilters = {
   date: [],
@@ -700,612 +624,6 @@ const todoMatchesFilters = (
     return values.some((value) => todo.filters[filterKey].includes(value));
   });
 
-const getFilterRank = (values: string[], orderedLabels: string[]) =>
-  values.reduce((bestRank, value) => {
-    const rank = orderedLabels.indexOf(value);
-    return rank >= 0 ? Math.min(bestRank, rank) : bestRank;
-  }, orderedLabels.length);
-
-const getBestOrderedFilterLabel = (
-  values: string[],
-  orderedLabels: string[],
-  fallbackLabel: string,
-) => {
-  let bestLabel: string | null = null;
-  let bestRank = Number.POSITIVE_INFINITY;
-
-  values.forEach((value, index) => {
-    const orderedIndex = orderedLabels.indexOf(value);
-    const rank = orderedIndex >= 0 ? orderedIndex : orderedLabels.length + index;
-
-    if (rank < bestRank) {
-      bestRank = rank;
-      bestLabel = value;
-    }
-  });
-
-  return bestLabel ?? fallbackLabel;
-};
-
-const compareTodosByFallback = (first: Todo, second: Todo) =>
-  second.createdAt - first.createdAt ||
-  first.text.localeCompare(second.text) ||
-  first.id.localeCompare(second.id);
-
-const compareTodosBySortMode = (
-  first: Todo,
-  second: Todo,
-  sortMode: TodoSortMode,
-) => {
-  if (sortMode === 'oldest') {
-    return (
-      first.createdAt - second.createdAt ||
-      first.text.localeCompare(second.text) ||
-      first.id.localeCompare(second.id)
-    );
-  }
-
-  if (sortMode === 'alphabetical') {
-    return first.text.localeCompare(second.text) || compareTodosByFallback(first, second);
-  }
-
-  if (sortMode === 'priority') {
-    return (
-      getFilterRank(first.filters.priority, PRIORITY_MENU_ITEMS) -
-      getFilterRank(second.filters.priority, PRIORITY_MENU_ITEMS) ||
-      compareTodosByFallback(first, second)
-    );
-  }
-
-  if (sortMode === 'date') {
-    return (
-      getFilterRank(first.filters.date, DATE_MENU_ITEMS) -
-      getFilterRank(second.filters.date, DATE_MENU_ITEMS) ||
-      compareTodosByFallback(first, second)
-    );
-  }
-
-  return compareTodosByFallback(first, second);
-};
-
-const getTodoListGroupLabel = (
-  todo: Todo,
-  orderedListLabels: string[],
-  listMenuTree: ListMenuNode[],
-) => {
-  for (const parent of listMenuTree) {
-    if (!parent.children?.length) {
-      continue;
-    }
-
-    const matchedChild = parent.children.find((child) => (
-      todo.filters.list.includes(child.label)
-    ));
-    if (matchedChild) {
-      const childRank = orderedListLabels.indexOf(matchedChild.label);
-      return {
-        key: matchedChild.label,
-        label: matchedChild.label,
-        rank: childRank >= 0 ? childRank : orderedListLabels.length + 1,
-      };
-    }
-
-    if (todo.filters.list.includes(parent.label)) {
-      const parentRank = orderedListLabels.indexOf(parent.label);
-      return {
-        key: `${parent.label}::${NOT_SECTIONED_LABEL}`,
-        label: NOT_SECTIONED_LABEL,
-        rank: parentRank >= 0 ? parentRank : orderedListLabels.length + 1,
-      };
-    }
-  }
-
-  const label = getBestOrderedFilterLabel(todo.filters.list, orderedListLabels, 'No list');
-  const rank = orderedListLabels.indexOf(label);
-
-  return {
-    key: label,
-    label,
-    rank: rank >= 0 ? rank : orderedListLabels.length + 1,
-  };
-};
-
-const getTodoGroup = (
-  todo: Todo,
-  groupMode: Exclude<TodoGroupMode, 'none'>,
-  orderedListLabels: string[],
-  listMenuTree: ListMenuNode[],
-) => {
-  if (groupMode === 'status') {
-    const label = todo.done ? 'Done' : 'Active';
-    return {
-      key: label,
-      label,
-      rank: todo.done ? 1 : 0,
-    };
-  }
-
-  if (groupMode === 'list') {
-    return getTodoListGroupLabel(todo, orderedListLabels, listMenuTree);
-  }
-
-  if (groupMode === 'priority') {
-    const label = getBestOrderedFilterLabel(todo.filters.priority, PRIORITY_MENU_ITEMS, 'No priority');
-    const rank = PRIORITY_MENU_ITEMS.indexOf(label);
-
-    return {
-      key: label,
-      label,
-      rank: rank >= 0 ? rank : PRIORITY_MENU_ITEMS.length + 1,
-    };
-  }
-
-  const rawLabel = getBestOrderedFilterLabel(todo.filters.date, DATE_MENU_ITEMS, 'No date');
-  const presetRank = DATE_MENU_ITEMS.indexOf(rawLabel);
-  const customDate = parseISODateLabel(rawLabel);
-
-  return {
-    key: rawLabel,
-    label: formatCompactDateFilterLabel(rawLabel),
-    rank: presetRank >= 0
-      ? presetRank
-      : customDate
-        ? DATE_MENU_ITEMS.length + customDate.getTime() / 1e12
-        : DATE_MENU_ITEMS.length + 1,
-  };
-};
-
-const todoBelongsToListParent = (
-  todo: Todo,
-  parentLabel: string,
-  subsectionLabels: string[],
-) => {
-  if (todo.filters.list.includes(parentLabel)) {
-    return true;
-  }
-
-  return subsectionLabels.some((label) => todo.filters.list.includes(label));
-};
-
-const getTodoSubsectionLabel = (
-  todo: Todo,
-  context: ListSubsectionContext,
-) => {
-  const matchedSubsection = context.subsectionLabels.find((label) => (
-    todo.filters.list.includes(label)
-  ));
-
-  return matchedSubsection ?? NOT_SECTIONED_LABEL;
-};
-
-const buildSubsectionRows = (
-  todos: Todo[],
-  context: ListSubsectionContext,
-): TodoListRow[] => {
-  const scopedTodos = todos.filter((todo) => (
-    todoBelongsToListParent(todo, context.parentLabel, context.subsectionLabels)
-  ));
-  const buckets = new Map<string, Todo[]>(
-    [NOT_SECTIONED_LABEL, ...context.subsectionLabels].map((label) => [label, []]),
-  );
-
-  scopedTodos.forEach((todo) => {
-    const bucket = buckets.get(getTodoSubsectionLabel(todo, context)) ?? buckets.get(NOT_SECTIONED_LABEL);
-    bucket?.push(todo);
-  });
-
-  const sectionOrder = [NOT_SECTIONED_LABEL, ...context.subsectionLabels];
-  const rows: TodoListRow[] = [];
-
-  sectionOrder.forEach((label) => {
-    const sectionTodos = buckets.get(label) ?? [];
-    const sectionId = `subsection-${context.parentLabel}-${label}`;
-
-    appendSectionRows(rows, sectionId, label, sectionTodos);
-  });
-
-  return rows;
-};
-
-const buildGroupedSectionRows = (
-  todos: Todo[],
-  groupMode: Exclude<TodoGroupMode, 'none'>,
-  orderedListLabels: string[],
-  listMenuTree: ListMenuNode[],
-): TodoListRow[] => {
-  const groups = new Map<string, { key: string; label: string; rank: number; todos: Todo[] }>();
-
-  todos.forEach((todo) => {
-    const group = getTodoGroup(todo, groupMode, orderedListLabels, listMenuTree);
-    const existingGroup = groups.get(group.key);
-
-    if (existingGroup) {
-      existingGroup.todos.push(todo);
-      return;
-    }
-
-    groups.set(group.key, {
-      key: group.key,
-      label: group.label,
-      rank: group.rank,
-      todos: [todo],
-    });
-  });
-  const rows: TodoListRow[] = [];
-
-  [...groups.values()]
-    .sort((first, second) => first.rank - second.rank || first.label.localeCompare(second.label))
-    .forEach((group) => {
-      const groupId = `group-${groupMode}-${group.key}`;
-
-      appendSectionRows(rows, groupId, group.label, group.todos);
-    });
-
-  return rows;
-};
-
-const buildTodoListRows = (
-  todos: Todo[],
-  sortMode: TodoSortMode,
-  groupMode: TodoGroupMode,
-  orderedListLabels: string[],
-  listMenuTree: ListMenuNode[],
-  selectedListFilters: string[],
-  useSubsectionLayout: boolean,
-): TodoListRow[] => {
-  const subsectionContext = useSubsectionLayout
-    ? getListSubsectionContext(listMenuTree, selectedListFilters)
-    : null;
-
-  if (subsectionContext) {
-    return buildSubsectionRows(todos, subsectionContext);
-  }
-
-  if (groupMode === 'none') {
-    return todos.map((todo) => ({
-      id: todo.id,
-      todo,
-      type: 'todo',
-    }));
-  }
-
-  return buildGroupedSectionRows(
-    todos,
-    groupMode,
-    orderedListLabels,
-    listMenuTree,
-  );
-};
-
-const estimateTodoListOffsetForId = (
-  rows: TodoListRow[],
-  id: string,
-  collapsedGroupIds: Set<string>,
-): number | null => {
-  let offset = TODO_LIST_CONTENT_TOP_PADDING;
-
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
-
-    if (rowIndex > 0) {
-      offset += TODO_LIST_ROW_GAP;
-    }
-
-    if (row.type === 'todo') {
-      if (row.todo.id === id) {
-        return offset;
-      }
-
-      offset += TODO_STANDALONE_ROW_ESTIMATE;
-      continue;
-    }
-
-    const collapsed = collapsedGroupIds.has(row.id);
-    const todoIndex = row.todos.findIndex((todo) => todo.id === id);
-
-    if (todoIndex >= 0) {
-      offset += TODO_SECTION_HEADER_ESTIMATE;
-
-      if (!collapsed) {
-        for (let index = 0; index < todoIndex; index += 1) {
-          if (index > 0) {
-            offset += StyleSheet.hairlineWidth;
-          }
-
-          offset += TODO_GROUPED_ROW_ESTIMATE;
-        }
-      }
-
-      return offset;
-    }
-
-    offset += TODO_SECTION_HEADER_ESTIMATE;
-
-    if (!collapsed && row.todos.length > 0) {
-      for (let index = 0; index < row.todos.length; index += 1) {
-        if (index > 0) {
-          offset += StyleSheet.hairlineWidth;
-        }
-
-        offset += TODO_GROUPED_ROW_ESTIMATE;
-      }
-
-      offset += TODO_SECTION_BODY_BOTTOM_PADDING;
-    }
-  }
-
-  return null;
-};
-
-function SwipeTodoItem({
-  filterColors,
-  hiddenMetaTagKinds = [],
-  item,
-  isMenuTarget,
-  layout = 'standalone',
-  metaTagVisibility,
-  onDelete,
-  onListTap,
-  onOpenMenu,
-  onSetDone,
-  sectionLabel,
-}: SwipeTodoItemProps) {
-  const swipeableRef = useRef<Swipeable | null>(null);
-  const [isSwipeOpen, setIsSwipeOpen] = useState(false);
-  const [isMenuSwipeActive, setIsMenuSwipeActive] = useState(false);
-
-  const closeActionMenu = useCallback(() => {
-    swipeableRef.current?.close();
-    setIsSwipeOpen(false);
-    setIsMenuSwipeActive(false);
-  }, []);
-
-  const toggleFromAction = useCallback(() => {
-    onSetDone(item.id, !item.done);
-    Haptics.selectionAsync().catch(() => undefined);
-    requestAnimationFrame(() => {
-      closeActionMenu();
-    });
-  }, [closeActionMenu, item.done, item.id, onSetDone]);
-
-  const deleteFromAction = useCallback(() => {
-    closeActionMenu();
-    requestAnimationFrame(() => onDelete(item.id));
-  }, [closeActionMenu, item.id, onDelete]);
-
-  const openMenuFromAction = useCallback(() => {
-    onOpenMenu(item.id);
-    closeActionMenu();
-  }, [closeActionMenu, item.id, onOpenMenu]);
-
-  const handleTodoPress = useCallback((event?: GestureResponderEvent) => {
-    if (isSwipeOpen) {
-      closeActionMenu();
-      return;
-    }
-
-    if (event) {
-      onListTap(event);
-    }
-  }, [
-    closeActionMenu,
-    isSwipeOpen,
-    onListTap,
-  ]);
-
-  const handleSwipeableWillOpen = useCallback(
-    (direction: 'left' | 'right') => {
-      setIsSwipeOpen(true);
-
-      if (direction === 'right') {
-        setIsMenuSwipeActive(true);
-        openMenuFromAction();
-        return;
-      }
-
-      setIsMenuSwipeActive(false);
-      Haptics.selectionAsync().catch(() => undefined);
-    },
-    [openMenuFromAction],
-  );
-
-  const handleSwipeableWillClose = useCallback((direction: 'left' | 'right') => {
-    if (direction === 'right') {
-      setIsMenuSwipeActive(false);
-    }
-  }, []);
-
-  const handleSwipeableOpenStartDrag = useCallback((direction: 'left' | 'right') => {
-    setIsMenuSwipeActive(direction === 'right');
-  }, []);
-
-  const handleSwipeableClose = useCallback(() => {
-    setIsSwipeOpen(false);
-    setIsMenuSwipeActive(false);
-  }, []);
-
-  const renderLeftActions = useCallback(
-    () => (
-      <View style={styles.todoSwipeLeftActions}>
-        <GHTouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
-          activeOpacity={0.82}
-          onPress={toggleFromAction}
-          style={[styles.todoActionButton, styles.todoActionDone]}
-        >
-          <Text style={styles.todoActionIcon}>{item.done ? '↩' : '✓'}</Text>
-        </GHTouchableOpacity>
-        <GHTouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Delete todo"
-          activeOpacity={0.82}
-          onPress={deleteFromAction}
-          style={[styles.todoActionButton, styles.todoActionDelete]}
-        >
-          <Text style={styles.todoActionIcon}>⌫</Text>
-        </GHTouchableOpacity>
-      </View>
-    ),
-    [deleteFromAction, item.done, toggleFromAction],
-  );
-
-  const renderRightActions = useCallback(
-    () => (
-      <View style={styles.todoSwipeRightActions}>
-        <GHTouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Open item settings"
-          activeOpacity={0.82}
-          onPress={openMenuFromAction}
-          style={[styles.todoActionButton, styles.todoActionMore]}
-        >
-          <Text style={styles.todoActionIcon}>☰</Text>
-        </GHTouchableOpacity>
-      </View>
-    ),
-    [openMenuFromAction],
-  );
-  const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
-  const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
-  const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
-  const isGroupedLayout = layout === 'grouped';
-  const rawDateStatusLabel = getBestOrderedFilterLabel(
-    item.filters.date,
-    DATE_MENU_ITEMS,
-    '',
-  );
-  const listStatusLabel = item.filters.list[0] ?? '';
-  const priorityStatusLabel = getBestOrderedFilterLabel(
-    item.filters.priority,
-    PRIORITY_MENU_ITEMS,
-    '',
-  );
-  const effectiveMetaTagVisibility = useMemo(
-    () => applyHiddenMetaTagKinds(metaTagVisibility, hiddenMetaTagKinds),
-    [hiddenMetaTagKinds, metaTagVisibility],
-  );
-
-  const toggleDoneFromCheckbox = useCallback(() => {
-    onSetDone(item.id, !item.done);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [item.done, item.id, onSetDone]);
-
-  return (
-    <View style={[styles.swipeShell, isGroupedLayout && styles.swipeShellGrouped]}>
-      <Swipeable
-        ref={swipeableRef}
-        childrenContainerStyle={styles.todoSwipeableChildren}
-        containerStyle={styles.todoSwipeableContainer}
-        friction={1.1}
-        leftThreshold={TODO_SWIPE_OPEN_DISTANCE}
-        animationOptions={{ bounciness: 0, speed: 28 }}
-        onSwipeableClose={handleSwipeableClose}
-        onSwipeableOpenStartDrag={handleSwipeableOpenStartDrag}
-        onSwipeableWillOpen={handleSwipeableWillOpen}
-        onSwipeableWillClose={handleSwipeableWillClose}
-        overshootLeft={false}
-        overshootRight={false}
-        renderLeftActions={renderLeftActions}
-        renderRightActions={renderRightActions}
-        rightThreshold={TODO_SWIPE_OPEN_DISTANCE}
-      >
-        <View
-          style={[
-            styles.todoRow,
-            isGroupedLayout && styles.todoRowGrouped,
-            !isGroupedLayout && todoColorTheme && !item.done && {
-              backgroundColor: todoColorTheme.tint,
-              borderColor: todoColorTheme.border,
-              shadowColor: todoColorTheme.accent,
-            },
-            item.done && styles.todoRowDone,
-            isHighlightedForMenu && (
-              isGroupedLayout
-                ? styles.todoRowMenuTargetGrouped
-                : styles.todoRowMenuTarget
-            ),
-          ]}
-        >
-          {isGroupedLayout && isHighlightedForMenu ? (
-            <View pointerEvents="none" style={styles.todoMenuSelectionGlow} />
-          ) : null}
-          {!isGroupedLayout && todoColorTheme ? (
-            <View
-              style={[
-                styles.todoColorRail,
-                { backgroundColor: todoColorTheme.accent },
-                item.done && styles.todoColorRailDone,
-              ]}
-            />
-          ) : null}
-          <GHTouchableOpacity
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: item.done }}
-            accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
-            activeOpacity={0.72}
-            onPress={toggleDoneFromCheckbox}
-            style={styles.todoCheckboxPressable}
-          >
-            <View
-              style={[
-                styles.todoCheckbox,
-                item.done && styles.todoCheckboxChecked,
-              ]}
-            >
-              {item.done ? (
-                <Ionicons color={THEME_CARD} name="checkmark" size={14} />
-              ) : null}
-            </View>
-          </GHTouchableOpacity>
-          <GHTouchableOpacity
-            accessibilityRole="button"
-            activeOpacity={1}
-            onPress={handleTodoPress}
-            style={styles.todoTextPressable}
-          >
-            <Text
-              numberOfLines={2}
-              style={[styles.todoText, item.done && styles.todoTextDone]}
-            >
-              {item.text}
-            </Text>
-            <TodoMetaTags
-              createdAt={item.createdAt}
-              dateLabel={rawDateStatusLabel || undefined}
-              done={item.done}
-              filterColors={filterColors}
-              listLabel={listStatusLabel || undefined}
-              priorityLabel={
-                priorityStatusLabel && priorityStatusLabel !== 'None'
-                  ? priorityStatusLabel
-                  : undefined
-              }
-              visibility={effectiveMetaTagVisibility}
-            />
-            {!isGroupedLayout && todoColorDots.length > 0 ? (
-              <View style={styles.todoColorDotRow}>
-                {todoColorDots.map((theme) => (
-                  <View
-                    key={`${theme.filterKey}-${theme.value}`}
-                    style={[
-                      styles.todoColorDot,
-                      { backgroundColor: theme.accent },
-                      item.done && styles.todoColorDotDone,
-                    ]}
-                  />
-                ))}
-              </View>
-            ) : null}
-          </GHTouchableOpacity>
-        </View>
-      </Swipeable>
-    </View>
-  );
-}
-
-const MemoizedSwipeTodoItem = React.memo(SwipeTodoItem);
-
 type MenuPresetSwipeRowProps = {
   label: string;
   onApply: () => void;
@@ -1428,7 +746,7 @@ export default function App() {
   const createInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
   const listMenuRef = useRef<GestureFlatList<BottomMenuItem> | null>(null);
-  const todoListRef = useRef<FlashListRef<TodoListRow> | null>(null);
+  const todoListRef = useRef<FlashListRef<VisibleTodoListRow> | null>(null);
   const scrollOffsetY = useRef(0);
   const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
@@ -1468,6 +786,7 @@ export default function App() {
   });
   const googleDriveActionReady =
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
+  const getInstantPressHandlers = useInstantPress();
 
   useEffect(() => {
     let alive = true;
@@ -2411,7 +1730,6 @@ export default function App() {
   const todoListRows = useMemo(
     () => buildTodoListRows(
       sortedTodos,
-      effectiveSortMode,
       effectiveGroupMode,
       orderedListLabels,
       listMenuTree,
@@ -2420,7 +1738,6 @@ export default function App() {
     ),
     [
       effectiveGroupMode,
-      effectiveSortMode,
       listMenuTree,
       orderedListLabels,
       selectedFilters.list,
@@ -2428,7 +1745,18 @@ export default function App() {
       useSubsectionLayout,
     ],
   );
-  const visibleTodoListRows = todoListRows;
+  const visibleTodoListRows = useMemo(
+    () => flattenTodoListRows(todoListRows, collapsedTodoGroupIds),
+    [collapsedTodoGroupIds, todoListRows],
+  );
+  const collapsedTodoGroupKey = useMemo(
+    () => [...collapsedTodoGroupIds].sort().join('|'),
+    [collapsedTodoGroupIds],
+  );
+  const todoListExtraData = useMemo(
+    () => ({ activeTodoMenuId, collapsedTodoGroupKey, menuMode }),
+    [activeTodoMenuId, collapsedTodoGroupKey, menuMode],
+  );
   const todoListOneHandedOffset = useMemo(() => {
     if (visibleTodoListRows.length === 0) {
       return 0;
@@ -2898,17 +2226,15 @@ export default function App() {
   }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
-    startTransition(() => {
-      setCollapsedTodoGroupIds((current) => {
-        const next = new Set(current);
-        if (next.has(groupId)) {
-          next.delete(groupId);
-        } else {
-          next.add(groupId);
-        }
+    setCollapsedTodoGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
 
-        return next;
-      });
+      return next;
     });
   }, []);
 
@@ -3293,8 +2619,49 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const closeHeaderSearch = useCallback(() => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    setNavTab(null);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
   const handleNavTabPress = useCallback((tab: NavTab) => {
     setActiveTodoMenuId(null);
+
+    const sameCalendarOpen =
+      tab === 'calendar' && listMenuOpen && (navTab === 'calendar' || menuMode === 'date');
+    const sameMenuOpen =
+      tab === 'menu' && listMenuOpen && (navTab === 'menu' || menuMode === 'main');
+
+    if (sameCalendarOpen || sameMenuOpen) {
+      Keyboard.dismiss();
+      searchInputRef.current?.blur();
+      closeListMenu();
+      setNavTab(null);
+      return;
+    }
+
+    if (tab === 'search' && navTab === 'search') {
+      closeHeaderSearch();
+      return;
+    }
+
+    if (tab === 'settings') {
+      if (settingsModalVisible) {
+        closeSettingsModal();
+        return;
+      }
+
+      setNavTab('settings');
+      openSettingsModal();
+      return;
+    }
+
+    if (settingsModalVisible) {
+      setSettingsModalVisible(false);
+      setNavTab((current) => (current === 'settings' ? null : current));
+    }
 
     switch (tab) {
       case 'calendar':
@@ -3310,16 +2677,22 @@ export default function App() {
       case 'search':
         focusHeaderSearch();
         return;
-      case 'settings':
-        setNavTab('settings');
-        openSettingsModal();
-        return;
       default:
         break;
     }
 
     Haptics.selectionAsync().catch(() => undefined);
-  }, [focusHeaderSearch, openSettingsModal]);
+  }, [
+    closeHeaderSearch,
+    closeListMenu,
+    closeSettingsModal,
+    focusHeaderSearch,
+    listMenuOpen,
+    menuMode,
+    navTab,
+    openSettingsModal,
+    settingsModalVisible,
+  ]);
 
   useEffect(() => {
     if (!listMenuOpen && (navTab === 'calendar' || navTab === 'menu')) {
@@ -3689,8 +3062,8 @@ export default function App() {
         return row.todo.id === id;
       }
 
-      if (row.type === 'section') {
-        return row.todos.some((todo) => todo.id === id);
+      if (row.type === 'groupedTodo') {
+        return row.todo.id === id;
       }
 
       return false;
@@ -3701,12 +3074,10 @@ export default function App() {
     }
 
     const scrollOptions = getTodoMenuScrollOptions();
-    const row = visibleTodoListRows[index];
-    const isNestedInSection = row.type === 'section';
 
     const scrollByEstimatedOffset = () => {
       const itemOffset = estimateTodoListOffsetForId(
-        visibleTodoListRows,
+        todoListRows,
         id,
         collapsedTodoGroupIds,
       );
@@ -3738,11 +3109,6 @@ export default function App() {
       ...scrollOptions,
     });
 
-    if (isNestedInSection) {
-      scrollByEstimatedOffset();
-      return;
-    }
-
     scrollByIndex().catch(() => {
       scrollByEstimatedOffset();
 
@@ -3754,6 +3120,7 @@ export default function App() {
     collapsedTodoGroupIds,
     getTodoMenuScrollOptions,
     listMenuHeight,
+    todoListRows,
     todoListFrameHeight,
     todoListOneHandedOffset,
     visibleTodoListRows,
@@ -3802,85 +3169,110 @@ export default function App() {
     return [];
   }, [effectiveGroupMode]);
 
-  const renderTodoListSeparator = useCallback(
-    () => <View style={styles.todoListRowGap} />,
+  const renderVisibleTodoRowGap = useCallback(
+    (gapBefore: boolean) => (gapBefore ? <View style={styles.todoListRowGap} /> : null),
     [],
   );
 
   const renderTodoItem = useCallback(
-    ({ item }: { item: TodoListRow }) => {
-      if (item.type === 'section') {
-        const isCollapsed = collapsedTodoGroupIds.has(item.id);
+    ({ item }: { item: VisibleTodoListRow }) => {
+      if (item.type === 'sectionHeader') {
+        const isExpanded = !item.isCollapsed && item.count > 0;
 
         return (
-          <View style={styles.todoSectionCard}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ expanded: !isCollapsed }}
-              accessibilityLabel={`${item.label}, ${item.count} items`}
-              onPress={() => toggleTodoGroupCollapsed(item.id)}
-              style={({ pressed }) => [
-                styles.todoSectionHeader,
-                pressed && styles.todoGroupHeaderPressed,
+          <View>
+            {renderVisibleTodoRowGap(item.gapBefore)}
+            <View
+              style={[
+                styles.todoSectionCard,
+                isExpanded && styles.todoSectionCardExpanded,
               ]}
             >
-              <Text style={styles.todoSectionTitle}>{item.label}</Text>
-              <View style={styles.todoSectionHeaderMeta}>
-                <Text style={styles.todoGroupCount}>{item.count}</Text>
-                <Ionicons
-                  color={THEME_TEXT_SECONDARY}
-                  name="chevron-down"
-                  size={18}
-                  style={!isCollapsed ? styles.todoGroupChevronExpanded : undefined}
-                />
-              </View>
-            </Pressable>
-            {!isCollapsed && item.todos.length > 0 ? (
-              <View style={styles.todoSectionBody}>
-                {item.todos.map((todo, todoIndex) => (
-                  <View key={todo.id}>
-                    {todoIndex > 0 ? <View style={styles.todoRowDivider} /> : null}
-                    <TodoRow
-                      filterColors={filterColors}
-                      hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
-                      item={todo}
-                      isMenuTarget={menuMode !== null && activeTodoMenuId === todo.id}
-                      layout="grouped"
-                      metaTagVisibility={metaTagVisibility}
-                      onDelete={deleteTodo}
-                      onOpenMenu={openMenuForTodoAction}
-                      onSetDone={setTodoDone}
-                      sectionLabel={item.label}
-                    />
-                  </View>
-                ))}
-              </View>
-            ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: isExpanded }}
+                accessibilityLabel={`${item.label}, ${item.count} items`}
+                {...getInstantPressHandlers(
+                  `todo-group:${item.id}`,
+                  () => toggleTodoGroupCollapsed(item.id),
+                  { stopPropagation: true },
+                )}
+                style={({ pressed }) => [
+                  styles.todoSectionHeader,
+                  pressed && styles.todoGroupHeaderPressed,
+                ]}
+              >
+                <Text numberOfLines={1} style={styles.todoSectionTitle}>
+                  {item.label}
+                </Text>
+                <View style={styles.todoSectionHeaderMeta}>
+                  <Text style={styles.todoGroupCount}>{item.count}</Text>
+                  <Ionicons
+                    color={THEME_TEXT_SECONDARY}
+                    name="chevron-down"
+                    size={18}
+                    style={isExpanded ? styles.todoGroupChevronExpanded : undefined}
+                  />
+                </View>
+              </Pressable>
+            </View>
+          </View>
+        );
+      }
+
+      if (item.type === 'groupedTodo') {
+        return (
+          <View>
+            {renderVisibleTodoRowGap(item.gapBefore)}
+            <View
+              style={[
+                styles.todoSectionGroupedShell,
+                item.isLastInSection && styles.todoSectionGroupedShellLast,
+              ]}
+            >
+              {!item.isFirstInSection ? <View style={styles.todoRowDivider} /> : null}
+              <TodoRow
+                filterColors={filterColors}
+                hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
+                item={item.todo}
+                isMenuTarget={menuMode !== null && activeTodoMenuId === item.todo.id}
+                layout="grouped"
+                metaTagVisibility={metaTagVisibility}
+                onDelete={deleteTodo}
+                onOpenMenu={openMenuForTodoAction}
+                onSetDone={setTodoDone}
+                sectionLabel={item.sectionLabel}
+              />
+            </View>
           </View>
         );
       }
 
       return (
-        <TodoRow
-          filterColors={filterColors}
-          item={item.todo}
-          isMenuTarget={menuMode !== null && activeTodoMenuId === item.todo.id}
-          metaTagVisibility={metaTagVisibility}
-          onDelete={deleteTodo}
-          onOpenMenu={openMenuForTodoAction}
-          onSetDone={setTodoDone}
-        />
+        <View>
+          {renderVisibleTodoRowGap(item.gapBefore)}
+          <TodoRow
+            filterColors={filterColors}
+            item={item.todo}
+            isMenuTarget={menuMode !== null && activeTodoMenuId === item.todo.id}
+            metaTagVisibility={metaTagVisibility}
+            onDelete={deleteTodo}
+            onOpenMenu={openMenuForTodoAction}
+            onSetDone={setTodoDone}
+          />
+        </View>
       );
     },
     [
-      collapsedTodoGroupIds,
+      activeTodoMenuId,
       deleteTodo,
       filterColors,
+      getInstantPressHandlers,
       groupedHiddenMetaTagKinds,
-      activeTodoMenuId,
       menuMode,
       metaTagVisibility,
       openMenuForTodoAction,
+      renderVisibleTodoRowGap,
       setTodoDone,
       toggleTodoGroupCollapsed,
     ],
@@ -4004,12 +3396,12 @@ export default function App() {
                   ]}
                   contentOffset={todoListContentOffset}
                   data={visibleTodoListRows}
-                  extraData={{ activeTodoMenuId, collapsedTodoGroupIds }}
+                  extraData={todoListExtraData}
                   getItemType={(item) => item.type}
-                  ItemSeparatorComponent={renderTodoListSeparator}
                   keyboardDismissMode="on-drag"
                   keyboardShouldPersistTaps="handled"
                   keyExtractor={(item) => item.id}
+                  maintainVisibleContentPosition={TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION}
                   ListEmptyComponent={
                     <View style={styles.emptyState}>
                       <Text style={styles.emptyIcon}>
@@ -4021,7 +3413,7 @@ export default function App() {
                       <Text style={styles.emptyText}>
                         {query.trim()
                           ? 'Try a different search term.'
-                          : 'Tap the + button to add a todo.'}
+                          : 'Tap + in the bar below to add a todo.'}
                       </Text>
                     </View>
                   }
@@ -4050,26 +3442,21 @@ export default function App() {
             </View>
           </View>
 
-          {!listMenuOpen && !createDrawerVisible && !showSearchFiltersPanel ? (
-            <View pointerEvents="box-none" style={styles.createFabLayer}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityHint="Opens the new todo drawer"
-                accessibilityLabel="Add todo"
-                onPress={() => openCreateDrawer(query)}
-                style={({ pressed }) => [
-                  styles.createFab,
-                  pressed && styles.createFabPressed,
-                ]}
-              >
-                <Text style={styles.createFabText}>+</Text>
-              </Pressable>
-            </View>
-          ) : null}
         </View>
 
         <View style={styles.bottomNav}>
-          <View style={styles.bottomNavItem} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Opens the new todo drawer"
+            accessibilityLabel="Add todo"
+            onPress={() => openCreateDrawer()}
+            style={({ pressed }) => [
+              styles.bottomNavItem,
+              pressed && styles.bottomNavItemPressed,
+            ]}
+          >
+            <Ionicons color={NAV_ACCENT} name="add" size={28} />
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Calendar"
@@ -4964,14 +4351,9 @@ export default function App() {
           </View>
         </Modal>
 
-        <Modal
-          animationType="slide"
-          onRequestClose={closeSettingsModal}
-          presentationStyle="fullScreen"
-          visible={settingsModalVisible}
-        >
-          <SafeAreaView style={styles.settingsModal}>
-            <StatusBar barStyle="dark-content" />
+        {settingsModalVisible ? (
+          <View style={styles.settingsOverlay}>
+            <View style={styles.settingsModal}>
             <View style={styles.settingsHeader}>
               <View style={styles.settingsHeaderTextWrap}>
                 <Text style={styles.settingsTitle}>Settings</Text>
@@ -5000,7 +4382,10 @@ export default function App() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ expanded: settingsBackupExpanded }}
-                  onPress={() => setSettingsBackupExpanded((current) => !current)}
+                  {...getInstantPressHandlers(
+                    'settings:backup',
+                    () => setSettingsBackupExpanded((current) => !current),
+                  )}
                   style={({ pressed }) => [
                     styles.settingsSectionHeader,
                     pressed && styles.settingsOptionRowPressed,
@@ -5123,7 +4508,10 @@ export default function App() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ expanded: settingsListsExpanded }}
-                  onPress={() => setSettingsListsExpanded((current) => !current)}
+                  {...getInstantPressHandlers(
+                    'settings:lists',
+                    () => setSettingsListsExpanded((current) => !current),
+                  )}
                   style={({ pressed }) => [
                     styles.settingsSectionHeader,
                     pressed && styles.settingsOptionRowPressed,
@@ -5353,7 +4741,10 @@ export default function App() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ expanded: settingsColorsExpanded }}
-                  onPress={() => setSettingsColorsExpanded((current) => !current)}
+                  {...getInstantPressHandlers(
+                    'settings:colors',
+                    () => setSettingsColorsExpanded((current) => !current),
+                  )}
                   style={({ pressed }) => [
                     styles.settingsSectionHeader,
                     pressed && styles.settingsOptionRowPressed,
@@ -5446,8 +4837,9 @@ export default function App() {
                 ) : null}
               </View>
             </ScrollView>
-          </SafeAreaView>
-        </Modal>
+            </View>
+          </View>
+        ) : null}
         <Modal
           animationType="fade"
           onRequestClose={closePresetSaveModal}
@@ -5550,6 +4942,16 @@ const styles = StyleSheet.create({
   mainKeyboardAvoiding: {
     flex: 1,
     minHeight: 0,
+  },
+  settingsOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: LIST_MENU_OVERLAY_BOTTOM,
+    zIndex: 19,
+    elevation: 8,
+    backgroundColor: THEME_BG,
   },
   settingsModal: {
     flex: 1,
@@ -5735,14 +5137,10 @@ const styles = StyleSheet.create({
   settingsCard: {
     borderRadius: 16,
     backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E8E2DA',
+    borderWidth: 1,
+    borderColor: '#E4DED6',
     padding: 14,
-    shadowColor: '#3D3428',
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 2,
+    overflow: 'hidden',
   },
   settingsSegmentedControl: {
     minHeight: 44,
@@ -6342,39 +5740,6 @@ const styles = StyleSheet.create({
   createDrawerToolbarSpacer: {
     flex: 1,
   },
-  createFabLayer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 30,
-    elevation: 30,
-    alignItems: 'flex-end',
-    justifyContent: 'flex-end',
-    paddingRight: HORIZONTAL_PADDING,
-    paddingBottom: LIST_MENU_BOTTOM_OFFSET + 10,
-  },
-  createFab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: NAV_ACCENT,
-    shadowColor: NAV_ACCENT,
-    shadowOpacity: 0.28,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
-  },
-  createFabPressed: {
-    opacity: 0.88,
-    transform: [{ scale: 0.96 }],
-  },
-  createFabText: {
-    color: '#FFFFFF',
-    fontSize: 30,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 32,
-    marginTop: -2,
-  },
   edgeBackZone: {
     position: 'absolute',
     top: 0,
@@ -6633,16 +5998,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginLeft: 12,
   },
-  listMenuInlineCheck: {
-    color: THEME_ACCENT,
-    fontSize: 15,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    marginRight: 12,
-  },
-  listMenuArrowExpanded: {
-    transform: [{ rotate: '90deg' }],
-  },
   listMenuSubmenuZone: {
     flexShrink: 0,
     maxWidth: '52%',
@@ -6694,91 +6049,13 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     letterSpacing: 0.2,
   },
-  pullMenu: {
-    position: 'absolute',
-    top: 8,
-    left: HORIZONTAL_PADDING,
-    right: HORIZONTAL_PADDING,
-    zIndex: 10,
-    minHeight: 140,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E4DDD4',
-    gap: 4,
-    padding: 8,
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 5,
-  },
-  pullStage: {
-    minHeight: 40,
-    borderRadius: 10,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-  },
-  pullStageActive: {
-    backgroundColor: THEME_ACCENT_SOFT,
-  },
-  pullStageDisabled: {
-    opacity: 0.45,
-  },
-  pullStageText: {
-    color: '#706860',
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    letterSpacing: 0.2,
-  },
-  pullStageTextActive: {
-    color: THEME_ACCENT,
-  },
-  pullStageTextDisabled: {
-    color: '#B5ADA5',
-  },
-  pullStageMark: {
-    color: '#C4BCB3',
-    fontSize: 12,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 18,
-    letterSpacing: 0.2,
-  },
-  pullStageMarkActive: {
-    color: THEME_ACCENT,
-  },
-  pullStageMarkDisabled: {
-    color: '#C4BCB3',
-  },
-  addButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: THEME_ACCENT,
-    marginLeft: 10,
-  },
-  addButtonPressed: {
-    opacity: 0.7,
-    transform: [{ scale: 0.95 }],
-  },
-  addButtonText: {
-    color: '#FFFFFF',
-    fontSize: 22,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 24,
-  },
   listContent: {
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingBottom: 100,
-    paddingTop: 8,
+    paddingTop: TODO_LIST_CONTENT_TOP_PADDING,
   },
   todoListRowGap: {
-    height: 12,
+    height: TODO_LIST_ROW_GAP,
   },
   emptyListContent: {
     flexGrow: 1,
@@ -6795,6 +6072,31 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 10,
     elevation: 2,
+  },
+  todoSectionCardExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  todoSectionGroupedShell: {
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    paddingHorizontal: 16,
+  },
+  todoSectionGroupedShellLast: {
+    borderBottomColor: THEME_BORDER,
+    borderBottomLeftRadius: CARD_BORDER_RADIUS,
+    borderBottomRightRadius: CARD_BORDER_RADIUS,
+    borderBottomWidth: 1,
+    elevation: 0,
+    overflow: 'hidden',
+    paddingBottom: 12,
+    shadowOpacity: 0,
   },
   todoSectionHeader: {
     alignItems: 'center',
@@ -6821,6 +6123,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 22,
+    minWidth: 0,
   },
   todoGroupCount: {
     color: THEME_TEXT_SECONDARY,
@@ -6830,186 +6133,10 @@ const styles = StyleSheet.create({
     minWidth: 16,
     textAlign: 'right',
   },
-  todoSectionBody: {
-    paddingBottom: 12,
-    paddingHorizontal: 16,
-  },
   todoRowDivider: {
     backgroundColor: THEME_BORDER,
-    height: StyleSheet.hairlineWidth,
+    height: TODO_ROW_DIVIDER_HEIGHT,
     marginLeft: 38,
-  },
-  swipeShell: {
-    minHeight: 56,
-    backgroundColor: 'transparent',
-    position: 'relative',
-  },
-  swipeShellGrouped: {
-    minHeight: 52,
-  },
-  todoSwipeableContainer: {
-    minHeight: 56,
-    borderRadius: CONTROL_BORDER_RADIUS,
-    overflow: 'visible',
-  },
-  todoSwipeableChildren: {
-    overflow: 'visible',
-  },
-  todoSwipeLeftActions: {
-    width: TODO_LEFT_ACTION_MENU_WIDTH,
-    height: '100%',
-    borderRadius: CONTROL_BORDER_RADIUS,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    backgroundColor: '#CF413A',
-  },
-  todoSwipeRightActions: {
-    width: TODO_RIGHT_ACTION_MENU_WIDTH,
-    height: '100%',
-    borderRadius: CONTROL_BORDER_RADIUS,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    backgroundColor: '#F19A38',
-  },
-  todoActionButton: {
-    width: TODO_ACTION_WIDTH,
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  todoActionDone: {
-    backgroundColor: '#3A63E8',
-  },
-  todoActionDelete: {
-    backgroundColor: '#CF413A',
-  },
-  todoActionMore: {
-    backgroundColor: '#F19A38',
-  },
-  todoActionPressed: {
-    opacity: 0.78,
-  },
-  todoActionIcon: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 28,
-  },
-  todoRow: {
-    minHeight: 56,
-    borderRadius: CONTROL_BORDER_RADIUS,
-    backgroundColor: THEME_CARD,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: THEME_BORDER,
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    shadowColor: '#000000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
-  todoRowGrouped: {
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    borderRadius: 0,
-    minHeight: 52,
-    paddingHorizontal: 0,
-    paddingVertical: 12,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  todoCheckboxPressable: {
-    marginRight: 12,
-    marginTop: 2,
-  },
-  todoCheckbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: '#C7C7CC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: THEME_CARD,
-  },
-  todoCheckboxChecked: {
-    backgroundColor: THEME_ACCENT,
-    borderColor: THEME_ACCENT,
-  },
-  todoTextPressable: {
-    flex: 1,
-    minWidth: 0,
-    alignSelf: 'stretch',
-    justifyContent: 'center',
-  },
-  todoRowDone: {
-    backgroundColor: '#FAFBFC',
-    borderColor: THEME_BORDER,
-  },
-  todoRowMenuTarget: {
-    backgroundColor: THEME_ACCENT_SELECTION,
-    borderColor: THEME_ACCENT_SELECTION_BORDER,
-    borderWidth: StyleSheet.hairlineWidth,
-    shadowColor: THEME_ACCENT,
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  todoRowMenuTargetGrouped: {
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  todoMenuSelectionGlow: {
-    backgroundColor: THEME_ACCENT_SELECTION,
-    borderRadius: 10,
-    bottom: 6,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    top: 6,
-  },
-  todoColorRail: {
-    alignSelf: 'stretch',
-    borderRadius: 3,
-    marginRight: 12,
-    opacity: 0.9,
-    width: 5,
-  },
-  todoColorRailDone: {
-    opacity: 0.35,
-  },
-  todoText: {
-    color: THEME_TEXT,
-    fontSize: 16,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 22,
-    letterSpacing: 0,
-  },
-  todoTextDone: {
-    color: THEME_TEXT_SECONDARY,
-    fontWeight: FONT_REGULAR,
-    textDecorationLine: 'line-through',
-    textDecorationColor: '#C7C7CC',
-  },
-  todoColorDotRow: {
-    flexDirection: 'row',
-    gap: 5,
-    marginTop: 8,
-  },
-  todoColorDot: {
-    borderRadius: 4,
-    height: 8,
-    width: 8,
-  },
-  todoColorDotDone: {
-    opacity: 0.45,
   },
   searchFiltersPanel: {
     flex: 1,

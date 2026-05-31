@@ -8,7 +8,6 @@ import {
   View,
 } from 'react-native';
 
-import { DATE_FILTER_PRESETS } from '../dates';
 import { TodoMetaTags } from './TodoMetaTags';
 import {
   getTodoColorThemes,
@@ -20,6 +19,11 @@ import {
   type HiddenMetaTagKind,
   type MetaTagVisibility,
 } from '../metaTags';
+import {
+  DATE_MENU_ITEMS,
+  getBestOrderedFilterLabel,
+  PRIORITY_MENU_ITEMS,
+} from '../todoOptions';
 import { type Todo } from '../todos';
 
 const THEME_CARD = '#FFFFFF';
@@ -31,23 +35,6 @@ const THEME_ACCENT_SELECTION = 'rgba(76, 120, 255, 0.07)';
 const GROUPED_ROW_BLEED = 16;
 const FONT_SEMIBOLD = '600';
 const FONT_REGULAR = '400';
-
-const DATE_MENU_ITEMS: string[] = [...DATE_FILTER_PRESETS];
-const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
-
-const getBestOrderedFilterLabel = (
-  values: string[],
-  options: string[],
-  fallback: string,
-) => {
-  for (const option of options) {
-    if (values.includes(option)) {
-      return option;
-    }
-  }
-
-  return values[0] ?? fallback;
-};
 
 export type TodoRowProps = {
   filterColors: FilterColorSettings;

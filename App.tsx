@@ -397,7 +397,7 @@ const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
 const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
-const TODO_MENU_TARGET_TOP_OFFSET = 12;
+const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_EXPANSION_SETTLE_MS = 120;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
@@ -3386,10 +3386,11 @@ export default function App() {
     }
 
     const getTargetOffset = () => {
+      const firstItemOffset = list.getFirstItemOffset();
       const layout = list.getLayout(index);
 
       if (layout) {
-        return layout.y + list.getFirstItemOffset() - TODO_MENU_TARGET_TOP_OFFSET;
+        return layout.y + firstItemOffset - TODO_MENU_TARGET_TOP_OFFSET;
       }
 
       const itemOffset = estimateTodoListOffsetForId(
@@ -3411,9 +3412,16 @@ export default function App() {
       return;
     }
 
+    const nextOffset = Math.max(0, targetOffset);
+
+    if (Math.abs(scrollOffsetY.current - nextOffset) < 1) {
+      return;
+    }
+
+    scrollOffsetY.current = nextOffset;
     list.scrollToOffset({
       animated: true,
-      offset: Math.max(0, targetOffset),
+      offset: nextOffset,
     });
   }, [
     collapsedTodoGroupIds,
@@ -3422,24 +3430,34 @@ export default function App() {
     visibleTodoListRows,
   ]);
 
+  const requestTodoMenuTargetScroll = useCallback((id: string) => {
+    const frames: number[] = [];
+    const runScroll = () => scrollTodoAboveMenu(id);
+
+    frames.push(requestAnimationFrame(() => {
+      runScroll();
+      frames.push(requestAnimationFrame(() => {
+        runScroll();
+        frames.push(requestAnimationFrame(runScroll));
+      }));
+    }));
+
+    return () => {
+      frames.forEach((frame) => cancelAnimationFrame(frame));
+    };
+  }, [scrollTodoAboveMenu]);
+
   useEffect(() => {
     if (!activeTodoMenuId || !listMenuOpen) {
       return undefined;
     }
 
-    const id = activeTodoMenuId;
-    const frame = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        scrollTodoAboveMenu(id);
-      });
-    });
-
-    return () => cancelAnimationFrame(frame);
+    return requestTodoMenuTargetScroll(activeTodoMenuId);
   }, [
     activeTodoMenuId,
     collapsedTodoGroupIds,
     listMenuOpen,
-    scrollTodoAboveMenu,
+    requestTodoMenuTargetScroll,
     visibleTodoListRows,
   ]);
 
@@ -3451,15 +3469,10 @@ export default function App() {
     setActiveTodoMenuId(id);
     Keyboard.dismiss();
     setMenuMode('main');
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        scrollTodoAboveMenu(id);
-      });
-    });
+    requestTodoMenuTargetScroll(id);
 
     Haptics.selectionAsync().catch(() => undefined);
-  }, [pendingDeleteIds, scrollTodoAboveMenu]);
+  }, [pendingDeleteIds, requestTodoMenuTargetScroll]);
 
   const groupedHiddenMetaTagKinds = useMemo((): HiddenMetaTagKind[] => {
     if (effectiveGroupMode === 'date') return ['date'];

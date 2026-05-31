@@ -37,14 +37,12 @@ const THEME_BORDER = '#E5E5EA';
 const THEME_TEXT = '#1C1C1E';
 const THEME_TEXT_SECONDARY = '#8E8E93';
 const THEME_ACCENT = '#4C78FF';
-const THEME_ACCENT_SELECTION = '#F4F7FF';
 const THEME_ACCENT_SELECTION_BORDER = 'rgba(76, 120, 255, 0.36)';
 const SWIPE_DONE = '#4168E8';
 const SWIPE_DELETE = '#D14A42';
 const SWIPE_MENU = '#EA8D35';
 const FONT_REGULAR = '400';
 const ROW_BORDER_RADIUS = 10;
-const SELECTION_FRAME_PADDING = 4;
 const SWIPE_ACTION_BUTTON_WIDTH = 48;
 const SWIPE_ACTION_EDGE_PADDING = 10;
 const SWIPE_ACTION_GAP = 6;
@@ -524,7 +522,7 @@ function TodoRowComponent({
       style={[
         styles.row,
         isGroupedLayout && styles.rowGrouped,
-        !isHighlightedForMenu && !isGroupedLayout && todoColorTheme && !item.done && {
+        !isGroupedLayout && todoColorTheme && !item.done && {
           backgroundColor: todoColorTheme.tint,
           borderColor: todoColorTheme.border,
           shadowColor: todoColorTheme.accent,
@@ -694,6 +692,15 @@ function TodoRowComponent({
           {rowContent}
         </Swipeable>
       )}
+      {isHighlightedForMenu ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.selectionFrame,
+            isGroupedLayout && styles.selectionFrameGrouped,
+          ]}
+        />
+      ) : null}
     </View>
   );
 }
@@ -712,19 +719,32 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   shellMenuTarget: {
-    backgroundColor: THEME_ACCENT_SELECTION,
-    borderColor: THEME_ACCENT_SELECTION_BORDER,
-    borderRadius: ROW_BORDER_RADIUS + SELECTION_FRAME_PADDING + 1,
-    borderWidth: 1,
-    padding: SELECTION_FRAME_PADDING,
+    zIndex: 2,
     shadowColor: THEME_ACCENT,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   shellMenuTargetGrouped: {
     marginVertical: 2,
+  },
+  selectionFrame: {
+    borderColor: THEME_ACCENT_SELECTION_BORDER,
+    borderRadius: 3,
+    borderWidth: 1.5,
+    bottom: -3,
+    left: -3,
+    position: 'absolute',
+    right: -3,
+    top: -3,
+    zIndex: 3,
+  },
+  selectionFrameGrouped: {
+    bottom: 1,
+    left: -7,
+    right: -7,
+    top: 1,
   },
   swipeableContainer: {
     alignSelf: 'stretch',
@@ -825,14 +845,12 @@ const styles = StyleSheet.create({
     elevation: 0,
   },
   rowMenuTarget: {
-    backgroundColor: THEME_ACCENT_SELECTION,
-    borderColor: 'transparent',
-    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: THEME_ACCENT_SELECTION_BORDER,
     elevation: 0,
     shadowOpacity: 0,
   },
   rowMenuTargetGrouped: {
-    backgroundColor: THEME_ACCENT_SELECTION,
+    backgroundColor: 'transparent',
   },
   colorRail: {
     alignSelf: 'stretch',

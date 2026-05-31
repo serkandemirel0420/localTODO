@@ -42,6 +42,7 @@ import {
 } from 'react-native-gesture-handler';
 
 import {
+  formatCompactDateFilterLabel,
   formatDateFilterLabel,
   getInitialDatePickerValue,
   isDateFilterOverdue,
@@ -78,6 +79,7 @@ import {
   getFilterColorTheme,
   getTodoColorThemes,
   getTodoPrimaryColorTheme,
+  type FilterColorKey,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
@@ -105,6 +107,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 type SwipeTodoItemProps = {
   filterColors: FilterColorSettings;
+  hiddenMetaFilterKeys?: FilterColorKey[];
   item: Todo;
   isMenuTarget: boolean;
   layout?: 'standalone' | 'grouped';
@@ -199,6 +202,8 @@ type TodoListRow =
     }
   | {
       count: number;
+      groupKey?: string;
+      groupMode?: Exclude<TodoGroupMode, 'none'>;
       id: string;
       label: string;
       todos: Todo[];
@@ -749,7 +754,7 @@ const getTodoGroup = (
 
   return {
     key: rawLabel,
-    label: formatDateFilterLabel(rawLabel),
+    label: formatCompactDateFilterLabel(rawLabel),
     rank: presetRank >= 0
       ? presetRank
       : customDate
@@ -850,6 +855,8 @@ const buildGroupedSectionRows = (
 
       return {
         count: group.todos.length,
+        groupKey: group.key,
+        groupMode,
         id: groupId,
         label: group.label,
         todos: collapsedGroupIds.has(groupId) ? [] : group.todos,
@@ -897,6 +904,7 @@ const isOverdueStatusLabel = (label: string) => /overdue/i.test(label);
 
 function SwipeTodoItem({
   filterColors,
+  hiddenMetaFilterKeys = [],
   item,
   isMenuTarget,
   layout = 'standalone',
@@ -1023,7 +1031,10 @@ function SwipeTodoItem({
     [openMenuFromAction],
   );
   const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
-  const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
+  const hiddenMetaKeys = new Set(hiddenMetaFilterKeys);
+  const todoMetaDots = getTodoColorThemes(item.filters, filterColors)
+    .filter((theme) => !hiddenMetaKeys.has(theme.filterKey))
+    .slice(0, 5);
   const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
   const isGroupedLayout = layout === 'grouped';
   const rawDateStatusLabel = getBestOrderedFilterLabel(
@@ -1031,15 +1042,11 @@ function SwipeTodoItem({
     DATE_MENU_ITEMS,
     '',
   );
-  const dateStatusLabel = rawDateStatusLabel
-    ? formatDateFilterLabel(rawDateStatusLabel)
-    : '';
-  const listStatusLabel = item.filters.list[0] ?? '';
-  const showDateStatus = dateStatusLabel.length > 0;
-  const showListStatus = listStatusLabel.length > 0;
-  const dateStatusIsOverdue = isOverdueStatusLabel(dateStatusLabel)
-    || isDateFilterOverdue(rawDateStatusLabel)
+  const dateStatusIsOverdue = isDateFilterOverdue(rawDateStatusLabel)
     || (sectionLabel ? isOverdueStatusLabel(sectionLabel) : false);
+  const todoMetaAccessibilityLabel = todoMetaDots
+    .map((theme) => `${theme.filterKey}: ${theme.value}`)
+    .join(', ');
 
   const toggleDoneFromCheckbox = useCallback(() => {
     onSetDone(item.id, !item.done);
@@ -1118,34 +1125,23 @@ function SwipeTodoItem({
             >
               {item.text}
             </Text>
-            {(showDateStatus || showListStatus) ? (
-              <View style={styles.todoMetaRow}>
-                {showDateStatus ? (
-                  <Text
-                    style={[
-                      styles.todoMetaDate,
-                      dateStatusIsOverdue && styles.todoMetaDateOverdue,
-                    ]}
-                  >
-                    {dateStatusLabel}
-                  </Text>
-                ) : (
-                  <View style={styles.todoMetaSpacer} />
-                )}
-                {showListStatus ? (
-                  <Text style={styles.todoMetaList}>{listStatusLabel}</Text>
-                ) : null}
-              </View>
-            ) : null}
-            {!isGroupedLayout && todoColorDots.length > 0 ? (
-              <View style={styles.todoColorDotRow}>
-                {todoColorDots.map((theme) => (
+            {todoMetaDots.length > 0 ? (
+              <View
+                accessibilityLabel={todoMetaAccessibilityLabel}
+                style={styles.todoMetaDotRow}
+              >
+                {todoMetaDots.map((theme) => (
                   <View
                     key={`${theme.filterKey}-${theme.value}`}
                     style={[
-                      styles.todoColorDot,
-                      { backgroundColor: theme.accent },
-                      item.done && styles.todoColorDotDone,
+                      styles.todoMetaDot,
+                      {
+                        backgroundColor:
+                          theme.filterKey === 'date' && dateStatusIsOverdue
+                            ? THEME_DANGER
+                            : theme.accent,
+                      },
+                      item.done && styles.todoMetaDotDone,
                     ]}
                   />
                 ))}
@@ -3468,10 +3464,35 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [scrollTodoAboveMenu]);
 
+  const groupedHiddenMetaFilterKeys = useMemo((): FilterColorKey[] => {
+    if (effectiveGroupMode === 'date') {
+      return ['date'];
+    }
+
+    if (effectiveGroupMode === 'list') {
+      return ['list'];
+    }
+
+    if (effectiveGroupMode === 'priority') {
+      return ['priority'];
+    }
+
+    return [];
+  }, [effectiveGroupMode]);
+
   const renderTodoItem = useCallback(
     ({ item }: { item: TodoListRow }) => {
       if (item.type === 'section') {
         const isCollapsed = collapsedTodoGroupIds.has(item.id);
+        const sectionFilterKey =
+          item.groupMode === 'date' ||
+          item.groupMode === 'list' ||
+          item.groupMode === 'priority'
+            ? item.groupMode
+            : null;
+        const sectionColorTheme = sectionFilterKey && item.groupKey
+          ? getFilterColorTheme(filterColors, sectionFilterKey, item.groupKey)
+          : null;
 
         return (
           <View style={styles.todoSectionCard}>
@@ -3485,7 +3506,17 @@ export default function App() {
                 pressed && styles.todoGroupHeaderPressed,
               ]}
             >
-              <Text style={styles.todoSectionTitle}>{item.label}</Text>
+              <View style={styles.todoSectionTitleWrap}>
+                {sectionColorTheme ? (
+                  <View
+                    style={[
+                      styles.todoSectionColorDot,
+                      { backgroundColor: sectionColorTheme.accent },
+                    ]}
+                  />
+                ) : null}
+                <Text style={styles.todoSectionTitle}>{item.label}</Text>
+              </View>
               <View style={styles.todoSectionHeaderMeta}>
                 <Text style={styles.todoGroupCount}>{item.count}</Text>
                 <Ionicons
@@ -3503,6 +3534,7 @@ export default function App() {
                     {todoIndex > 0 ? <View style={styles.todoRowDivider} /> : null}
                     <MemoizedSwipeTodoItem
                       filterColors={filterColors}
+                      hiddenMetaFilterKeys={groupedHiddenMetaFilterKeys}
                       item={todo}
                       isMenuTarget={menuMode !== null && activeTodoMenuId === todo.id}
                       layout="grouped"
@@ -3536,6 +3568,7 @@ export default function App() {
       collapsedTodoGroupIds,
       deleteTodo,
       filterColors,
+      groupedHiddenMetaFilterKeys,
       handleListTap,
       activeTodoMenuId,
       menuMode,
@@ -4169,12 +4202,7 @@ export default function App() {
                               { backgroundColor: colorTheme.accent },
                             ]}
                           />
-                          <View style={styles.searchFilterRowText}>
-                            <Text style={styles.searchFilterLabel}>{item.label}</Text>
-                            <Text style={styles.filterTypeText}>
-                              {FILTER_KIND_LABELS[item.filterKey]}
-                            </Text>
-                          </View>
+                          <Text style={styles.searchFilterLabel}>{item.label}</Text>
                         </View>
                       );
                     })
@@ -6560,17 +6588,30 @@ const styles = StyleSheet.create({
   todoColorRailDone: {
     opacity: 0.35,
   },
-  todoColorDotRow: {
+  todoSectionTitleWrap: {
+    alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
-    gap: 5,
-    marginTop: 8,
+    gap: 8,
+    minWidth: 0,
   },
-  todoColorDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+  todoSectionColorDot: {
+    borderRadius: 3,
+    flexShrink: 0,
+    height: 6,
+    width: 6,
   },
-  todoColorDotDone: {
+  todoMetaDotRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: 4,
+  },
+  todoMetaDot: {
+    borderRadius: 3,
+    height: 5,
+    width: 5,
+  },
+  todoMetaDotDone: {
     opacity: 0.35,
   },
   todoText: {
@@ -6585,32 +6626,6 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     textDecorationLine: 'line-through',
     textDecorationColor: '#C7C7CC',
-  },
-  todoMetaRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 6,
-    minHeight: 16,
-  },
-  todoMetaSpacer: {
-    flex: 1,
-  },
-  todoMetaDate: {
-    color: THEME_ACCENT,
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 16,
-  },
-  todoMetaDateOverdue: {
-    color: THEME_DANGER,
-  },
-  todoMetaList: {
-    color: THEME_TEXT_SECONDARY,
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 16,
-    marginLeft: 12,
   },
   searchFiltersPanel: {
     flex: 1,

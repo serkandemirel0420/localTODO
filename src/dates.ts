@@ -55,6 +55,40 @@ export const startOfDay = (date: Date): Date => {
   return next;
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export const formatCompactDateFilterLabel = (label: string): string => {
+  if (label === SOMEDAY_DATE_LABEL) {
+    return 'Someday';
+  }
+
+  const customDate = parseISODateLabel(label);
+  if (customDate) {
+    const dayOffset = Math.round(
+      (startOfDay(customDate).getTime() - startOfDay(new Date()).getTime()) / DAY_MS,
+    );
+
+    if (dayOffset === 0) {
+      return 'Today';
+    }
+
+    if (dayOffset === 1) {
+      return 'Tomorrow';
+    }
+
+    if (dayOffset === -1) {
+      return 'Yesterday';
+    }
+
+    return customDate.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  return label;
+};
+
 export const isDateFilterOverdue = (label: string): boolean => {
   const parsed = parseISODateLabel(label);
   if (!parsed) {

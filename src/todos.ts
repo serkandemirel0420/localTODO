@@ -8,6 +8,7 @@ export type TodoFilters = {
 
 export type Todo = {
   id: string;
+  content: string;
   text: string;
   done: boolean;
   createdAt: number;
@@ -87,6 +88,11 @@ export const normalizeTodoText = (value: string) =>
     .toLocaleLowerCase()
     .trim();
 
+export const normalizeTodoContent = (value: string) =>
+  value
+    .replace(/\r\n?/g, '\n')
+    .trim();
+
 export const formatListLabel = (value: string) => {
   const trimmed = value.trim();
 
@@ -105,8 +111,10 @@ export const formatListLabel = (value: string) => {
 export const makeTodo = (
   text: string,
   filters: TodoFilters = EMPTY_TODO_FILTERS,
+  content = '',
 ): Todo => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  content: normalizeTodoContent(content),
   text,
   done: false,
   createdAt: Date.now(),
@@ -121,6 +129,7 @@ export const isTodo = (value: unknown): value is Todo => {
   const todo = value as Partial<Todo>;
   return (
     typeof todo.id === 'string' &&
+    (typeof todo.content === 'undefined' || typeof todo.content === 'string') &&
     typeof todo.text === 'string' &&
     typeof todo.done === 'boolean' &&
     typeof todo.createdAt === 'number' &&
@@ -146,6 +155,7 @@ export const normalizeTodo = (value: unknown): Todo | null => {
 
   return {
     id: todo.id,
+    content: typeof todo.content === 'string' ? normalizeTodoContent(todo.content) : '',
     text: todo.text,
     done: todo.done,
     createdAt: todo.createdAt,

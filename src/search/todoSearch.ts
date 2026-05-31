@@ -4,7 +4,7 @@ import { normalizeTodoText, type Todo } from '../todos';
 
 export const createTodoSearchIndex = (todos: Todo[]) => {
   const index = new MiniSearch<Todo>({
-    fields: ['text'],
+    fields: ['content', 'text'],
     idField: 'id',
     processTerm: (term) => normalizeTodoText(term) || null,
     searchOptions: {

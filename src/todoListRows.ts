@@ -25,6 +25,7 @@ export const TODO_GROUPED_ROW_ESTIMATE = 64;
 export const TODO_SECTION_HEADER_ESTIMATE = 52;
 export const TODO_SECTION_BODY_BOTTOM_PADDING = 12;
 export const TODO_ROW_DIVIDER_HEIGHT = StyleSheet.hairlineWidth;
+const TODO_CONTENT_ROW_ESTIMATE = 22;
 
 const NOT_SECTIONED_LABEL = 'Not Sectioned';
 
@@ -171,6 +172,9 @@ const compareTodosByFallback = (first: Todo, second: Todo) =>
   first.text.localeCompare(second.text) ||
   first.id.localeCompare(second.id);
 
+const getTodoRowEstimate = (todo: Todo, baseEstimate: number) =>
+  todo.content.trim() ? baseEstimate + TODO_CONTENT_ROW_ESTIMATE : baseEstimate;
+
 export const compareTodosBySortMode = (
   first: Todo,
   second: Todo,
@@ -207,83 +211,96 @@ export const compareTodosBySortMode = (
   return compareTodosByFallback(first, second);
 };
 
-const getTodoListGroupLabel = (
+const getTodoListGroupLabels = (
   todo: Todo,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
-): TodoGroup => {
+): TodoGroup[] => {
+  const groups: TodoGroup[] = [];
+  const seenKeys = new Set<string>();
+
+  const addGroup = (key: string, label: string, rankLabel = label) => {
+    if (seenKeys.has(key)) {
+      return;
+    }
+
+    seenKeys.add(key);
+    const rank = orderedListLabels.indexOf(rankLabel);
+    groups.push({
+      key,
+      label,
+      rank: rank >= 0 ? rank : orderedListLabels.length + 1,
+    });
+  };
+
   for (const parent of listMenuTree) {
     if (!parent.children?.length) {
+      if (todo.filters.list.includes(parent.label)) {
+        addGroup(parent.label, parent.label);
+      }
+
       continue;
     }
 
-    const matchedChild = parent.children.find((child) => (
-      todo.filters.list.includes(child.label)
-    ));
-    if (matchedChild) {
-      const childRank = orderedListLabels.indexOf(matchedChild.label);
-      return {
-        key: matchedChild.label,
-        label: matchedChild.label,
-        rank: childRank >= 0 ? childRank : orderedListLabels.length + 1,
-      };
-    }
+    parent.children.forEach((child) => {
+      if (todo.filters.list.includes(child.label)) {
+        addGroup(child.label, child.label);
+      }
+    });
 
     if (todo.filters.list.includes(parent.label)) {
-      const parentRank = orderedListLabels.indexOf(parent.label);
-      return {
-        key: `${parent.label}::${NOT_SECTIONED_LABEL}`,
-        label: NOT_SECTIONED_LABEL,
-        rank: parentRank >= 0 ? parentRank : orderedListLabels.length + 1,
-      };
+      addGroup(`${parent.label}::${NOT_SECTIONED_LABEL}`, NOT_SECTIONED_LABEL, parent.label);
     }
   }
 
-  const label = getBestOrderedFilterLabel(todo.filters.list, orderedListLabels, 'No list');
-  const rank = orderedListLabels.indexOf(label);
+  todo.filters.list.forEach((label) => {
+    if (!orderedListLabels.includes(label)) {
+      addGroup(label, label);
+    }
+  });
 
-  return {
-    key: label,
-    label,
-    rank: rank >= 0 ? rank : orderedListLabels.length + 1,
-  };
+  if (groups.length === 0) {
+    addGroup('No list', 'No list');
+  }
+
+  return groups;
 };
 
-const getTodoGroup = (
+const getTodoGroups = (
   todo: Todo,
   groupMode: Exclude<TodoGroupMode, 'none'>,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
-): TodoGroup => {
+): TodoGroup[] => {
   if (groupMode === 'status') {
     const label = todo.done ? 'Done' : 'Active';
-    return {
+    return [{
       key: label,
       label,
       rank: todo.done ? 1 : 0,
-    };
+    }];
   }
 
   if (groupMode === 'list') {
-    return getTodoListGroupLabel(todo, orderedListLabels, listMenuTree);
+    return getTodoListGroupLabels(todo, orderedListLabels, listMenuTree);
   }
 
   if (groupMode === 'priority') {
     const label = getBestOrderedFilterLabel(todo.filters.priority, PRIORITY_MENU_ITEMS, 'No priority');
     const rank = PRIORITY_MENU_ITEMS.indexOf(label);
 
-    return {
+    return [{
       key: label,
       label,
       rank: rank >= 0 ? rank : PRIORITY_MENU_ITEMS.length + 1,
-    };
+    }];
   }
 
   const rawLabel = getBestOrderedFilterLabel(todo.filters.date, DATE_MENU_ITEMS, 'No date');
   const presetRank = DATE_MENU_ITEMS.indexOf(rawLabel);
   const customDate = parseISODateLabel(rawLabel);
 
-  return {
+  return [{
     key: rawLabel,
     label: formatCompactDateFilterLabel(rawLabel),
     rank: presetRank >= 0
@@ -291,7 +308,7 @@ const getTodoGroup = (
       : customDate
         ? DATE_MENU_ITEMS.length + customDate.getTime() / 1e12
         : DATE_MENU_ITEMS.length + 1,
-  };
+  }];
 };
 
 const todoBelongsToListParent = (
@@ -306,15 +323,23 @@ const todoBelongsToListParent = (
   return subsectionLabels.some((label) => todo.filters.list.includes(label));
 };
 
-const getTodoSubsectionLabel = (
+const getTodoSubsectionLabels = (
   todo: Todo,
   context: ListSubsectionContext,
-) => {
-  const matchedSubsection = context.subsectionLabels.find((label) => (
-    todo.filters.list.includes(label)
-  ));
+): string[] => {
+  const labels: string[] = [];
 
-  return matchedSubsection ?? NOT_SECTIONED_LABEL;
+  if (todo.filters.list.includes(context.parentLabel)) {
+    labels.push(NOT_SECTIONED_LABEL);
+  }
+
+  context.subsectionLabels.forEach((label) => {
+    if (todo.filters.list.includes(label)) {
+      labels.push(label);
+    }
+  });
+
+  return labels.length > 0 ? labels : [NOT_SECTIONED_LABEL];
 };
 
 const buildSubsectionRows = (
@@ -329,8 +354,10 @@ const buildSubsectionRows = (
   );
 
   scopedTodos.forEach((todo) => {
-    const bucket = buckets.get(getTodoSubsectionLabel(todo, context)) ?? buckets.get(NOT_SECTIONED_LABEL);
-    bucket?.push(todo);
+    getTodoSubsectionLabels(todo, context).forEach((label) => {
+      const bucket = buckets.get(label) ?? buckets.get(NOT_SECTIONED_LABEL);
+      bucket?.push(todo);
+    });
   });
 
   const sectionOrder = [NOT_SECTIONED_LABEL, ...context.subsectionLabels];
@@ -355,19 +382,20 @@ const buildGroupedSectionRows = (
   const groups = new Map<string, { key: string; label: string; rank: number; todos: Todo[] }>();
 
   todos.forEach((todo) => {
-    const group = getTodoGroup(todo, groupMode, orderedListLabels, listMenuTree);
-    const existingGroup = groups.get(group.key);
+    getTodoGroups(todo, groupMode, orderedListLabels, listMenuTree).forEach((group) => {
+      const existingGroup = groups.get(group.key);
 
-    if (existingGroup) {
-      existingGroup.todos.push(todo);
-      return;
-    }
+      if (existingGroup) {
+        existingGroup.todos.push(todo);
+        return;
+      }
 
-    groups.set(group.key, {
-      key: group.key,
-      label: group.label,
-      rank: group.rank,
-      todos: [todo],
+      groups.set(group.key, {
+        key: group.key,
+        label: group.label,
+        rank: group.rank,
+        todos: [todo],
+      });
     });
   });
   const rows: TodoListRow[] = [];
@@ -434,30 +462,30 @@ export const estimateTodoListOffsetForId = (
         return offset;
       }
 
-      offset += TODO_STANDALONE_ROW_ESTIMATE;
+      offset += getTodoRowEstimate(row.todo, TODO_STANDALONE_ROW_ESTIMATE);
       continue;
     }
 
     const collapsed = collapsedGroupIds.has(row.id);
     const todoIndex = row.todos.findIndex((todo) => todo.id === id);
 
+    offset += TODO_SECTION_HEADER_ESTIMATE;
+
     if (todoIndex >= 0) {
-      offset += TODO_SECTION_HEADER_ESTIMATE;
+      if (collapsed) {
+        continue;
+      }
 
-      if (!collapsed) {
-        for (let index = 0; index < todoIndex; index += 1) {
-          if (index > 0) {
-            offset += TODO_ROW_DIVIDER_HEIGHT;
-          }
-
-          offset += TODO_GROUPED_ROW_ESTIMATE;
+      for (let index = 0; index < todoIndex; index += 1) {
+        if (index > 0) {
+          offset += TODO_ROW_DIVIDER_HEIGHT;
         }
+
+        offset += getTodoRowEstimate(row.todos[index], TODO_GROUPED_ROW_ESTIMATE);
       }
 
       return offset;
     }
-
-    offset += TODO_SECTION_HEADER_ESTIMATE;
 
     if (!collapsed && row.todos.length > 0) {
       for (let index = 0; index < row.todos.length; index += 1) {
@@ -465,7 +493,7 @@ export const estimateTodoListOffsetForId = (
           offset += TODO_ROW_DIVIDER_HEIGHT;
         }
 
-        offset += TODO_GROUPED_ROW_ESTIMATE;
+        offset += getTodoRowEstimate(row.todos[index], TODO_GROUPED_ROW_ESTIMATE);
       }
 
       offset += TODO_SECTION_BODY_BOTTOM_PADDING;

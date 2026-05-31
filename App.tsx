@@ -70,6 +70,7 @@ import {
   cloneTodoFilters,
   getTodoTextMaxLength,
   makeTodo,
+  normalizeTodoContent,
   normalizeTodoFilters,
   formatListLabel,
   normalizeTodoText,
@@ -382,7 +383,7 @@ const EDGE_BACK_WIDTH = 28;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
 const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
-const BOTTOM_NAV_HEIGHT = 64;
+const BOTTOM_NAV_HEIGHT = 74;
 // Menu overlay sits above bottomNav; a small gap keeps the sheet off the nav bar.
 const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
@@ -497,6 +498,7 @@ const EMPTY_SELECTED_FILTERS: SelectedFilters = {
 };
 const INITIAL_TODOS = Array.from({ length: 50 }, (_, index) => ({
   id: `seed-${index + 1}`,
+  content: '',
   text: `Todo item ${index + 1}`,
   done: false,
   createdAt: Date.now() - index,
@@ -720,6 +722,7 @@ export default function App() {
   const [createDrawerKeyboardInset, setCreateDrawerKeyboardInset] = useState(0);
   const [query, setQuery] = useState('');
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
+  const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
@@ -772,6 +775,7 @@ export default function App() {
   );
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
+  const createContentInputRef = useRef<TextInput>(null);
   const createInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
   const listMenuRef = useRef<GestureFlatList<BottomMenuItem> | null>(null);
@@ -1297,6 +1301,7 @@ export default function App() {
     setCreateDrawerVisible(false);
     setCreateDrawerPicker(null);
     setCreateDraftPriorityFromPicker(false);
+    setCreateDraftContent('');
     setCreateDraftText('');
     setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
   }, [listMenuTree]);
@@ -1309,6 +1314,7 @@ export default function App() {
     searchInputRef.current?.blur();
     setCreateDrawerPicker(null);
     setCreateDraftPriorityFromPicker(false);
+    setCreateDraftContent('');
     setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
     setCreateDraftText(
       truncateTodoText(
@@ -1360,6 +1366,7 @@ export default function App() {
       createDraftText.trim().replace(/\s+/g, ' '),
       todoTextMaxLength,
     );
+    const content = normalizeTodoContent(createDraftContent);
 
     if (!text) {
       return;
@@ -1374,13 +1381,14 @@ export default function App() {
       return;
     }
 
-    setTodos((current) => [makeTodo(text, createDraftFilters), ...current]);
+    setTodos((current) => [makeTodo(text, createDraftFilters, content), ...current]);
     closeCreateDrawer();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
       () => undefined,
     );
   }, [
     closeCreateDrawer,
+    createDraftContent,
     createDraftFilters,
     createDraftText,
     todoTextMaxLength,
@@ -4161,22 +4169,36 @@ export default function App() {
                     })}
                   </ScrollView>
                 ) : (
-                  <TextInput
-                    ref={createInputRef}
-                    autoCapitalize="sentences"
-                    autoCorrect
-                    blurOnSubmit={false}
-                    multiline
-                    onChangeText={setCreateDraftText}
-                    onSubmitEditing={submitCreateTodo}
-                    placeholder="What would you like to do?"
-                    placeholderTextColor="#B5ADA5"
-                    returnKeyType="done"
-                    selectionColor="#2F6F62"
-                    style={styles.createDrawerInput}
-                    textAlignVertical="top"
-                    value={createDraftText}
-                  />
+                  <View style={styles.createDrawerEditor}>
+                    <TextInput
+                      ref={createInputRef}
+                      autoCapitalize="sentences"
+                      autoCorrect
+                      blurOnSubmit={false}
+                      onChangeText={setCreateDraftText}
+                      onSubmitEditing={() => createContentInputRef.current?.focus()}
+                      placeholder="Task title"
+                      placeholderTextColor="#B5ADA5"
+                      returnKeyType="next"
+                      selectionColor="#2F6F62"
+                      style={styles.createDrawerTitleInput}
+                      value={createDraftText}
+                    />
+                    <TextInput
+                      ref={createContentInputRef}
+                      autoCapitalize="sentences"
+                      autoCorrect
+                      multiline
+                      onChangeText={setCreateDraftContent}
+                      placeholder="Content"
+                      placeholderTextColor="#B5ADA5"
+                      selectionColor="#2F6F62"
+                      scrollEnabled
+                      style={styles.createDrawerContentInput}
+                      textAlignVertical="top"
+                      value={createDraftContent}
+                    />
+                  </View>
                 )}
                 <View style={styles.createDrawerToolbar}>
                   <Pressable
@@ -5560,14 +5582,15 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   bottomNav: {
-    alignItems: 'center',
+    alignItems: 'stretch',
     backgroundColor: '#FFFFFF',
     borderTopColor: '#E5E5EA',
     borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     height: BOTTOM_NAV_HEIGHT,
     justifyContent: 'space-around',
-    paddingBottom: Platform.OS === 'ios' ? 2 : 0,
+    paddingBottom: Platform.OS === 'ios' ? 4 : 2,
+    paddingTop: 8,
     shadowColor: '#000000',
     shadowOpacity: 0.04,
     shadowRadius: 8,
@@ -5578,7 +5601,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     height: '100%',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 2,
   },
   bottomNavItemPressed: {
     opacity: 0.72,
@@ -5651,15 +5675,28 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -8 },
     elevation: 10,
   },
-  createDrawerInput: {
+  createDrawerEditor: {
+    marginTop: 4,
+  },
+  createDrawerTitleInput: {
     color: THEME_TEXT,
+    fontSize: 22,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 29,
+    minHeight: 44,
+    paddingHorizontal: 0,
+    paddingVertical: 5,
+  },
+  createDrawerContentInput: {
+    color: '#3A332E',
     fontSize: 18,
     fontWeight: FONT_REGULAR,
     lineHeight: 26,
-    marginTop: 4,
-    maxHeight: 112,
-    minHeight: 56,
-    paddingVertical: 6,
+    maxHeight: 172,
+    minHeight: 118,
+    paddingHorizontal: 0,
+    paddingTop: 8,
+    paddingBottom: 6,
   },
   createDrawerPicker: {
     marginTop: 4,

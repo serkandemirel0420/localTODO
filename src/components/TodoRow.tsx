@@ -78,6 +78,7 @@ function TodoRowComponent({
     metaTagVisibility,
     hiddenMetaTagKinds,
   );
+  const content = item.content.trim();
 
   const toggleDoneFromCheckbox = useCallback(() => {
     onSetDone(item.id, !item.done);
@@ -86,7 +87,7 @@ function TodoRowComponent({
   const openRowActions = useCallback(() => {
     Alert.alert(
       item.text,
-      undefined,
+      content || undefined,
       [
         {
           text: item.done ? 'Mark active' : 'Mark done',
@@ -104,7 +105,7 @@ function TodoRowComponent({
         { text: 'Cancel', style: 'cancel' },
       ],
     );
-  }, [item.done, item.id, item.text, onDelete, onOpenMenu, onSetDone]);
+  }, [content, item.done, item.id, item.text, onDelete, onOpenMenu, onSetDone]);
 
   return (
     <View style={[styles.shell, isGroupedLayout && styles.shellGrouped]}>
@@ -167,6 +168,14 @@ function TodoRowComponent({
           >
             {item.text}
           </Text>
+          {content ? (
+            <Text
+              numberOfLines={2}
+              style={[styles.content, item.done && styles.contentDone]}
+            >
+              {content}
+            </Text>
+          ) : null}
           <TodoMetaTags
             createdAt={item.createdAt}
             dateLabel={rawDateStatusLabel || undefined}
@@ -293,6 +302,17 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
   textDone: {
+    color: THEME_TEXT_SECONDARY,
+    textDecorationLine: 'line-through',
+  },
+  content: {
+    color: '#5F5B57',
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 19,
+    marginTop: 3,
+  },
+  contentDone: {
     color: THEME_TEXT_SECONDARY,
     textDecorationLine: 'line-through',
   },

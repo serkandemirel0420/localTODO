@@ -17,6 +17,7 @@ const getDatabase = () => {
 
         CREATE TABLE IF NOT EXISTS todos (
           id TEXT PRIMARY KEY NOT NULL,
+          content TEXT NOT NULL DEFAULT '',
           text TEXT NOT NULL,
           done INTEGER NOT NULL,
           created_at INTEGER NOT NULL,
@@ -27,6 +28,13 @@ const getDatabase = () => {
         CREATE INDEX IF NOT EXISTS idx_todos_done ON todos(done);
       `);
 
+      const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(todos)');
+      const hasContentColumn = columns.some((column) => column.name === 'content');
+
+      if (!hasContentColumn) {
+        await database.execAsync("ALTER TABLE todos ADD COLUMN content TEXT NOT NULL DEFAULT '';");
+      }
+
       return database;
     });
   }
@@ -35,6 +43,7 @@ const getDatabase = () => {
 };
 
 const rowToTodo = (row: {
+  content: string;
   id: string;
   text: string;
   done: number;
@@ -51,6 +60,7 @@ const rowToTodo = (row: {
 
   return normalizeTodo({
     id: row.id,
+    content: row.content,
     text: row.text,
     done: Boolean(row.done),
     createdAt: row.created_at,
@@ -91,12 +101,13 @@ export const loadTodosFromDatabase = async (): Promise<Todo[]> => {
   await migrateLegacyAsyncStorage(database);
 
   const rows = await database.getAllAsync<{
+    content: string;
     id: string;
     text: string;
     done: number;
     created_at: number;
     filters_json: string;
-  }>('SELECT id, text, done, created_at, filters_json FROM todos ORDER BY created_at DESC');
+  }>('SELECT id, content, text, done, created_at, filters_json FROM todos ORDER BY created_at DESC');
 
   return rows
     .map(rowToTodo)
@@ -112,10 +123,11 @@ const replaceAllTodos = async (
 
     for (const todo of todos) {
       await database.runAsync(
-        `INSERT INTO todos (id, text, done, created_at, filters_json)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO todos (id, content, text, done, created_at, filters_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [
           todo.id,
+          todo.content,
           todo.text,
           todo.done ? 1 : 0,
           todo.createdAt,

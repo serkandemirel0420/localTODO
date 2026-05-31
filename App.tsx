@@ -42,6 +42,7 @@ import {
 } from 'react-native-gesture-handler';
 
 import {
+  formatCompactDateFilterLabel,
   formatDateFilterLabel,
   getInitialDatePickerValue,
   isDateFilterOverdue,
@@ -78,6 +79,7 @@ import {
   getFilterColorTheme,
   getTodoColorThemes,
   getTodoPrimaryColorTheme,
+  type FilterColorKey,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
@@ -105,6 +107,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 type SwipeTodoItemProps = {
   filterColors: FilterColorSettings;
+  hiddenMetaFilterKeys?: FilterColorKey[];
   item: Todo;
   isMenuTarget: boolean;
   layout?: 'standalone' | 'grouped';
@@ -343,6 +346,7 @@ const THEME_BG = '#F4F6F8';
 const THEME_CARD = '#FFFFFF';
 const THEME_TEXT = '#212121';
 const THEME_TEXT_SECONDARY = '#8E8E93';
+const THEME_TEXT_TERTIARY = '#A8ABB3';
 const THEME_ACCENT = '#4C78FF';
 const THEME_ACCENT_SOFT = '#E8EEFF';
 const THEME_DANGER = '#D32F2F';
@@ -750,7 +754,7 @@ const getTodoGroup = (
 
   return {
     key: rawLabel,
-    label: formatDateFilterLabel(rawLabel),
+    label: formatCompactDateFilterLabel(rawLabel),
     rank: presetRank >= 0
       ? presetRank
       : customDate
@@ -898,6 +902,7 @@ const isOverdueStatusLabel = (label: string) => /overdue/i.test(label);
 
 function SwipeTodoItem({
   filterColors,
+  hiddenMetaFilterKeys = [],
   item,
   isMenuTarget,
   layout = 'standalone',
@@ -1032,14 +1037,16 @@ function SwipeTodoItem({
     DATE_MENU_ITEMS,
     '',
   );
-  const dateStatusLabel = rawDateStatusLabel
-    ? formatDateFilterLabel(rawDateStatusLabel)
+  const hiddenMetaKeys = new Set(hiddenMetaFilterKeys);
+  const dateStatusLabel = rawDateStatusLabel && !hiddenMetaKeys.has('date')
+    ? formatCompactDateFilterLabel(rawDateStatusLabel)
     : '';
-  const listStatusLabel = item.filters.list[0] ?? '';
+  const listStatusLabel = !hiddenMetaKeys.has('list')
+    ? item.filters.list[0] ?? ''
+    : '';
   const showDateStatus = dateStatusLabel.length > 0;
   const showListStatus = listStatusLabel.length > 0;
-  const dateStatusIsOverdue = isOverdueStatusLabel(dateStatusLabel)
-    || isDateFilterOverdue(rawDateStatusLabel)
+  const dateStatusIsOverdue = isDateFilterOverdue(rawDateStatusLabel)
     || (sectionLabel ? isOverdueStatusLabel(sectionLabel) : false);
 
   const toggleDoneFromCheckbox = useCallback(() => {
@@ -3469,6 +3476,13 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [scrollTodoAboveMenu]);
 
+  const groupedHiddenMetaFilterKeys = useMemo((): FilterColorKey[] => {
+    if (effectiveGroupMode === 'date') return ['date'];
+    if (effectiveGroupMode === 'list') return ['list'];
+    if (effectiveGroupMode === 'priority') return ['priority'];
+    return [];
+  }, [effectiveGroupMode]);
+
   const renderTodoItem = useCallback(
     ({ item }: { item: TodoListRow }) => {
       if (item.type === 'section') {
@@ -3504,6 +3518,7 @@ export default function App() {
                     {todoIndex > 0 ? <View style={styles.todoRowDivider} /> : null}
                     <MemoizedSwipeTodoItem
                       filterColors={filterColors}
+                      hiddenMetaFilterKeys={groupedHiddenMetaFilterKeys}
                       item={todo}
                       isMenuTarget={menuMode !== null && activeTodoMenuId === todo.id}
                       layout="grouped"
@@ -3537,6 +3552,7 @@ export default function App() {
       collapsedTodoGroupIds,
       deleteTodo,
       filterColors,
+      groupedHiddenMetaFilterKeys,
       handleListTap,
       activeTodoMenuId,
       menuMode,
@@ -6591,27 +6607,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 6,
-    minHeight: 16,
+    marginTop: 2,
+    minHeight: 11,
   },
   todoMetaSpacer: {
     flex: 1,
   },
   todoMetaDate: {
-    color: THEME_ACCENT,
-    fontSize: 12,
+    color: THEME_TEXT_TERTIARY,
+    flexShrink: 1,
+    fontSize: 9,
     fontWeight: FONT_REGULAR,
-    lineHeight: 16,
+    lineHeight: 12,
   },
   todoMetaDateOverdue: {
-    color: THEME_DANGER,
+    color: THEME_DANGER_SOFT,
   },
   todoMetaList: {
-    color: THEME_TEXT_SECONDARY,
-    fontSize: 12,
+    color: THEME_TEXT_TERTIARY,
+    flexShrink: 1,
+    fontSize: 9,
     fontWeight: FONT_REGULAR,
-    lineHeight: 16,
-    marginLeft: 12,
+    lineHeight: 12,
+    marginLeft: 8,
+    textAlign: 'right',
   },
   searchFiltersPanel: {
     flex: 1,

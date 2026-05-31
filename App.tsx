@@ -382,7 +382,7 @@ const EDGE_BACK_WIDTH = 28;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
 const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
-const BOTTOM_NAV_HEIGHT = 56;
+const BOTTOM_NAV_HEIGHT = 64;
 // Menu overlay sits above bottomNav; a small gap keeps the sheet off the nav bar.
 const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
@@ -395,10 +395,39 @@ const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
 const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
-const TODO_MENU_TARGET_ESTIMATED_HEIGHT = 104;
-const TODO_MENU_TARGET_GAP = 16;
 const TODO_MENU_TARGET_TOP_OFFSET = 12;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
+
+const getTodoListItemKey = (item: VisibleTodoListRow) => {
+  if (item.type === 'sectionHeader') {
+    const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
+    return `section:${item.id}:${collapseState}:${item.count}:${item.label}`;
+  }
+
+  return `${item.type}:${item.id}`;
+};
+
+const getTodoListItemType = (item: VisibleTodoListRow) => {
+  if (item.type === 'sectionHeader') {
+    return item.isCollapsed ? 'sectionHeaderCollapsed' : 'sectionHeaderExpanded';
+  }
+
+  if (item.type === 'groupedTodo') {
+    if (item.isFirstInSection && item.isLastInSection) {
+      return 'groupedTodoSingle';
+    }
+
+    if (item.isFirstInSection) {
+      return 'groupedTodoFirst';
+    }
+
+    if (item.isLastInSection) {
+      return 'groupedTodoLast';
+    }
+  }
+
+  return item.type;
+};
 const PRESET_SWIPE_DELETE_WIDTH = 72;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
   list: 'List',
@@ -2226,6 +2255,8 @@ export default function App() {
   }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
+    todoListRef.current?.clearLayoutCacheOnUpdate();
+
     setCollapsedTodoGroupIds((current) => {
       const next = new Set(current);
       if (next.has(groupId)) {
@@ -3029,27 +3060,6 @@ export default function App() {
     await performGoogleDriveAction('restore');
   }, [performGoogleDriveAction]);
 
-  const getTodoMenuScrollOptions = useCallback(() => {
-    const viewportHeight = todoListFrameHeight || windowHeight;
-    const menuTop = Math.max(
-      TODO_MENU_TARGET_TOP_OFFSET,
-      viewportHeight - listMenuHeight - LIST_MENU_BOTTOM_OFFSET,
-    );
-    const targetTop = Math.max(
-      TODO_MENU_TARGET_TOP_OFFSET,
-      menuTop - TODO_MENU_TARGET_ESTIMATED_HEIGHT - TODO_MENU_TARGET_GAP,
-    );
-    const viewPosition = Math.min(
-      0.34,
-      targetTop / Math.max(1, viewportHeight),
-    );
-
-    return {
-      viewOffset: TODO_MENU_TARGET_TOP_OFFSET,
-      viewPosition: Math.max(0, viewPosition),
-    };
-  }, [listMenuHeight, todoListFrameHeight, windowHeight]);
-
   const scrollTodoAboveMenu = useCallback((id: string) => {
     const list = todoListRef.current;
 
@@ -3073,9 +3083,13 @@ export default function App() {
       return;
     }
 
-    const scrollOptions = getTodoMenuScrollOptions();
+    const getTargetOffset = () => {
+      const layout = list.getLayout(index);
 
-    const scrollByEstimatedOffset = () => {
+      if (layout) {
+        return layout.y + list.getFirstItemOffset() - TODO_MENU_TARGET_TOP_OFFSET;
+      }
+
       const itemOffset = estimateTodoListOffsetForId(
         todoListRows,
         id,
@@ -3083,48 +3097,27 @@ export default function App() {
       );
 
       if (itemOffset === null) {
-        return;
+        return null;
       }
 
-      const viewportHeight = todoListFrameHeight || windowHeight;
-      const menuTop = Math.max(
-        TODO_MENU_TARGET_TOP_OFFSET,
-        viewportHeight - listMenuHeight - LIST_MENU_BOTTOM_OFFSET,
-      );
-      const targetTop = Math.max(
-        TODO_MENU_TARGET_TOP_OFFSET,
-        menuTop - TODO_MENU_TARGET_ESTIMATED_HEIGHT - TODO_MENU_TARGET_GAP,
-      );
-      const contentTop = itemOffset + todoListOneHandedOffset;
-
-      list.scrollToOffset({
-        animated: true,
-        offset: Math.max(0, contentTop - targetTop),
-      });
+      return itemOffset + todoListOneHandedOffset - TODO_MENU_TARGET_TOP_OFFSET;
     };
 
-    const scrollByIndex = () => list.scrollToIndex({
+    const targetOffset = getTargetOffset();
+
+    if (targetOffset === null) {
+      return;
+    }
+
+    list.scrollToOffset({
       animated: true,
-      index,
-      ...scrollOptions,
-    });
-
-    scrollByIndex().catch(() => {
-      scrollByEstimatedOffset();
-
-      setTimeout(() => {
-        scrollByIndex().catch(() => undefined);
-      }, 100);
+      offset: Math.max(0, targetOffset),
     });
   }, [
     collapsedTodoGroupIds,
-    getTodoMenuScrollOptions,
-    listMenuHeight,
     todoListRows,
-    todoListFrameHeight,
     todoListOneHandedOffset,
     visibleTodoListRows,
-    windowHeight,
   ]);
 
   useEffect(() => {
@@ -3184,8 +3177,8 @@ export default function App() {
             {renderVisibleTodoRowGap(item.gapBefore)}
             <View
               style={[
-                styles.todoSectionCard,
-                isExpanded && styles.todoSectionCardExpanded,
+                styles.todoSectionCardShadow,
+                isExpanded && styles.todoSectionCardShadowExpanded,
               ]}
             >
               <Pressable
@@ -3198,6 +3191,8 @@ export default function App() {
                   { stopPropagation: true },
                 )}
                 style={({ pressed }) => [
+                  styles.todoSectionCard,
+                  isExpanded && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
                   pressed && styles.todoGroupHeaderPressed,
                 ]}
@@ -3397,10 +3392,10 @@ export default function App() {
                   contentOffset={todoListContentOffset}
                   data={visibleTodoListRows}
                   extraData={todoListExtraData}
-                  getItemType={(item) => item.type}
+                  getItemType={getTodoListItemType}
                   keyboardDismissMode="on-drag"
                   keyboardShouldPersistTaps="handled"
-                  keyExtractor={(item) => item.id}
+                  keyExtractor={getTodoListItemKey}
                   maintainVisibleContentPosition={TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION}
                   ListEmptyComponent={
                     <View style={styles.emptyState}>
@@ -3455,7 +3450,7 @@ export default function App() {
               pressed && styles.bottomNavItemPressed,
             ]}
           >
-            <Ionicons color={NAV_ACCENT} name="add" size={28} />
+            <Ionicons color={NAV_ACCENT} name="add-circle-outline" size={30} />
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -3469,8 +3464,8 @@ export default function App() {
           >
             <Ionicons
               color={navTab === 'calendar' || menuMode === 'date' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-              name="calendar-outline"
-              size={24}
+              name="calendar-number-outline"
+              size={25}
             />
           </Pressable>
           <Pressable
@@ -3485,8 +3480,8 @@ export default function App() {
           >
             <Ionicons
               color={navTab === 'menu' || menuMode === 'main' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-              name="apps-outline"
-              size={24}
+              name="options-outline"
+              size={25}
             />
           </Pressable>
           <Pressable
@@ -3502,7 +3497,7 @@ export default function App() {
             <Ionicons
               color={navTab === 'search' ? NAV_ACCENT : NAV_ICON_INACTIVE}
               name="search-outline"
-              size={24}
+              size={25}
             />
           </Pressable>
           <Pressable
@@ -3517,8 +3512,8 @@ export default function App() {
           >
             <Ionicons
               color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-              name="settings-outline"
-              size={24}
+              name="cog-outline"
+              size={25}
             />
           </Pressable>
         </View>
@@ -4038,8 +4033,6 @@ export default function App() {
                           );
                         }}
                         showsVerticalScrollIndicator={false}
-                        snapToAlignment="start"
-                        snapToInterval={LIST_MENU_ROW_HEIGHT}
                       />
                       <Pressable
                         accessibilityRole="button"
@@ -6061,25 +6054,36 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
   },
+  todoSectionCardShadow: {
+    alignSelf: 'stretch',
+    backgroundColor: THEME_CARD,
+    borderRadius: CARD_BORDER_RADIUS,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
+    width: '100%',
+  },
+  todoSectionCardShadowExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
   todoSectionCard: {
     backgroundColor: THEME_CARD,
     borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: THEME_BORDER,
     overflow: 'hidden',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    elevation: 2,
+    width: '100%',
   },
   todoSectionCardExpanded: {
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     borderWidth: 1,
     borderBottomWidth: 0,
-    elevation: 0,
-    shadowOpacity: 0,
   },
   todoSectionGroupedShell: {
     backgroundColor: THEME_CARD,
@@ -6101,10 +6105,11 @@ const styles = StyleSheet.create({
   todoSectionHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     minHeight: 52,
     paddingHorizontal: 16,
     paddingVertical: 14,
+    width: '100%',
   },
   todoGroupHeaderPressed: {
     opacity: 0.72,
@@ -6112,6 +6117,7 @@ const styles = StyleSheet.create({
   todoSectionHeaderMeta: {
     alignItems: 'center',
     flexDirection: 'row',
+    flexShrink: 0,
     gap: 8,
   },
   todoGroupChevronExpanded: {
@@ -6119,10 +6125,11 @@ const styles = StyleSheet.create({
   },
   todoSectionTitle: {
     color: THEME_TEXT,
-    flexShrink: 1,
+    flex: 1,
     fontSize: 18,
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 22,
+    marginRight: 12,
     minWidth: 0,
   },
   todoGroupCount: {

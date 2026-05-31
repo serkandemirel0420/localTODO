@@ -1,4 +1,5 @@
-import type { TodoFilters } from './todos';
+import { formatDateFilterValue } from './dates';
+import { formatListLabel, type TodoFilters } from './todos';
 
 export type FilterColorKey = keyof TodoFilters;
 
@@ -129,9 +130,9 @@ const DEFAULT_PRIORITY_COLORS: Record<string, string> = {
 };
 
 const DEFAULT_DATE_COLORS: Record<string, string> = {
-  'Next week': '#6D62B7',
+  'Next Week': '#6D62B7',
   Someday: '#8C847C',
-  'This week': '#3E78B2',
+  'This Week': '#3E78B2',
   Today: '#2F6F62',
   Tomorrow: '#2F8AA0',
 };
@@ -145,11 +146,11 @@ const DEFAULT_LIST_COLORS: Record<string, string> = {
   Budget: '#C4A24A',
   Calls: '#2F8AA0',
   Cleaning: '#6B8F71',
-  'Deep work': '#6D62B7',
+  'Deep Work': '#6D62B7',
   Errands: '#D77B30',
   Evening: '#6D62B7',
   Finance: '#C4A24A',
-  'Follow ups': '#2F8AA0',
+  'Follow Ups': '#2F8AA0',
   Groceries: '#6B8F71',
   Health: '#2F6F62',
   Home: '#6B8F71',
@@ -162,7 +163,7 @@ const DEFAULT_LIST_COLORS: Record<string, string> = {
   Planning: '#3E78B2',
   Priority: '#CF413A',
   Projects: '#6D62B7',
-  'Quick capture': '#2F8AA0',
+  'Quick Capture': '#2F8AA0',
   Reading: '#6A6F90',
   Repairs: '#D77B30',
   Shopping: '#C24E66',
@@ -195,6 +196,7 @@ const normalizeHexColor = (value: unknown) =>
 const normalizeColorMap = (
   value: unknown,
   fallback: Record<string, string>,
+  formatLabel: (label: string) => string = (label) => label,
 ): Record<string, string> => {
   const colors = { ...fallback };
 
@@ -204,8 +206,32 @@ const normalizeColorMap = (
 
   Object.entries(value).forEach(([label, color]) => {
     const normalizedColor = normalizeHexColor(color);
-    if (normalizedColor) {
-      colors[label] = normalizedColor;
+    const formattedLabel = formatLabel(label);
+
+    if (normalizedColor && formattedLabel) {
+      colors[formattedLabel] = normalizedColor;
+    }
+  });
+
+  return colors;
+};
+
+const normalizeListColorMap = (
+  value: unknown,
+  fallback: Record<string, string>,
+): Record<string, string> => {
+  const colors = { ...fallback };
+
+  if (!isRecord(value)) {
+    return colors;
+  }
+
+  Object.entries(value).forEach(([label, color]) => {
+    const normalizedColor = normalizeHexColor(color);
+    const formattedLabel = formatListLabel(label);
+
+    if (normalizedColor && formattedLabel) {
+      colors[formattedLabel] = normalizedColor;
     }
   });
 
@@ -216,8 +242,8 @@ export const normalizeFilterColors = (value: unknown): FilterColorSettings => {
   const record = isRecord(value) ? value : {};
 
   return {
-    date: normalizeColorMap(record.date, DEFAULT_FILTER_COLORS.date),
-    list: normalizeColorMap(record.list, DEFAULT_FILTER_COLORS.list),
+    date: normalizeColorMap(record.date, DEFAULT_FILTER_COLORS.date, formatDateFilterValue),
+    list: normalizeListColorMap(record.list, DEFAULT_FILTER_COLORS.list),
     priority: normalizeColorMap(record.priority, DEFAULT_FILTER_COLORS.priority),
   };
 };

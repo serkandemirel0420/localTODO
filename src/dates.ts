@@ -1,6 +1,40 @@
 export const SOMEDAY_DATE_LABEL = 'Someday';
 
+export const DATE_FILTER_PRESETS = [
+  'Today',
+  'Tomorrow',
+  'This Week',
+  'Next Week',
+  SOMEDAY_DATE_LABEL,
+] as const;
+
+const DATE_PRESET_LABELS: Record<string, string> = {
+  today: 'Today',
+  tomorrow: 'Tomorrow',
+  'this week': 'This Week',
+  'next week': 'Next Week',
+  someday: SOMEDAY_DATE_LABEL,
+};
+
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const capitalizeWords = (value: string) =>
+  value
+    .split(/\s+/)
+    .map((word) => (
+      word ? word.charAt(0).toLocaleUpperCase() + word.slice(1) : word
+    ))
+    .join(' ');
+
+export const formatDateFilterValue = (value: string): string => {
+  const trimmed = value.trim();
+
+  if (!trimmed || isCustomDateLabel(trimmed)) {
+    return trimmed;
+  }
+
+  return DATE_PRESET_LABELS[trimmed.toLocaleLowerCase()] ?? capitalizeWords(trimmed);
+};
 
 export const isCustomDateLabel = (label: string): boolean => ISO_DATE_PATTERN.test(label);
 
@@ -45,7 +79,7 @@ export const formatDateFilterLabel = (label: string): string => {
     });
   }
 
-  return label;
+  return formatDateFilterValue(label);
 };
 
 export const startOfDay = (date: Date): Date => {
@@ -120,10 +154,50 @@ export const isDateFilterOverdue = (label: string): boolean => {
 };
 
 export const getInitialDatePickerValue = (dateLabels: string[]): Date => {
-  const custom = dateLabels.find(isCustomDateLabel);
+  const custom = getSelectedCustomDateLabel(dateLabels);
   if (!custom) {
     return startOfDay(new Date());
   }
 
   return parseISODateLabel(custom) ?? startOfDay(new Date());
+};
+
+export const getSelectedCustomDateLabel = (dateLabels: string[]): string | null => (
+  dateLabels.find(isCustomDateLabel) ?? null
+);
+
+export const isDateMenuItemSelected = (menuLabel: string, dateLabels: string[]): boolean => {
+  if (dateLabels.includes(menuLabel)) {
+    return true;
+  }
+
+  return menuLabel === SOMEDAY_DATE_LABEL && dateLabels.some(isCustomDateLabel);
+};
+
+export const getDateMenuItemDisplayLabel = (menuLabel: string, dateLabels: string[]): string => {
+  if (menuLabel === SOMEDAY_DATE_LABEL) {
+    const customDate = getSelectedCustomDateLabel(dateLabels);
+    if (customDate) {
+      return formatDateFilterLabel(customDate);
+    }
+  }
+
+  return menuLabel;
+};
+
+export const getDateMenuClearValue = (menuLabel: string, dateLabels: string[]): string | null => {
+  if (menuLabel === SOMEDAY_DATE_LABEL) {
+    return getSelectedCustomDateLabel(dateLabels)
+      ?? (dateLabels.includes(SOMEDAY_DATE_LABEL) ? SOMEDAY_DATE_LABEL : null);
+  }
+
+  return dateLabels.includes(menuLabel) ? menuLabel : null;
+};
+
+export const getDateMenuColorLookupValue = (menuLabel: string, dateLabels: string[]): string => {
+  if (menuLabel === SOMEDAY_DATE_LABEL && dateLabels.some(isCustomDateLabel)) {
+    return SOMEDAY_DATE_LABEL;
+  }
+
+  return menuLabel;
 };

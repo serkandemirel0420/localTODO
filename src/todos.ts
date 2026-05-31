@@ -1,3 +1,5 @@
+import { formatDateFilterValue } from './dates';
+
 export type TodoFilters = {
   date: string[];
   list: string[];
@@ -34,8 +36,12 @@ export const normalizeTodoFilters = (value: unknown): TodoFilters => {
 
   const filters = value as Partial<TodoFilters>;
   return {
-    date: isStringArray(filters.date) ? [...filters.date] : [],
-    list: isStringArray(filters.list) ? [...filters.list] : [],
+    date: isStringArray(filters.date)
+      ? filters.date.map(formatDateFilterValue).filter(Boolean)
+      : [],
+    list: isStringArray(filters.list)
+      ? filters.list.map(formatListLabel).filter(Boolean)
+      : [],
     priority: isStringArray(filters.priority) ? [...filters.priority] : [],
   };
 };
@@ -81,6 +87,21 @@ export const normalizeTodoText = (value: string) =>
     .toLocaleLowerCase()
     .trim();
 
+export const formatListLabel = (value: string) => {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed
+    .split(/\s+/)
+    .map((word) => (
+      word ? word.charAt(0).toLocaleUpperCase() + word.slice(1) : word
+    ))
+    .join(' ');
+};
+
 export const makeTodo = (
   text: string,
   filters: TodoFilters = EMPTY_TODO_FILTERS,
@@ -89,7 +110,7 @@ export const makeTodo = (
   text,
   done: false,
   createdAt: Date.now(),
-  filters: cloneTodoFilters(filters),
+  filters: normalizeTodoFilters(filters),
 });
 
 export const isTodo = (value: unknown): value is Todo => {

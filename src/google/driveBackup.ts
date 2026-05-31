@@ -1,5 +1,6 @@
 import {
   cloneTodoFilters,
+  formatListLabel,
   normalizeTodo,
   normalizeTodoFilters,
   type Todo,
@@ -10,6 +11,11 @@ import {
   normalizeFilterColors,
   type FilterColorSettings,
 } from '../filterColors';
+import {
+  cloneMetaTagVisibility,
+  normalizeMetaTagVisibility,
+  type MetaTagVisibility,
+} from '../metaTags';
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
@@ -49,6 +55,7 @@ export type BackupSettings = {
   listMenuTree: BackupListMenuNode[];
   listOrderMode: BackupListOrderMode;
   menuPresets: BackupMenuPreset[];
+  metaTagVisibility: MetaTagVisibility;
   selectedFilters: TodoFilters;
   todoGroupMode: BackupTodoGroupMode;
   todoSortMode: BackupTodoSortMode;
@@ -145,7 +152,7 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
     return null;
   }
 
-  const label = item.label.trim();
+  const label = formatListLabel(item.label);
   if (!label) {
     return null;
   }
@@ -331,6 +338,7 @@ export const createBackupPayload = (
       listMenuTree: cloneListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode,
       menuPresets: cloneMenuPresets(settings.menuPresets),
+      metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
       todoGroupMode: settings.todoGroupMode,
       todoSortMode: settings.todoSortMode,
@@ -362,6 +370,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
       menuPresets: normalizeBackupMenuPresets(settings.menuPresets),
+      metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
       selectedFilters: normalizeTodoFilters(settings.selectedFilters),
       todoGroupMode: normalizeBackupTodoGroupMode(settings.todoGroupMode),
       todoSortMode: normalizeBackupTodoSortMode(settings.todoSortMode),

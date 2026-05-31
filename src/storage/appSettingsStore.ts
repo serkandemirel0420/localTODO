@@ -5,7 +5,17 @@ import {
   normalizeFilterColors,
   type FilterColorSettings,
 } from '../filterColors';
-import { cloneTodoFilters, normalizeTodoFilters, type TodoFilters } from '../todos';
+import {
+  cloneMetaTagVisibility,
+  normalizeMetaTagVisibility,
+  type MetaTagVisibility,
+} from '../metaTags';
+import {
+  cloneTodoFilters,
+  formatListLabel,
+  normalizeTodoFilters,
+  type TodoFilters,
+} from '../todos';
 
 const STORAGE_KEY = 'local-todo.settings.v1';
 
@@ -70,6 +80,7 @@ export type AppSettings = {
   listMenuTree: StoredListMenuNode[];
   listOrderMode: ListOrderMode;
   menuPresets: StoredMenuPreset[];
+  metaTagVisibility: MetaTagVisibility;
   selectedFilters: TodoFilters;
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
@@ -105,6 +116,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   listOrderMode: 'alphabetical',
   menuPresets: [],
+  metaTagVisibility: cloneMetaTagVisibility(),
   selectedFilters: cloneTodoFilters(),
   todoGroupMode: 'none',
   todoSortMode: 'newest',
@@ -401,7 +413,7 @@ const normalizeListMenuTreeNodes = (
         return null;
       }
 
-      const label = item.label.trim();
+      const label = formatListLabel(item.label);
       if (!label) {
         return null;
       }
@@ -491,6 +503,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     listMenuTree: normalizeListMenuTree(value.listMenuTree),
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
     menuPresets: normalizeMenuPresets(value.menuPresets),
+    metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
     selectedFilters: normalizeTodoFilters(value.selectedFilters),
     todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
     todoSortMode: normalizeTodoSortMode(value.todoSortMode),

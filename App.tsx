@@ -1667,8 +1667,12 @@ export default function App() {
       return Math.max(120, windowHeight - createDrawerKeyboardInset - toolbarReserve);
     }
 
+    if (createDrawerPicker === 'list') {
+      return Math.max(120, windowHeight * 0.5);
+    }
+
     return Math.max(120, windowHeight * 0.42);
-  }, [createDrawerKeyboardInset, windowHeight]);
+  }, [createDrawerKeyboardInset, createDrawerPicker, windowHeight]);
 
   const submitCreateTodo = useCallback(() => {
     const text = truncateTodoText(
@@ -1789,6 +1793,9 @@ export default function App() {
   );
 
   const createDrawerListLabel = createDraftFilters.list[0] ?? 'Inbox';
+  const createDrawerListPickerOpen = createDrawerPicker === 'list';
+  const createDrawerListPickerHalfSheet =
+    createDrawerListPickerOpen && createDrawerKeyboardInset === 0;
   const createDrawerPriorityHigh = createDraftFilters.priority[0] === 'High';
 
   const toggleCreateDraftPriority = useCallback(() => {
@@ -5024,17 +5031,37 @@ export default function App() {
             />
             <View
               pointerEvents="box-none"
-              style={[styles.createDrawerLayer, { bottom: createDrawerKeyboardInset }]}
+              style={[
+                styles.createDrawerLayer,
+                { bottom: createDrawerKeyboardInset },
+                createDrawerListPickerHalfSheet
+                  ? { height: Math.round(windowHeight * 0.5) }
+                  : null,
+              ]}
             >
-              <View style={styles.createDrawer}>
+              <View
+                style={[
+                  styles.createDrawer,
+                  createDrawerListPickerHalfSheet && styles.createDrawerListPickerSheet,
+                ]}
+              >
                 <View style={styles.menuDragHandle} accessibilityRole="adjustable">
                   <View style={styles.menuDragPill} />
                 </View>
                 {createDrawerPicker ? (
                   <ScrollView
+                    contentContainerStyle={
+                      createDrawerListPickerHalfSheet
+                        ? styles.createDrawerListPickerContent
+                        : undefined
+                    }
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator={false}
-                    style={[styles.createDrawerPicker, { maxHeight: createDrawerPickerMaxHeight }]}
+                    style={[
+                      styles.createDrawerPicker,
+                      { maxHeight: createDrawerPickerMaxHeight },
+                      createDrawerListPickerHalfSheet && styles.createDrawerListPickerScroll,
+                    ]}
                   >
                     {createDrawerPickerItems.map((label) => {
                       const selected =
@@ -7046,6 +7073,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -8 },
     elevation: 10,
   },
+  createDrawerListPickerSheet: {
+    flex: 1,
+    minHeight: 0,
+  },
   createDrawerEditor: {
     marginTop: 4,
   },
@@ -7071,6 +7102,13 @@ const styles = StyleSheet.create({
   },
   createDrawerPicker: {
     marginTop: 4,
+  },
+  createDrawerListPickerScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  createDrawerListPickerContent: {
+    paddingBottom: 4,
   },
   createDrawerPickerRow: {
     alignItems: 'center',

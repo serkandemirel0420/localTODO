@@ -90,6 +90,47 @@ export const startOfDay = (date: Date): Date => {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_SORT_SOMEDAY_RANK = 8_000_000_000_000_000;
+const DATE_SORT_NO_DATE_RANK = DATE_SORT_SOMEDAY_RANK + 1;
+const RELATIVE_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
+  today: 0,
+  tomorrow: 1,
+  'this week': 2,
+  'next week': 7,
+};
+
+const addDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+
+  return next;
+};
+
+export const getDateFilterSortRank = (label: string, now = new Date()): number => {
+  const trimmed = label.trim();
+
+  if (!trimmed) {
+    return DATE_SORT_NO_DATE_RANK;
+  }
+
+  const customDate = parseISODateLabel(trimmed);
+  if (customDate) {
+    return startOfDay(customDate).getTime();
+  }
+
+  const normalizedLabel = formatDateFilterValue(trimmed).toLocaleLowerCase();
+
+  if (normalizedLabel === 'someday') {
+    return DATE_SORT_SOMEDAY_RANK;
+  }
+
+  const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[normalizedLabel];
+  if (dayOffset !== undefined) {
+    return addDays(startOfDay(now), dayOffset).getTime();
+  }
+
+  return DATE_SORT_NO_DATE_RANK;
+};
 
 /** Short labels for list meta and group headers (Today, Yesterday, May 30). */
 export const formatCompactDateFilterLabel = (label: string): string => {

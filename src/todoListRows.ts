@@ -2,7 +2,7 @@ import { StyleSheet } from 'react-native';
 
 import {
   formatCompactDateFilterLabel,
-  parseISODateLabel,
+  getDateFilterSortRank,
 } from './dates';
 import {
   DATE_MENU_ITEMS,
@@ -167,6 +167,33 @@ const getFilterRank = (values: string[], orderedLabels: string[]) =>
     return rank >= 0 ? Math.min(bestRank, rank) : bestRank;
   }, orderedLabels.length);
 
+const getDateLabelMenuRank = (label: string, index: number) => {
+  const rank = DATE_MENU_ITEMS.indexOf(label);
+  return rank >= 0 ? rank : DATE_MENU_ITEMS.length + index;
+};
+
+const getBestDateFilterLabel = (values: string[], fallbackLabel: string, now = new Date()) => {
+  let bestLabel = fallbackLabel;
+  let bestSortRank = getDateFilterSortRank(fallbackLabel, now);
+  let bestMenuRank = DATE_MENU_ITEMS.length + values.length;
+
+  values.forEach((value, index) => {
+    const sortRank = getDateFilterSortRank(value, now);
+    const menuRank = getDateLabelMenuRank(value, index);
+
+    if (sortRank < bestSortRank || (sortRank === bestSortRank && menuRank < bestMenuRank)) {
+      bestLabel = value;
+      bestSortRank = sortRank;
+      bestMenuRank = menuRank;
+    }
+  });
+
+  return bestLabel;
+};
+
+const getTodoDateSortRank = (todo: Todo, now = new Date()) =>
+  getDateFilterSortRank(getBestDateFilterLabel(todo.filters.date, 'No date', now), now);
+
 const compareTodosByFallback = (first: Todo, second: Todo) =>
   second.createdAt - first.createdAt ||
   first.text.localeCompare(second.text) ||
@@ -201,9 +228,10 @@ export const compareTodosBySortMode = (
   }
 
   if (sortMode === 'date') {
+    const now = new Date();
+
     return (
-      getFilterRank(first.filters.date, DATE_MENU_ITEMS) -
-      getFilterRank(second.filters.date, DATE_MENU_ITEMS) ||
+      getTodoDateSortRank(first, now) - getTodoDateSortRank(second, now) ||
       compareTodosByFallback(first, second)
     );
   }
@@ -296,18 +324,13 @@ const getTodoGroups = (
     }];
   }
 
-  const rawLabel = getBestOrderedFilterLabel(todo.filters.date, DATE_MENU_ITEMS, 'No date');
-  const presetRank = DATE_MENU_ITEMS.indexOf(rawLabel);
-  const customDate = parseISODateLabel(rawLabel);
+  const now = new Date();
+  const rawLabel = getBestDateFilterLabel(todo.filters.date, 'No date', now);
 
   return [{
     key: rawLabel,
     label: formatCompactDateFilterLabel(rawLabel),
-    rank: presetRank >= 0
-      ? presetRank
-      : customDate
-        ? DATE_MENU_ITEMS.length + customDate.getTime() / 1e12
-        : DATE_MENU_ITEMS.length + 1,
+    rank: getDateFilterSortRank(rawLabel, now),
   }];
 };
 

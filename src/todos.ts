@@ -1,9 +1,11 @@
 import { formatDateFilterValue } from './dates';
+import { normalizeReminderFilterValues } from './reminders';
 
 export type TodoFilters = {
   date: string[];
   list: string[];
   priority: string[];
+  reminder: string[];
 };
 
 export type Todo = {
@@ -23,6 +25,7 @@ export const EMPTY_TODO_FILTERS: TodoFilters = {
   date: [],
   list: [],
   priority: [],
+  reminder: [],
 };
 
 const isStringArray = (value: unknown): value is string[] =>
@@ -32,6 +35,7 @@ export const cloneTodoFilters = (filters: TodoFilters = EMPTY_TODO_FILTERS): Tod
   date: [...filters.date],
   list: [...filters.list],
   priority: [...filters.priority],
+  reminder: [...filters.reminder],
 });
 
 export const normalizeTodoFilters = (value: unknown): TodoFilters => {
@@ -48,6 +52,9 @@ export const normalizeTodoFilters = (value: unknown): TodoFilters => {
       ? filters.list.map(formatListLabel).filter(Boolean)
       : [],
     priority: isStringArray(filters.priority) ? [...filters.priority] : [],
+    reminder: isStringArray(filters.reminder)
+      ? normalizeReminderFilterValues(filters.reminder)
+      : [],
   };
 };
 

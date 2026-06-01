@@ -6,7 +6,7 @@ import {
 } from './dates';
 import { formatListLabel, type TodoFilters } from './todos';
 
-export type FilterColorKey = keyof TodoFilters;
+export type FilterColorKey = 'date' | 'list' | 'priority';
 
 export type FilterColorValue = string | null;
 

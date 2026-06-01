@@ -3,9 +3,6 @@ import * as Haptics from 'expo-haptics';
 import { makeRedirectUri, TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
-import DateTimePicker, {
-  type DateTimePickerEvent,
-} from '@react-native-community/datetimepicker';
 import React, {
   useCallback,
   useDeferredValue,
@@ -51,6 +48,9 @@ import {
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
+import { ReminderTimeModal } from './src/components/ReminderTimeModal';
+import { RepeatReminderModal } from './src/components/RepeatReminderModal';
+import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
 import { TodoRow } from './src/components/TodoRow';
 
 import {
@@ -60,6 +60,7 @@ import {
   getDateMenuColorLookupValue,
   getDateMenuItemDisplayLabel,
   getInitialDatePickerValue,
+  getSelectedCustomDateLabel,
   isDateFilterOverdue,
   isDateMenuItemSelected,
   SOMEDAY_DATE_LABEL,
@@ -140,7 +141,22 @@ import {
   type VisibleTodoListRow,
 } from './src/todoListRows';
 import {
+  decodeTodoReminder,
+  encodeTodoReminder,
+  DEFAULT_REMINDER_TIME,
+  getDatePickerMenuDisplayLabel,
+  hasTodoReminderTime,
+  hasTodoRepeat,
+  isDatePickerMenuItemSelected,
+  isReminderPickerMenuLabel,
+  REMINDER_PICKER_LABEL,
+  REPEAT_PICKER_LABEL,
+  type ReminderTime,
+  type RepeatPreset,
+} from './src/reminders';
+import {
   DATE_MENU_ITEMS,
+  DATE_PICKER_MENU_ITEMS,
   PRIORITY_MENU_ITEMS,
   TODO_GROUP_LABELS,
   TODO_GROUP_OPTIONS,
@@ -212,6 +228,7 @@ const isListMenuItemSelected = (
 type BottomMenuItem = MenuRow | VisibleListMenuItem;
 
 type FilterKey = 'list' | 'date' | 'priority';
+const FILTER_KEYS: FilterKey[] = ['list', 'date', 'priority'];
 
 type MenuMode =
   | 'date'
@@ -461,8 +478,8 @@ type SearchFilterItem = {
 };
 
 const buildActiveFilterItems = (filters: SelectedFilters): SearchFilterItem[] =>
-  (Object.entries(filters) as Array<[FilterKey, string[]]>).flatMap(([filterKey, values]) =>
-    values.map((label) => ({
+  FILTER_KEYS.flatMap((filterKey) =>
+    filters[filterKey].map((label) => ({
       filterKey,
       id: `search-filter-${filterKey}-${label}`,
       label,
@@ -479,9 +496,10 @@ const getDefaultCreateDraftFilters = (
   date: ['Today'],
   list: listMenuTree[0]?.label ? [listMenuTree[0].label] : ['Inbox'],
   priority: [],
+  reminder: [],
 });
 
-const getRememberedCreateDraftFilters = (
+const getCreateTodoFilters = (
   listMenuTree: ListMenuNode[],
   filters: TodoFilters,
 ): SelectedFilters => {
@@ -494,9 +512,24 @@ const getRememberedCreateDraftFilters = (
   ));
 
   return {
-    date: normalized.date[0] ? [normalized.date[0]] : fallback.date,
+    date: normalized.date[0] ? [normalized.date[0]] : [],
     list: listLabel ? [listLabel] : fallback.list,
     priority: priorityLabel ? [priorityLabel] : [],
+    reminder: [...normalized.reminder],
+  };
+};
+
+const getRememberedCreateDraftFilters = (
+  listMenuTree: ListMenuNode[],
+  filters: TodoFilters,
+): SelectedFilters => {
+  const fallback = getDefaultCreateDraftFilters(listMenuTree);
+  const normalized = getCreateTodoFilters(listMenuTree, filters);
+
+  return {
+    ...normalized,
+    date: normalized.date[0] ? normalized.date : fallback.date,
+    reminder: [],
   };
 };
 
@@ -535,6 +568,7 @@ const EMPTY_SELECTED_FILTERS: SelectedFilters = {
   date: [],
   list: [],
   priority: [],
+  reminder: [],
 };
 const INITIAL_TODOS = Array.from({ length: 50 }, (_, index) => ({
   id: `seed-${index + 1}`,
@@ -646,6 +680,7 @@ const normalizeFilterValues = (filters: TodoFilters) => ({
   date: [...filters.date].sort(),
   list: [...filters.list].sort(),
   priority: [...filters.priority].sort(),
+  reminder: [...filters.reminder].sort(),
 });
 
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
@@ -689,7 +724,8 @@ const todoMatchesFilters = (
   filters: SelectedFilters,
   listMenuTree: ListMenuNode[],
 ) =>
-  (Object.entries(filters) as Array<[FilterKey, string[]]>).every(([filterKey, values]) => {
+  FILTER_KEYS.every((filterKey) => {
+    const values = filters[filterKey];
     if (values.length === 0) {
       return true;
     }
@@ -787,6 +823,9 @@ export default function App() {
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [datePickerValue, setDatePickerValue] = useState(() => startOfDay(new Date()));
   const datePickerApplyRef = useRef<'create' | 'filters'>('filters');
+  const [reminderModalVisible, setReminderModalVisible] = useState(false);
+  const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
+  const [repeatDraft, setRepeatDraft] = useState<RepeatPreset>('none');
   const [loaded, setLoaded] = useState(false);
   const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
@@ -1467,6 +1506,9 @@ export default function App() {
 
   const backToCreateDrawerInput = useCallback(() => {
     Keyboard.dismiss();
+    setDatePickerVisible(false);
+    setReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(null);
   }, []);
 
@@ -1476,6 +1518,10 @@ export default function App() {
     setCreateDraftContent('');
     setCreateDraftText('');
     setCreateDraftFilters(nextFilters);
+    setDatePickerVisible(false);
+    setReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
+    setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
 
   const goBackInMenu = useCallback(() => {
@@ -1486,6 +1532,16 @@ export default function App() {
 
     if (datePickerVisible) {
       setDatePickerVisible(false);
+      return true;
+    }
+
+    if (reminderModalVisible) {
+      setReminderModalVisible(false);
+      return true;
+    }
+
+    if (repeatReminderModalVisible) {
+      setRepeatReminderModalVisible(false);
       return true;
     }
 
@@ -1540,6 +1596,8 @@ export default function App() {
     createDrawerVisible,
     datePickerVisible,
     menuMode,
+    reminderModalVisible,
+    repeatReminderModalVisible,
     presetSaveModalVisible,
     resetCreateDrawerState,
     settingsModalVisible,
@@ -1697,11 +1755,15 @@ export default function App() {
       return;
     }
 
-    const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
+    const todoFilters = getCreateTodoFilters(
       listMenuTree,
       createDraftFilters,
     );
-    const todo = makeTodo(text, nextLastCreateTodoFilters, content);
+    const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
+      listMenuTree,
+      todoFilters,
+    );
+    const todo = makeTodo(text, todoFilters, content);
 
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setTodos((current) => [todo, ...current]);
@@ -1765,6 +1827,9 @@ export default function App() {
 
   const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
     Keyboard.dismiss();
+    setDatePickerVisible(false);
+    setReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(picker);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
@@ -1777,7 +1842,7 @@ export default function App() {
     }
 
     if (createDrawerPicker === 'date') {
-      return DATE_MENU_ITEMS;
+      return DATE_PICKER_MENU_ITEMS;
     }
 
     if (createDrawerPicker === 'priority') {
@@ -1797,6 +1862,9 @@ export default function App() {
   const createDrawerListPickerHalfSheet =
     createDrawerListPickerOpen && createDrawerKeyboardInset === 0;
   const createDrawerPriorityHigh = createDraftFilters.priority[0] === 'High';
+  const createDrawerDateActive = createDraftFilters.date.length > 0
+    || hasTodoReminderTime(createDraftFilters.reminder)
+    || hasTodoRepeat(createDraftFilters.reminder);
 
   const toggleCreateDraftPriority = useCallback(() => {
     setCreateDraftPriorityFromPicker(false);
@@ -1958,7 +2026,6 @@ export default function App() {
 
     if (datePickerApplyRef.current === 'create') {
       setCreateDraftFilters(applyDate);
-      setCreateDrawerPicker(null);
     } else if (activeTodoMenuId) {
       updateTodoFilters(activeTodoMenuId, applyDate);
     } else {
@@ -1969,6 +2036,32 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [activeTodoMenuId, closeDatePicker, updateTodoFilters]);
 
+  const clearPickedDate = useCallback(() => {
+    const clearDate = (current: SelectedFilters) => ({
+      ...current,
+      date: [],
+    });
+
+    if (datePickerApplyRef.current === 'create') {
+      setCreateDraftFilters(clearDate);
+    } else if (activeTodoMenuId) {
+      updateTodoFilters(activeTodoMenuId, clearDate);
+    } else {
+      setSelectedFilters(clearDate);
+    }
+
+    closeDatePicker();
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [activeTodoMenuId, closeDatePicker, updateTodoFilters]);
+
+  const clearCreateDraftDate = useCallback(() => {
+    setCreateDraftFilters((current) => ({
+      ...current,
+      date: [],
+    }));
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
   const openDatePicker = useCallback((
     source: 'create' | 'filters',
     dateLabels: string[],
@@ -1978,34 +2071,96 @@ export default function App() {
     setDatePickerVisible(true);
   }, []);
 
-  const handleDatePickerChange = useCallback((
-    event: DateTimePickerEvent,
-    selectedDate?: Date,
-  ) => {
-    if (event.type === 'dismissed') {
-      closeDatePicker();
-      return;
-    }
+  const openCreateReminderModal = useCallback(() => {
+    setReminderModalVisible(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
 
-    if (!selectedDate) {
-      return;
-    }
+  const closeCreateReminderModal = useCallback(() => {
+    setReminderModalVisible(false);
+  }, []);
 
-    setDatePickerValue(selectedDate);
+  const confirmCreateReminderTime = useCallback((time: ReminderTime) => {
+    const current = decodeTodoReminder(createDraftFilters.reminder);
+    setCreateDraftFilters((draft) => ({
+      ...draft,
+      reminder: encodeTodoReminder({ time, repeat: current.repeat }),
+    }));
+    setReminderModalVisible(false);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [createDraftFilters.reminder]);
 
-    if (Platform.OS === 'android') {
-      applyPickedDate(selectedDate);
-    }
-  }, [applyPickedDate, closeDatePicker]);
+  const openCreateRepeatModal = useCallback(() => {
+    setRepeatDraft(decodeTodoReminder(createDraftFilters.reminder).repeat);
+    setRepeatReminderModalVisible(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [createDraftFilters.reminder]);
+
+  const closeCreateRepeatModal = useCallback(() => {
+    setRepeatReminderModalVisible(false);
+  }, []);
+
+  const confirmCreateRepeat = useCallback((repeat: RepeatPreset) => {
+    const current = decodeTodoReminder(createDraftFilters.reminder);
+    const nextTime = repeat === 'none'
+      ? current.time
+      : current.time ?? { ...DEFAULT_REMINDER_TIME };
+    setCreateDraftFilters((draft) => ({
+      ...draft,
+      reminder: encodeTodoReminder({ time: nextTime, repeat }),
+    }));
+    setRepeatReminderModalVisible(false);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [createDraftFilters.reminder]);
+
+  const clearCreateReminderTime = useCallback(() => {
+    setCreateDraftFilters((draft) => ({
+      ...draft,
+      reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
+    }));
+    setReminderModalVisible(false);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const clearCreateRepeat = useCallback(() => {
+    const current = decodeTodoReminder(createDraftFilters.reminder);
+    setCreateDraftFilters((draft) => ({
+      ...draft,
+      reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
+    }));
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [createDraftFilters.reminder]);
 
   const handleCreateDrawerDatePress = useCallback((label: string) => {
+    if (label === REMINDER_PICKER_LABEL) {
+      openCreateReminderModal();
+      return;
+    }
+
+    if (label === REPEAT_PICKER_LABEL) {
+      openCreateRepeatModal();
+      return;
+    }
+
     if (label === SOMEDAY_DATE_LABEL) {
       openDatePicker('create', createDraftFilters.date);
       return;
     }
 
+    if (isDateMenuItemSelected(label, createDraftFilters.date)) {
+      clearCreateDraftDate();
+      return;
+    }
+
     setCreateDraftFilterValue('date', label);
-  }, [createDraftFilters.date, openDatePicker, setCreateDraftFilterValue]);
+  }, [
+    clearCreateDraftDate,
+    createDraftFilters.date,
+    openCreateReminderModal,
+    openCreateRepeatModal,
+    openDatePicker,
+    setCreateDraftFilterValue,
+  ]);
 
   const registerListTap = useCallback(
     (pageX: number, pageY: number, timestamp: number) => {
@@ -2398,8 +2553,8 @@ export default function App() {
     }
 
     if (menuMode === 'filters') {
-      return (Object.entries(menuFilters) as Array<[FilterKey, string[]]>)
-        .flatMap(([filterKey, values]) => values.map((label) => ({
+      return FILTER_KEYS
+        .flatMap((filterKey) => menuFilters[filterKey].map((label) => ({
           filterKey,
           id: `filter-${filterKey}-${label}`,
           label,
@@ -5072,11 +5227,101 @@ export default function App() {
                               : createDraftFilters.priority[0] === label
                           )
                           : createDrawerPicker === 'date'
-                            ? isDateMenuItemSelected(label, createDraftFilters.date)
+                            ? isDatePickerMenuItemSelected(
+                              label,
+                              createDraftFilters.date,
+                              createDraftFilters.reminder,
+                              isDateMenuItemSelected,
+                            )
                             : createDraftFilters[createDrawerPicker][0] === label;
                       const displayLabel = createDrawerPicker === 'date'
-                        ? getDateMenuItemDisplayLabel(label, createDraftFilters.date)
+                        ? getDatePickerMenuDisplayLabel(
+                          label,
+                          createDraftFilters.date,
+                          createDraftFilters.reminder,
+                          getDateMenuItemDisplayLabel,
+                        )
                         : label;
+                      const showSomedayClear = (
+                        label === SOMEDAY_DATE_LABEL &&
+                        getSelectedCustomDateLabel(createDraftFilters.date) !== null
+                      );
+                      const showReminderClear = (
+                        label === REMINDER_PICKER_LABEL &&
+                        hasTodoReminderTime(createDraftFilters.reminder)
+                      );
+                      const showRepeatClear = (
+                        label === REPEAT_PICKER_LABEL &&
+                        hasTodoRepeat(createDraftFilters.reminder)
+                      );
+                      const showRowClear = showSomedayClear || showReminderClear || showRepeatClear;
+                      const useSplitDatePickerRow = (
+                        createDrawerPicker === 'date' &&
+                        (isReminderPickerMenuLabel(label) || showSomedayClear)
+                      );
+
+                      if (useSplitDatePickerRow) {
+                        return (
+                          <View
+                            key={`${createDrawerPicker}-${label}`}
+                            style={[
+                              styles.createDrawerPickerRow,
+                              selected && styles.createDrawerPickerRowSelected,
+                            ]}
+                          >
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityState={{ selected }}
+                              onPress={() => handleCreateDrawerDatePress(label)}
+                              style={({ pressed }) => [
+                                styles.createDrawerPickerRowMain,
+                                pressed && styles.createDrawerPickerRowPressed,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.createDrawerPickerRowText,
+                                  selected && styles.createDrawerPickerRowTextSelected,
+                                ]}
+                              >
+                                {displayLabel}
+                              </Text>
+                            </Pressable>
+                            {showRowClear ? (
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={
+                                  label === SOMEDAY_DATE_LABEL
+                                    ? 'Clear date'
+                                    : label === REMINDER_PICKER_LABEL
+                                      ? 'Clear reminder time'
+                                      : 'Clear repeating'
+                                }
+                                hitSlop={8}
+                                onPress={() => {
+                                  if (label === SOMEDAY_DATE_LABEL) {
+                                    clearCreateDraftDate();
+                                    return;
+                                  }
+
+                                  if (label === REMINDER_PICKER_LABEL) {
+                                    clearCreateReminderTime();
+                                    return;
+                                  }
+
+                                  clearCreateRepeat();
+                                }}
+                                style={({ pressed }) => [
+                                  styles.createDrawerPickerClearButton,
+                                  pressed && styles.createDrawerPickerRowPressed,
+                                ]}
+                              >
+                                <Ionicons color="#8C847C" name="close-circle" size={22} />
+                              </Pressable>
+                            ) : null}
+                          </View>
+                        );
+                      }
 
                       return (
                         <Pressable
@@ -5153,7 +5398,7 @@ export default function App() {
                     ]}
                   >
                     <Ionicons
-                      color={createDraftFilters.date.length > 0 ? '#2F6F62' : '#8C847C'}
+                      color={createDrawerDateActive ? '#2F6F62' : '#8C847C'}
                       name="calendar-outline"
                       size={22}
                     />
@@ -5248,64 +5493,27 @@ export default function App() {
           </View>
         </Modal>
 
-        {datePickerVisible && Platform.OS === 'android' ? (
-          <DateTimePicker
-            display="calendar"
-            mode="date"
-            onChange={handleDatePickerChange}
-            value={datePickerValue}
-          />
-        ) : null}
+        <SimpleCalendarModal
+          onClear={clearPickedDate}
+          onClose={closeDatePicker}
+          onSelectDate={applyPickedDate}
+          value={datePickerValue}
+          visible={datePickerVisible}
+        />
 
-        <Modal
-          animationType="fade"
-          onRequestClose={closeDatePicker}
-          transparent
-          visible={datePickerVisible && Platform.OS === 'ios'}
-        >
-          <View style={styles.datePickerModalRoot}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss date picker"
-              onPress={closeDatePicker}
-              style={styles.datePickerBackdrop}
-            />
-            <View style={styles.datePickerSheet}>
-              <View style={styles.datePickerHeader}>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={closeDatePicker}
-                  style={({ pressed }) => [
-                    styles.datePickerHeaderButton,
-                    pressed && styles.datePickerHeaderButtonPressed,
-                  ]}
-                >
-                  <Text style={styles.datePickerHeaderButtonText}>Cancel</Text>
-                </Pressable>
-                <Text style={styles.datePickerHeaderTitle}>Pick a date</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => applyPickedDate(datePickerValue)}
-                  style={({ pressed }) => [
-                    styles.datePickerHeaderButton,
-                    pressed && styles.datePickerHeaderButtonPressed,
-                  ]}
-                >
-                  <Text style={[styles.datePickerHeaderButtonText, styles.datePickerHeaderDone]}>
-                    Done
-                  </Text>
-                </Pressable>
-              </View>
-              <DateTimePicker
-                display="inline"
-                mode="date"
-                onChange={handleDatePickerChange}
-                style={styles.datePickerControl}
-                value={datePickerValue}
-              />
-            </View>
-          </View>
-        </Modal>
+        <ReminderTimeModal
+          onClose={closeCreateReminderModal}
+          onConfirm={confirmCreateReminderTime}
+          value={decodeTodoReminder(createDraftFilters.reminder).time}
+          visible={reminderModalVisible}
+        />
+
+        <RepeatReminderModal
+          onClose={closeCreateRepeatModal}
+          onConfirm={confirmCreateRepeat}
+          value={repeatDraft}
+          visible={repeatReminderModalVisible}
+        />
 
         {settingsModalVisible ? (
           <View style={styles.settingsOverlay}>
@@ -7118,6 +7326,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 12,
   },
+  createDrawerPickerRowMain: {
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingRight: 4,
+  },
+  createDrawerPickerClearButton: {
+    alignItems: 'center',
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
   createDrawerPickerRowSelected: {
     backgroundColor: THEME_ACCENT_SOFT,
   },
@@ -7684,53 +7904,5 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: 0.1,
     textAlign: 'center',
-  },
-  datePickerModalRoot: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  datePickerBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-  },
-  datePickerSheet: {
-    backgroundColor: THEME_CARD,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingBottom: 24,
-  },
-  datePickerHeader: {
-    alignItems: 'center',
-    borderBottomColor: THEME_BORDER,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  datePickerHeaderTitle: {
-    color: THEME_TEXT,
-    fontSize: 16,
-    fontWeight: FONT_SEMIBOLD,
-  },
-  datePickerHeaderButton: {
-    minWidth: 64,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  datePickerHeaderButtonPressed: {
-    opacity: 0.65,
-  },
-  datePickerHeaderButtonText: {
-    color: THEME_TEXT_SECONDARY,
-    fontSize: 16,
-    fontWeight: FONT_MEDIUM,
-  },
-  datePickerHeaderDone: {
-    color: THEME_ACCENT,
-    textAlign: 'right',
-  },
-  datePickerControl: {
-    alignSelf: 'center',
   },
 });

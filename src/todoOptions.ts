@@ -1,4 +1,5 @@
 import { DATE_FILTER_PRESETS } from './dates';
+import { REMINDER_PICKER_LABEL, REPEAT_PICKER_LABEL } from './reminders';
 import {
   type TodoGroupMode,
   type TodoSortMode,
@@ -6,6 +7,13 @@ import {
 
 export const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
 export const DATE_MENU_ITEMS: string[] = [...DATE_FILTER_PRESETS];
+
+/** Date drawer list: presets + Someday + Reminder + Repeating (not used for list filtering). */
+export const DATE_PICKER_MENU_ITEMS: string[] = [
+  ...DATE_FILTER_PRESETS,
+  REMINDER_PICKER_LABEL,
+  REPEAT_PICKER_LABEL,
+];
 
 export const getBestOrderedFilterLabel = (
   values: string[],

@@ -19,10 +19,15 @@ import {
 import { formatListLabel } from '../todos';
 
 const FONT_MEDIUM = '500' as const;
+const REMINDER_META_THEME = {
+  border: '#D8E0FF',
+  text: '#4C78FF',
+  tint: '#F2F5FF',
+};
 
 type MetaTagDescriptor = {
   displayLabel: string;
-  filterKey: FilterColorKey;
+  filterKey: FilterColorKey | 'reminder';
   isOverdue?: boolean;
   lookupValue: string;
 };
@@ -34,6 +39,7 @@ type TodoMetaTagsProps = {
   filterColors: FilterColorSettings;
   listLabel?: string;
   priorityLabel?: string;
+  reminderLabel?: string;
   visibility: MetaTagVisibility;
 };
 
@@ -48,11 +54,13 @@ function MetaTag({
   done?: boolean;
   filterColors: FilterColorSettings;
 }) {
-  const theme = getFilterColorTheme(
-    filterColors,
-    descriptor.filterKey,
-    descriptor.lookupValue,
-  );
+  const theme = descriptor.filterKey === 'reminder'
+    ? REMINDER_META_THEME
+    : getFilterColorTheme(
+      filterColors,
+      descriptor.filterKey,
+      descriptor.lookupValue,
+    );
   const useOverdueStyle = descriptor.isOverdue === true;
 
   return (
@@ -85,6 +93,7 @@ function buildMetaTags(
   dateLabel: string | undefined,
   listLabel: string | undefined,
   priorityLabel: string | undefined,
+  reminderLabel: string | undefined,
   createdAt: number | undefined,
 ): MetaTagDescriptor[] {
   const tags: MetaTagDescriptor[] = [];
@@ -117,6 +126,14 @@ function buildMetaTags(
     });
   }
 
+  if (visibility.date && reminderLabel) {
+    tags.push({
+      displayLabel: reminderLabel,
+      filterKey: 'reminder',
+      lookupValue: reminderLabel,
+    });
+  }
+
   if (visibility.createdAt && typeof createdAt === 'number') {
     tags.push({
       displayLabel: formatCreatedMetaLabel(createdAt),
@@ -135,6 +152,7 @@ function TodoMetaTagsComponent({
   filterColors,
   listLabel,
   priorityLabel,
+  reminderLabel,
   visibility,
 }: TodoMetaTagsProps) {
   const tags = buildMetaTags(
@@ -142,6 +160,7 @@ function TodoMetaTagsComponent({
     dateLabel,
     listLabel,
     priorityLabel,
+    reminderLabel,
     createdAt,
   );
 

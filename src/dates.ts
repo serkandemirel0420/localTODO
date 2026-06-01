@@ -242,3 +242,56 @@ export const getDateMenuColorLookupValue = (menuLabel: string, dateLabels: strin
 
   return menuLabel;
 };
+
+export const isSameCalendarDay = (a: Date, b: Date): boolean =>
+  a.getFullYear() === b.getFullYear()
+  && a.getMonth() === b.getMonth()
+  && a.getDate() === b.getDate();
+
+const addCalendarDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return startOfDay(next);
+};
+
+export const getISOWeekNumber = (date: Date): number => {
+  const target = startOfDay(date);
+  target.setDate(target.getDate() + 3 - ((target.getDay() + 6) % 7));
+  const weekYear = target.getFullYear();
+  const firstThursday = new Date(weekYear, 0, 4);
+  const diff = target.getTime() - firstThursday.getTime();
+  return 1 + Math.round(diff / (7 * 24 * 60 * 60 * 1000));
+};
+
+export type CalendarCell = {
+  date: Date;
+  inCurrentMonth: boolean;
+};
+
+export const buildCalendarMonthGrid = (visibleMonth: Date): CalendarCell[][] => {
+  const year = visibleMonth.getFullYear();
+  const month = visibleMonth.getMonth();
+  const firstOfMonth = new Date(year, month, 1);
+  const startOffset = (firstOfMonth.getDay() + 6) % 7;
+  const gridStart = addCalendarDays(firstOfMonth, -startOffset);
+
+  const weeks: CalendarCell[][] = [];
+  let cursor = new Date(gridStart);
+
+  for (let week = 0; week < 6; week += 1) {
+    const row: CalendarCell[] = [];
+    for (let day = 0; day < 7; day += 1) {
+      row.push({
+        date: new Date(cursor),
+        inCurrentMonth: cursor.getMonth() === month,
+      });
+      cursor = addCalendarDays(cursor, 1);
+    }
+    weeks.push(row);
+  }
+
+  return weeks;
+};
+
+export const formatCalendarMonthTitle = (date: Date): string =>
+  date.toLocaleDateString(undefined, { month: 'long' });

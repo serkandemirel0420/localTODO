@@ -24,6 +24,7 @@ import {
   type HiddenMetaTagKind,
   type MetaTagVisibility,
 } from '../metaTags';
+import { formatTodoReminderMetaLabel } from '../reminders';
 import {
   DATE_MENU_ITEMS,
   getBestOrderedFilterLabel,
@@ -124,6 +125,7 @@ function TodoRowComponent({
     PRIORITY_MENU_ITEMS,
     '',
   );
+  const reminderStatusLabel = formatTodoReminderMetaLabel(item.filters.reminder);
   const effectiveMetaTagVisibility = applyHiddenMetaTagKinds(
     metaTagVisibility,
     hiddenMetaTagKinds,
@@ -618,6 +620,7 @@ function TodoRowComponent({
                   ? priorityStatusLabel
                   : undefined
               }
+              reminderLabel={reminderStatusLabel ?? undefined}
               visibility={effectiveMetaTagVisibility}
             />
           )}

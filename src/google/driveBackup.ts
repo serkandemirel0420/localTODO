@@ -58,6 +58,7 @@ export type BackupSettings = {
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
   hideDoneTodos: boolean;
+  lastCreateTodoFilters: TodoFilters;
   listMenuTree: BackupListMenuNode[];
   listOrderMode: BackupListOrderMode;
   menuPresets: BackupMenuPreset[];
@@ -343,6 +344,7 @@ export const createBackupPayload = (
       googleDriveLastBackupAt: exportedAt,
       googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
       hideDoneTodos: settings.hideDoneTodos,
+      lastCreateTodoFilters: cloneTodoFilters(settings.lastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode,
       menuPresets: cloneMenuPresets(settings.menuPresets),
@@ -377,6 +379,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       googleDriveLastRestoreAt:
         typeof settings.googleDriveLastRestoreAt === 'string' ? settings.googleDriveLastRestoreAt : null,
       hideDoneTodos: settings.hideDoneTodos === true,
+      lastCreateTodoFilters: normalizeTodoFilters(settings.lastCreateTodoFilters),
       listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
       menuPresets: normalizeBackupMenuPresets(settings.menuPresets),

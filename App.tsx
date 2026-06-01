@@ -414,6 +414,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_EXPANSION_SETTLE_MS = 120;
+const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
@@ -479,6 +480,28 @@ const getDefaultCreateDraftFilters = (
   list: listMenuTree[0]?.label ? [listMenuTree[0].label] : ['Inbox'],
   priority: [],
 });
+
+const getRememberedCreateDraftFilters = (
+  listMenuTree: ListMenuNode[],
+  filters: TodoFilters,
+): SelectedFilters => {
+  const fallback = getDefaultCreateDraftFilters(listMenuTree);
+  const normalized = normalizeTodoFilters(filters);
+  const knownListLabels = new Set(collectListNodeLabels(listMenuTree));
+  const listLabel = normalized.list.find((label) => knownListLabels.has(label));
+  const priorityLabel = normalized.priority.find((label) => (
+    label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
+  ));
+
+  return {
+    date: normalized.date[0] ? [normalized.date[0]] : fallback.date,
+    list: listLabel ? [listLabel] : fallback.list,
+    priority: priorityLabel ? [priorityLabel] : [],
+  };
+};
+
+const shouldHighlightCreatePriorityPicker = (filters: SelectedFilters) =>
+  filters.priority.some((label) => label !== 'High');
 
 const formatCreateDrawerDateLabel = (dateLabels: string[]) => {
   const primary = dateLabels[0];
@@ -754,6 +777,9 @@ export default function App() {
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
   );
+  const [lastCreateTodoFilters, setLastCreateTodoFilters] = useState<SelectedFilters>(
+    () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
+  );
   const [createDrawerPicker, setCreateDrawerPicker] = useState<CreateDrawerPicker | null>(
     null,
   );
@@ -938,6 +964,11 @@ export default function App() {
           return;
         }
 
+        const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
+          settings.listMenuTree,
+          settings.lastCreateTodoFilters,
+        );
+
         setSelectedFilters(settings.selectedFilters);
         setDeletedTodos(settings.deletedTodos);
         setFilterColors(settings.filterColors);
@@ -952,6 +983,11 @@ export default function App() {
         setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
         setTodoSortMode(settings.todoSortMode);
         setMetaTagVisibility(cloneMetaTagVisibility(settings.metaTagVisibility));
+        setLastCreateTodoFilters(nextLastCreateTodoFilters);
+        setCreateDraftFilters(nextLastCreateTodoFilters);
+        setCreateDraftPriorityFromPicker(
+          shouldHighlightCreatePriorityPicker(nextLastCreateTodoFilters),
+        );
 
         const lastBackup = formatBackupTime(settings.googleDriveLastBackupAt);
         setGoogleDriveBackupStatus(lastBackup ? `Last backup ${lastBackup}` : 'Not backed up');
@@ -979,6 +1015,7 @@ export default function App() {
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
     hideDoneTodos,
+    lastCreateTodoFilters,
     listMenuTree,
     listOrderMode,
     menuPresets,
@@ -995,6 +1032,7 @@ export default function App() {
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
     hideDoneTodos,
+    lastCreateTodoFilters,
     listMenuTree,
     listOrderMode,
     menuPresets,
@@ -1432,6 +1470,14 @@ export default function App() {
     setCreateDrawerPicker(null);
   }, []);
 
+  const resetCreateDrawerState = useCallback((filters = lastCreateTodoFilters) => {
+    const nextFilters = getRememberedCreateDraftFilters(listMenuTree, filters);
+    setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
+    setCreateDraftContent('');
+    setCreateDraftText('');
+    setCreateDraftFilters(nextFilters);
+  }, [lastCreateTodoFilters, listMenuTree]);
+
   const goBackInMenu = useCallback(() => {
     if (activeTodoDetailId) {
       closeTodoDetailModal();
@@ -1450,9 +1496,7 @@ export default function App() {
       }
 
       setCreateDrawerVisible(false);
-      setCreateDraftPriorityFromPicker(false);
-      setCreateDraftText('');
-      setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
+      resetCreateDrawerState();
       Keyboard.dismiss();
       return true;
     }
@@ -1495,9 +1539,9 @@ export default function App() {
     createDrawerPicker,
     createDrawerVisible,
     datePickerVisible,
-    listMenuTree,
     menuMode,
     presetSaveModalVisible,
+    resetCreateDrawerState,
     settingsModalVisible,
     submenuOpen,
   ]);
@@ -1570,11 +1614,8 @@ export default function App() {
     Keyboard.dismiss();
     setCreateDrawerVisible(false);
     setCreateDrawerPicker(null);
-    setCreateDraftPriorityFromPicker(false);
-    setCreateDraftContent('');
-    setCreateDraftText('');
-    setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
-  }, [listMenuTree]);
+    resetCreateDrawerState();
+  }, [resetCreateDrawerState]);
 
   const openCreateDrawer = useCallback((initialText = '') => {
     if (listMenuOpen) {
@@ -1583,9 +1624,7 @@ export default function App() {
 
     searchInputRef.current?.blur();
     setCreateDrawerPicker(null);
-    setCreateDraftPriorityFromPicker(false);
-    setCreateDraftContent('');
-    setCreateDraftFilters(getDefaultCreateDraftFilters(listMenuTree));
+    resetCreateDrawerState();
     setCreateDraftText(
       truncateTodoText(
         initialText.trim().replace(/\s+/g, ' '),
@@ -1595,7 +1634,7 @@ export default function App() {
     Keyboard.dismiss();
     setCreateDrawerVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenu, listMenuOpen, listMenuTree, todoTextMaxLength]);
+  }, [closeListMenu, listMenuOpen, resetCreateDrawerState, todoTextMaxLength]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -1654,11 +1693,19 @@ export default function App() {
       return;
     }
 
-    const todo = makeTodo(text, createDraftFilters, content);
+    const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
+      listMenuTree,
+      createDraftFilters,
+    );
+    const todo = makeTodo(text, nextLastCreateTodoFilters, content);
 
+    setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setTodos((current) => [todo, ...current]);
     localTodoStore.upsert(todo).catch(() => undefined);
-    closeCreateDrawer();
+    Keyboard.dismiss();
+    setCreateDrawerVisible(false);
+    setCreateDrawerPicker(null);
+    resetCreateDrawerState(nextLastCreateTodoFilters);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
       () => undefined,
     );
@@ -1667,7 +1714,9 @@ export default function App() {
     createDraftContent,
     createDraftFilters,
     createDraftText,
+    listMenuTree,
     pendingDeleteIds,
+    resetCreateDrawerState,
     todoTextMaxLength,
     todos,
   ]);
@@ -3076,6 +3125,10 @@ export default function App() {
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
+      setLastCreateTodoFilters((filters) => ({
+        ...filters,
+        list: filters.list.filter((label) => !removedLabels.has(label)),
+      }));
       setTodos((items) => {
         const nextItems = items.map((todo) => ({
           ...todo,
@@ -3109,6 +3162,10 @@ export default function App() {
 
       const removedLabels = new Set(collectListNodeLabels([node]));
       setSelectedFilters((filters) => ({
+        ...filters,
+        list: filters.list.filter((label) => !removedLabels.has(label)),
+      }));
+      setLastCreateTodoFilters((filters) => ({
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
@@ -3426,6 +3483,7 @@ export default function App() {
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
       hideDoneTodos,
+      lastCreateTodoFilters,
       listMenuTree,
       listOrderMode,
       menuPresets,
@@ -3448,6 +3506,7 @@ export default function App() {
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
     hideDoneTodos,
+    lastCreateTodoFilters,
     listMenuTree,
     listOrderMode,
     menuPresets,
@@ -3481,17 +3540,26 @@ export default function App() {
     setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
     setHideDoneTodos(backup.payload.settings.hideDoneTodos);
-    setListMenuTree(
+    const restoredListMenuTree =
       backup.payload.settings.listMenuTree.length > 0
         ? backup.payload.settings.listMenuTree
-        : cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+        : cloneListMenuTree(DEFAULT_LIST_MENU_TREE);
+    const restoredLastCreateTodoFilters = getRememberedCreateDraftFilters(
+      restoredListMenuTree,
+      backup.payload.settings.lastCreateTodoFilters,
     );
+    setListMenuTree(restoredListMenuTree);
     setListOrderMode(backup.payload.settings.listOrderMode);
     setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
     setTodoGroupMode(backup.payload.settings.todoGroupMode);
     setCollapsedTodoGroupIds(new Set(backup.payload.settings.collapsedTodoGroupIds));
     setTodoSortMode(backup.payload.settings.todoSortMode);
     setMetaTagVisibility(cloneMetaTagVisibility(backup.payload.settings.metaTagVisibility));
+    setLastCreateTodoFilters(restoredLastCreateTodoFilters);
+    setCreateDraftFilters(restoredLastCreateTodoFilters);
+    setCreateDraftPriorityFromPicker(
+      shouldHighlightCreatePriorityPicker(restoredLastCreateTodoFilters),
+    );
     setGoogleDriveBackupStatus(
       `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
     );
@@ -3780,6 +3848,7 @@ export default function App() {
                 accessibilityRole="button"
                 accessibilityState={{ expanded: isExpanded }}
                 accessibilityLabel={`${item.label}, ${item.count} items`}
+                unstable_pressDelay={TODO_GROUP_HEADER_PRESS_DELAY_MS}
                 {...getInstantPressHandlers(
                   `todo-group:${item.id}`,
                   () => toggleTodoGroupCollapsed(item.id),

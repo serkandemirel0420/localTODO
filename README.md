@@ -129,6 +129,21 @@ The Google Cloud checklist is:
 4. Put the created Android client ID in the matching dev or prod env variable
    and rebuild/reinstall the APK.
 
+If a production APK opens Google, including in Brave, and says **Access blocked:
+Local Todo has not completed the Google verification process**, publish the
+Google OAuth consent screen. This is not the same as publishing the Android app
+to the Google Play Store. Check the Google Cloud project that owns the
+production OAuth client ID, then open Google Auth Platform > Audience and set
+the publishing status to **In production**. The APK can stay privately
+installed; the OAuth app is what becomes available to Google accounts.
+
+Then open Data Access in the same project and make sure the app declares the
+Drive `appDataFolder` scope used by this app:
+`https://www.googleapis.com/auth/drive.appdata`. The backup code only requests
+that app-data scope, so this block usually means the OAuth app is still in
+Testing, the scope was not declared on the consent screen, or the APK is using a
+client ID from a different Google Cloud project than the one you configured.
+
 OAuth redirects require a development or production build with the app scheme
 from `app.json`. Expo Go cannot complete this OAuth redirect reliably because it
 does not use this app's custom scheme.

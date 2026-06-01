@@ -51,10 +51,27 @@ const LEFT_SWIPE_ACTION_WIDTH =
 const RIGHT_SWIPE_ACTION_WIDTH = SWIPE_ACTION_BUTTON_WIDTH + (SWIPE_ACTION_EDGE_PADDING * 2);
 const LEFT_SWIPE_OPEN_DISTANCE = 66;
 const RIGHT_SWIPE_OPEN_DISTANCE = 38;
+const TODO_ROW_TITLE_PREVIEW_MAX_LENGTH = 60;
+const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = 60;
+const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
 
 let openTodoSwipeable: Swipeable | null = null;
+
+const getTodoRowTextPreview = (text: string, maxLength: number) => {
+  const compactText = text.trim().replace(/\s+/g, ' ');
+  const compactChars = Array.from(compactText);
+
+  if (compactChars.length <= maxLength) {
+    return compactText;
+  }
+
+  return `${compactChars
+    .slice(0, maxLength - TODO_ROW_PREVIEW_ELLIPSIS.length)
+    .join('')
+    .trimEnd()}${TODO_ROW_PREVIEW_ELLIPSIS}`;
+};
 
 export type TodoRowProps = {
   deferSwipeable?: boolean;
@@ -112,7 +129,8 @@ function TodoRowComponent({
     hiddenMetaTagKinds,
   );
   const content = item.content.trim();
-  const contentPreview = content.replace(/\s+/g, ' ');
+  const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
+  const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_PREVIEW_MAX_LENGTH);
   const isHighlightedForMenu = isMenuTargetHighlighted;
   const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget;
 
@@ -563,6 +581,7 @@ function TodoRowComponent({
       >
         <View style={styles.contentColumn}>
           <Text
+            ellipsizeMode="tail"
             numberOfLines={2}
             style={[
               styles.text,
@@ -570,10 +589,11 @@ function TodoRowComponent({
               isPendingDelete && styles.textPendingDelete,
             ]}
           >
-            {item.text}
+            {titlePreview}
           </Text>
           {contentPreview ? (
             <Text
+              ellipsizeMode="tail"
               numberOfLines={1}
               style={[
                 styles.content,
@@ -867,6 +887,7 @@ const styles = StyleSheet.create({
   text: {
     alignSelf: 'stretch',
     color: THEME_TEXT,
+    flexShrink: 1,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
     lineHeight: 21,

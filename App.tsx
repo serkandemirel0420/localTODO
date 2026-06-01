@@ -15,6 +15,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  Alert,
   Animated,
   BackHandler,
   Easing,
@@ -390,6 +391,7 @@ const BOTTOM_NAV_HEIGHT = 74;
 const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
+const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
 const MENU_DISMISS_RELEASE = 52;
 const MENU_DISMISS_VELOCITY = 680;
 const GOOGLE_IOS_LEGACY_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
@@ -408,6 +410,8 @@ const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
 const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
+const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
+const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_EXPANSION_SETTLE_MS = 120;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
@@ -761,6 +765,7 @@ export default function App() {
   const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
+  const [activeTodoMenuHighlightId, setActiveTodoMenuHighlightId] = useState<string | null>(null);
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
@@ -769,6 +774,7 @@ export default function App() {
   const [presetSaveName, setPresetSaveName] = useState('');
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
+  const [activeDeletedTodoDetailId, setActiveDeletedTodoDetailId] = useState<string | null>(null);
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
   const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
@@ -818,9 +824,14 @@ export default function App() {
   const todoListRef = useRef<FlashListRef<VisibleTodoListRow> | null>(null);
   const searchRequestIdRef = useRef(0);
   const scrollOffsetY = useRef(0);
+  const actualScrollOffsetY = useRef(0);
   const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
   const menuModeRef = useRef<MenuMode | null>(null);
+  const activeTodoMenuIdRef = useRef<string | null>(null);
+  const listMenuOpenRef = useRef(false);
+  const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
+  const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
   const didApplyTodoListInitialOffsetRef = useRef(false);
@@ -831,6 +842,8 @@ export default function App() {
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
   menuModeRef.current = menuMode;
+  activeTodoMenuIdRef.current = activeTodoMenuId;
+  listMenuOpenRef.current = listMenuOpen;
   const listMenuOneHandedOffset = useMemo(
     () => Math.max(
       LIST_MENU_ROW_HEIGHT,
@@ -857,6 +870,7 @@ export default function App() {
   });
   const googleDriveActionReady =
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
+  const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const getInstantPressHandlers = useInstantPress();
   const settlingTodoGroupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -955,34 +969,25 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!settingsLoaded) {
-      return;
-    }
-
-    const settings: AppSettings = {
-      collapsedTodoGroupIds: [...collapsedTodoGroupIds],
-      deletedTodos,
-      filterColors,
-      googleDriveBackupEnabled,
-      googleDriveLastBackupAt,
-      googleDriveLastRestoreAt,
-      hideDoneTodos,
-      listMenuTree,
-      listOrderMode,
-      menuPresets,
-      metaTagVisibility,
-      selectedFilters,
-      todoGroupMode,
-      todoSortMode,
-    };
-
-    const saveTimer = setTimeout(() => {
-      appSettingsStore.save(settings).catch(() => undefined);
-    }, SETTINGS_SAVE_DEBOUNCE_MS);
-
-    return () => clearTimeout(saveTimer);
-  }, [
+  const createSettingsSnapshot = useCallback((
+    overrides: Partial<AppSettings> = {},
+  ): AppSettings => ({
+    collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+    deletedTodos,
+    filterColors,
+    googleDriveBackupEnabled,
+    googleDriveLastBackupAt,
+    googleDriveLastRestoreAt,
+    hideDoneTodos,
+    listMenuTree,
+    listOrderMode,
+    menuPresets,
+    metaTagVisibility,
+    selectedFilters,
+    todoGroupMode,
+    todoSortMode,
+    ...overrides,
+  }), [
     collapsedTodoGroupIds,
     deletedTodos,
     filterColors,
@@ -995,16 +1000,129 @@ export default function App() {
     menuPresets,
     metaTagVisibility,
     selectedFilters,
-    settingsLoaded,
     todoGroupMode,
     todoSortMode,
   ]);
 
   useEffect(() => {
-    if (menuMode === null) {
-      setActiveTodoMenuId(null);
+    if (!settingsLoaded) {
+      return;
     }
-  }, [menuMode]);
+
+    const settings = createSettingsSnapshot();
+
+    const saveTimer = setTimeout(() => {
+      appSettingsStore.save(settings).catch(() => undefined);
+    }, SETTINGS_SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(saveTimer);
+  }, [
+    createSettingsSnapshot,
+    settingsLoaded,
+  ]);
+
+  const clearTodoMenuHighlightRequest = useCallback(() => {
+    if (todoMenuHighlightTimerRef.current) {
+      clearTimeout(todoMenuHighlightTimerRef.current);
+      todoMenuHighlightTimerRef.current = null;
+    }
+
+    pendingTodoMenuHighlightRef.current = null;
+  }, []);
+
+  const revealTodoMenuHighlight = useCallback((id: string) => {
+    if (activeTodoMenuIdRef.current !== id || !listMenuOpenRef.current) {
+      return;
+    }
+
+    if (todoMenuHighlightTimerRef.current) {
+      clearTimeout(todoMenuHighlightTimerRef.current);
+      todoMenuHighlightTimerRef.current = null;
+    }
+
+    pendingTodoMenuHighlightRef.current = null;
+    setActiveTodoMenuHighlightId(id);
+  }, []);
+
+  const scheduleTodoMenuHighlight = useCallback(
+    (id: string, targetOffset: number | null) => {
+      clearTodoMenuHighlightRequest();
+
+      if (targetOffset === null) {
+        return;
+      }
+
+      if (
+        Math.abs(actualScrollOffsetY.current - targetOffset) <=
+          TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE
+      ) {
+        requestAnimationFrame(() => revealTodoMenuHighlight(id));
+        return;
+      }
+
+      pendingTodoMenuHighlightRef.current = { id, offset: targetOffset };
+      todoMenuHighlightTimerRef.current = setTimeout(() => {
+        todoMenuHighlightTimerRef.current = null;
+        revealTodoMenuHighlight(id);
+      }, TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS);
+    },
+    [clearTodoMenuHighlightRequest, revealTodoMenuHighlight],
+  );
+
+  const maybeRevealPendingTodoMenuHighlight = useCallback(
+    (offsetY: number) => {
+      const pendingHighlight = pendingTodoMenuHighlightRef.current;
+
+      if (!pendingHighlight) {
+        return;
+      }
+
+      if (
+        activeTodoMenuIdRef.current !== pendingHighlight.id ||
+        !listMenuOpenRef.current
+      ) {
+        clearTodoMenuHighlightRequest();
+        return;
+      }
+
+      if (
+        Math.abs(offsetY - pendingHighlight.offset) >
+          TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE
+      ) {
+        return;
+      }
+
+      revealTodoMenuHighlight(pendingHighlight.id);
+    },
+    [clearTodoMenuHighlightRequest, revealTodoMenuHighlight],
+  );
+
+  useEffect(
+    () => () => clearTodoMenuHighlightRequest(),
+    [clearTodoMenuHighlightRequest],
+  );
+
+  useEffect(() => {
+    if (menuMode === null) {
+      clearTodoMenuHighlightRequest();
+      setActiveTodoMenuId(null);
+      setActiveTodoMenuHighlightId(null);
+    }
+  }, [clearTodoMenuHighlightRequest, menuMode]);
+
+  useEffect(() => {
+    if (
+      activeTodoMenuHighlightId !== null &&
+      activeTodoMenuHighlightId !== activeTodoMenuId
+    ) {
+      clearTodoMenuHighlightRequest();
+      setActiveTodoMenuHighlightId(null);
+    }
+  }, [
+    activeTodoMenuHighlightId,
+    activeTodoMenuId,
+    clearTodoMenuHighlightRequest,
+  ]);
 
   useEffect(() => {
     if (menuMode === null) {
@@ -1034,12 +1152,14 @@ export default function App() {
   }, [listMenuOpen, menuPullAnim]);
 
   const closeListMenuState = useCallback(() => {
+    clearTodoMenuHighlightRequest();
     setMenuMode(null);
     setActiveTodoMenuId(null);
+    setActiveTodoMenuHighlightId(null);
     menuPullAnim.setValue(0);
     menuDismissPullRef.current = 0;
     menuDismissHapticRef.current = 0;
-  }, [menuPullAnim]);
+  }, [clearTodoMenuHighlightRequest, menuPullAnim]);
 
   const closeListMenu = useCallback(() => {
     closeListMenuState();
@@ -1052,6 +1172,16 @@ export default function App() {
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
     todoDetailDraftTodoIdRef.current = null;
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const closeDeletedTodoDetailModal = useCallback(() => {
+    setActiveDeletedTodoDetailId(null);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const openDeletedTodoDetailModal = useCallback((id: string) => {
+    setActiveDeletedTodoDetailId(id);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
@@ -1673,10 +1803,47 @@ export default function App() {
         ? current
         : [restoredTodo, ...current]
     ));
-    setDeletedTodos((current) => current.filter((todo) => todo.id !== id));
+    const nextDeletedTodos = deletedTodos.filter((todo) => todo.id !== id);
+
+    setDeletedTodos(nextDeletedTodos);
+    setActiveDeletedTodoDetailId((current) => (current === id ? null : current));
+    appSettingsStore.save(
+      createSettingsSnapshot({ deletedTodos: nextDeletedTodos }),
+    ).catch(() => undefined);
     localTodoStore.upsert(restoredTodo).catch(() => undefined);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
-  }, [deletedTodos, todos]);
+  }, [createSettingsSnapshot, deletedTodos, todos]);
+
+  const deleteDeletedTodoPermanently = useCallback((id: string) => {
+    const deletedTodo = deletedTodos.find((todo) => todo.id === id);
+
+    if (!deletedTodo) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete permanently?',
+      deletedTodo.text,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            const nextDeletedTodos = deletedTodos.filter((todo) => todo.id !== id);
+            setDeletedTodos(nextDeletedTodos);
+            setActiveDeletedTodoDetailId((current) => (current === id ? null : current));
+            appSettingsStore.save(
+              createSettingsSnapshot({ deletedTodos: nextDeletedTodos }),
+            ).catch(() => undefined);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(
+              () => undefined,
+            );
+          },
+        },
+      ],
+    );
+  }, [createSettingsSnapshot, deletedTodos]);
 
   const setTodoDone = useCallback((id: string, done: boolean) => {
     if (pendingDeleteIds.has(id)) {
@@ -1888,10 +2055,12 @@ export default function App() {
 
   const handleListScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const offsetY = event.nativeEvent.contentOffset.y;
-      scrollOffsetY.current = Math.max(0, offsetY);
+      const offsetY = Math.max(0, event.nativeEvent.contentOffset.y);
+      scrollOffsetY.current = offsetY;
+      actualScrollOffsetY.current = offsetY;
+      maybeRevealPendingTodoMenuHighlight(offsetY);
     },
-    [],
+    [maybeRevealPendingTodoMenuHighlight],
   );
 
   const handleTodoListFrameLayout = useCallback((event: LayoutChangeEvent) => {
@@ -2006,8 +2175,14 @@ export default function App() {
     [pendingDeleteIds],
   );
   const todoListExtraData = useMemo(
-    () => ({ activeTodoMenuId, menuMode, pendingDeleteKey, settlingTodoGroupId }),
-    [activeTodoMenuId, menuMode, pendingDeleteKey, settlingTodoGroupId],
+    () => ({
+      activeTodoMenuHighlightId,
+      activeTodoMenuId,
+      menuMode,
+      pendingDeleteKey,
+      settlingTodoGroupId,
+    }),
+    [activeTodoMenuHighlightId, activeTodoMenuId, menuMode, pendingDeleteKey, settlingTodoGroupId],
   );
   const todoListOneHandedOffset = useMemo(() => {
     if (visibleTodoListRows.length === 0) {
@@ -2019,7 +2194,7 @@ export default function App() {
     return Math.max(
       LIST_MENU_ROW_HEIGHT,
       Math.round(
-        (viewportHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO) /
+        (viewportHeight * TODO_LIST_ONE_HANDED_SCROLL_RATIO) /
           LIST_MENU_ROW_HEIGHT,
       ) * LIST_MENU_ROW_HEIGHT,
     );
@@ -2036,6 +2211,15 @@ export default function App() {
     () => todos.find((todo) => todo.id === activeTodoDetailId) ?? null,
     [activeTodoDetailId, todos],
   );
+  const activeDeletedTodoDetail = useMemo(
+    () => deletedTodos.find((todo) => todo.id === activeDeletedTodoDetailId) ?? null,
+    [activeDeletedTodoDetailId, deletedTodos],
+  );
+  useEffect(() => {
+    if (!activeDeletedTodoDetail && activeDeletedTodoDetailId !== null) {
+      setActiveDeletedTodoDetailId(null);
+    }
+  }, [activeDeletedTodoDetail, activeDeletedTodoDetailId]);
   useEffect(() => {
     if (!activeTodoDetail) {
       if (activeTodoDetailId !== null) {
@@ -2345,6 +2529,7 @@ export default function App() {
 
     if (!hasTodoRows) {
       scrollOffsetY.current = 0;
+      actualScrollOffsetY.current = 0;
       return undefined;
     }
 
@@ -2354,6 +2539,7 @@ export default function App() {
 
     didApplyTodoListInitialOffsetRef.current = true;
     scrollOffsetY.current = todoListOneHandedOffset;
+    actualScrollOffsetY.current = todoListOneHandedOffset;
 
     const frame = requestAnimationFrame(() => {
       todoListRef.current?.scrollToOffset({
@@ -2997,6 +3183,23 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const showTodoItems = useCallback(() => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    closeListMenuState();
+    setSettingsModalVisible(false);
+    setNavTab(null);
+    setQuery('');
+
+    requestAnimationFrame(() => {
+      todoListRef.current?.scrollToOffset({
+        animated: true,
+        offset: todoListOneHandedOffset,
+      });
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [closeListMenuState, todoListOneHandedOffset]);
+
   const handleNavTabPress = useCallback((tab: NavTab) => {
     setActiveTodoMenuId(null);
 
@@ -3417,7 +3620,7 @@ export default function App() {
     const list = todoListRef.current;
 
     if (!list) {
-      return;
+      return null;
     }
 
     const index = visibleTodoListRows.findIndex((row) => {
@@ -3433,7 +3636,7 @@ export default function App() {
     });
 
     if (index < 0) {
-      return;
+      return null;
     }
 
     const getTargetOffset = () => {
@@ -3460,13 +3663,13 @@ export default function App() {
     const targetOffset = getTargetOffset();
 
     if (targetOffset === null) {
-      return;
+      return null;
     }
 
     const nextOffset = Math.max(0, targetOffset);
 
     if (Math.abs(scrollOffsetY.current - nextOffset) < 1) {
-      return;
+      return nextOffset;
     }
 
     scrollOffsetY.current = nextOffset;
@@ -3474,6 +3677,7 @@ export default function App() {
       animated: true,
       offset: nextOffset,
     });
+    return nextOffset;
   }, [
     collapsedTodoGroupIds,
     todoListRows,
@@ -3481,22 +3685,42 @@ export default function App() {
     visibleTodoListRows,
   ]);
 
-  const requestTodoMenuTargetScroll = useCallback((id: string) => {
+  const requestTodoMenuTargetScroll = useCallback((
+    id: string,
+    options?: { revealHighlight?: boolean },
+  ) => {
     const frames: number[] = [];
-    const runScroll = () => scrollTodoAboveMenu(id);
+    let latestTargetOffset: number | null = null;
+    const runScroll = () => {
+      const targetOffset = scrollTodoAboveMenu(id);
+
+      if (targetOffset !== null) {
+        latestTargetOffset = targetOffset;
+      }
+
+      return targetOffset;
+    };
+    const finishScrollRequest = () => {
+      if (options?.revealHighlight) {
+        scheduleTodoMenuHighlight(id, latestTargetOffset);
+      }
+    };
 
     frames.push(requestAnimationFrame(() => {
       runScroll();
       frames.push(requestAnimationFrame(() => {
         runScroll();
-        frames.push(requestAnimationFrame(runScroll));
+        frames.push(requestAnimationFrame(() => {
+          runScroll();
+          finishScrollRequest();
+        }));
       }));
     }));
 
     return () => {
       frames.forEach((frame) => cancelAnimationFrame(frame));
     };
-  }, [scrollTodoAboveMenu]);
+  }, [scheduleTodoMenuHighlight, scrollTodoAboveMenu]);
 
   useEffect(() => {
     if (!activeTodoMenuId || !listMenuOpen) {
@@ -3518,9 +3742,10 @@ export default function App() {
     }
 
     setActiveTodoMenuId(id);
+    setActiveTodoMenuHighlightId(null);
     Keyboard.dismiss();
     setMenuMode('main');
-    requestTodoMenuTargetScroll(id);
+    requestTodoMenuTargetScroll(id, { revealHighlight: true });
 
     Haptics.selectionAsync().catch(() => undefined);
   }, [pendingDeleteIds, requestTodoMenuTargetScroll]);
@@ -3587,6 +3812,13 @@ export default function App() {
 
       if (item.type === 'groupedTodo') {
         const isPendingDelete = pendingDeleteIds.has(item.todo.id);
+        const isTodoMenuTarget =
+          !isPendingDelete &&
+          menuMode !== null &&
+          activeTodoMenuId === item.todo.id;
+        const isTodoMenuTargetHighlighted =
+          isTodoMenuTarget &&
+          activeTodoMenuHighlightId === item.todo.id;
 
         return (
           <View>
@@ -3602,11 +3834,8 @@ export default function App() {
                 filterColors={filterColors}
                 hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
                 item={item.todo}
-                isMenuTarget={
-                  !isPendingDelete &&
-                  menuMode !== null &&
-                  activeTodoMenuId === item.todo.id
-                }
+                isMenuTarget={isTodoMenuTarget}
+                isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
                 isPendingDelete={isPendingDelete}
                 layout="grouped"
                 metaTagVisibility={metaTagVisibility}
@@ -3626,6 +3855,13 @@ export default function App() {
       }
 
       const isPendingDelete = pendingDeleteIds.has(item.todo.id);
+      const isTodoMenuTarget =
+        !isPendingDelete &&
+        menuMode !== null &&
+        activeTodoMenuId === item.todo.id;
+      const isTodoMenuTargetHighlighted =
+        isTodoMenuTarget &&
+        activeTodoMenuHighlightId === item.todo.id;
 
       return (
         <View>
@@ -3633,11 +3869,8 @@ export default function App() {
           <TodoRow
             filterColors={filterColors}
             item={item.todo}
-            isMenuTarget={
-              !isPendingDelete &&
-              menuMode !== null &&
-              activeTodoMenuId === item.todo.id
-            }
+            isMenuTarget={isTodoMenuTarget}
+            isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
             isPendingDelete={isPendingDelete}
             metaTagVisibility={metaTagVisibility}
             onDelete={deleteTodo}
@@ -3650,6 +3883,7 @@ export default function App() {
     },
     [
       activeTodoMenuId,
+      activeTodoMenuHighlightId,
       deleteTodo,
       filterColors,
       getInstantPressHandlers,
@@ -3675,6 +3909,24 @@ export default function App() {
           <Text numberOfLines={1} style={styles.appHeaderTitle}>
             {appHeaderTitle}
           </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Opens settings"
+            accessibilityLabel="Settings"
+            accessibilityState={{ selected: navTab === 'settings' }}
+            onPress={() => handleNavTabPress('settings')}
+            style={({ pressed }) => [
+              styles.appHeaderSettingsButton,
+              navTab === 'settings' && styles.appHeaderSettingsButtonActive,
+              pressed && styles.appHeaderSettingsButtonPressed,
+            ]}
+          >
+            <Ionicons
+              color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+              name="cog-outline"
+              size={23}
+            />
+          </Pressable>
         </View>
 
         <View style={styles.headerSearchRow}>
@@ -3903,17 +4155,24 @@ export default function App() {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Settings"
-            accessibilityState={{ selected: navTab === 'settings' }}
-            onPress={() => handleNavTabPress('settings')}
+            accessibilityHint="Shows the todo items list"
+            accessibilityLabel="Show items"
+            accessibilityState={{
+              selected: navTab === null && !listMenuOpen && !settingsModalVisible,
+            }}
+            onPress={showTodoItems}
             style={({ pressed }) => [
               styles.bottomNavItem,
               pressed && styles.bottomNavItemPressed,
             ]}
           >
             <Ionicons
-              color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-              name="cog-outline"
+              color={
+                navTab === null && !listMenuOpen && !settingsModalVisible
+                  ? NAV_ACCENT
+                  : NAV_ICON_INACTIVE
+              }
+              name="home-outline"
               size={25}
             />
           </Pressable>
@@ -4601,6 +4860,87 @@ export default function App() {
 
         <Modal
           animationType="fade"
+          onRequestClose={closeDeletedTodoDetailModal}
+          statusBarTranslucent={Platform.OS === 'android'}
+          transparent
+          visible={activeDeletedTodoDetail !== null}
+        >
+          <View style={styles.todoDetailModalRoot}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close deleted item details"
+              onPress={closeDeletedTodoDetailModal}
+              style={styles.todoDetailBackdrop}
+            />
+            {activeDeletedTodoDetail ? (
+              <View
+                accessibilityViewIsModal
+                style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
+              >
+                <View style={styles.deletedTodoDetailHeader}>
+                  <View style={styles.deletedTodoDetailHeaderText}>
+                    <Text style={styles.deletedTodoDetailEyebrow}>Deleted item</Text>
+                    <Text style={styles.deletedTodoDetailTitle}>
+                      {activeDeletedTodoDetail.text}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close deleted item details"
+                    hitSlop={8}
+                    onPress={closeDeletedTodoDetailModal}
+                    style={({ pressed }) => [
+                      styles.todoDetailCloseButton,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons color="#2A2520" name="close" size={21} />
+                  </Pressable>
+                </View>
+                <ScrollView
+                  contentContainerStyle={styles.deletedTodoDetailContentContainer}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <Text style={styles.deletedTodoDetailContentText}>
+                    {activeDeletedTodoDetail.content.trim() || 'No content'}
+                  </Text>
+                  <Text style={styles.deletedTodoDetailMeta}>
+                    Deleted {formatDeletedTodoTime(activeDeletedTodoDetail.deletedAt)}
+                  </Text>
+                </ScrollView>
+                <View style={styles.deletedTodoDetailActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Restore ${activeDeletedTodoDetail.text}`}
+                    onPress={() => restoreDeletedTodo(activeDeletedTodoDetail.id)}
+                    style={({ pressed }) => [
+                      styles.deletedTodoDetailRestoreButton,
+                      pressed && styles.settingsSecondaryButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.deletedTodoDetailRestoreButtonText}>Restore</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${activeDeletedTodoDetail.text}`}
+                    onPress={() => deleteDeletedTodoPermanently(activeDeletedTodoDetail.id)}
+                    style={({ pressed }) => [
+                      styles.deletedTodoDetailDeleteButton,
+                      pressed && styles.settingsSecondaryButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.deletedTodoDetailDeleteButtonText}>
+                      Delete
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="fade"
           onRequestClose={closeCreateDrawer}
           statusBarTranslucent={Platform.OS === 'android'}
           transparent
@@ -4934,7 +5274,7 @@ export default function App() {
                       <View style={styles.settingsRowTextWrap}>
                         <Text style={styles.settingsRowTitle}>Backup all data</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          {Math.max(0, todos.length - pendingDeleteIds.size)} items · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
+                          {activeTodoCount} items · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
                         </Text>
                       </View>
                       <View
@@ -5130,7 +5470,17 @@ export default function App() {
                           const contentPreview = todo.content.trim().replace(/\s+/g, ' ');
 
                           return (
-                            <View key={todo.id} style={styles.settingsDeletedTodoRow}>
+                            <Pressable
+                              key={todo.id}
+                              accessibilityHint="Shows title and content before restore or permanent delete"
+                              accessibilityLabel={`Open deleted item ${todo.text}`}
+                              accessibilityRole="button"
+                              onPress={() => openDeletedTodoDetailModal(todo.id)}
+                              style={({ pressed }) => [
+                                styles.settingsDeletedTodoRow,
+                                pressed && styles.settingsDeletedTodoRowPressed,
+                              ]}
+                            >
                               <View style={styles.settingsDeletedTodoTextWrap}>
                                 <Text
                                   numberOfLines={1}
@@ -5153,20 +5503,10 @@ export default function App() {
                                   Deleted {formatDeletedTodoTime(todo.deletedAt)}
                                 </Text>
                               </View>
-                              <Pressable
-                                accessibilityRole="button"
-                                accessibilityLabel={`Restore ${todo.text}`}
-                                onPress={() => restoreDeletedTodo(todo.id)}
-                                style={({ pressed }) => [
-                                  styles.settingsRestoreDeletedButton,
-                                  pressed && styles.settingsSecondaryButtonPressed,
-                                ]}
-                              >
-                                <Text style={styles.settingsRestoreDeletedButtonText}>
-                                  Restore
-                                </Text>
-                              </Pressable>
-                            </View>
+                              <View style={styles.settingsDeletedTodoOpenButton}>
+                                <Ionicons color="#8F877F" name="chevron-forward" size={18} />
+                              </View>
+                            </Pressable>
                           );
                         })}
                       </View>
@@ -5731,6 +6071,102 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
+  deletedTodoDetailHeader: {
+    alignItems: 'flex-start',
+    borderBottomColor: '#F0E9E1',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 12,
+    paddingBottom: 14,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+  },
+  deletedTodoDetailHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  deletedTodoDetailEyebrow: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0,
+    lineHeight: 16,
+    marginBottom: 4,
+  },
+  deletedTodoDetailTitle: {
+    color: THEME_TEXT,
+    fontSize: 21,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0,
+    lineHeight: 27,
+  },
+  deletedTodoDetailContentContainer: {
+    paddingBottom: 18,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
+  deletedTodoDetailContentText: {
+    color: '#3A332E',
+    fontSize: 17,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 25,
+    minHeight: 96,
+  },
+  deletedTodoDetailMeta: {
+    borderTopColor: '#F0E9E1',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 18,
+    marginTop: 18,
+    paddingTop: 12,
+  },
+  deletedTodoDetailActions: {
+    borderTopColor: '#F0E9E1',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 10,
+    padding: 14,
+  },
+  deletedTodoDetailRestoreButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 14,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 48,
+    minWidth: 0,
+    paddingHorizontal: 12,
+  },
+  deletedTodoDetailRestoreButtonText: {
+    color: THEME_ACCENT,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  deletedTodoDetailDeleteButton: {
+    alignItems: 'center',
+    backgroundColor: '#F8EDEA',
+    borderRadius: 14,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 48,
+    minWidth: 0,
+    paddingHorizontal: 12,
+  },
+  deletedTodoDetailDeleteButtonText: {
+    color: '#8F4D46',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
   presetSaveModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(30, 27, 24, 0.42)',
@@ -5949,9 +6385,19 @@ const styles = StyleSheet.create({
     minHeight: 66,
     paddingVertical: 10,
   },
+  settingsDeletedTodoRowPressed: {
+    backgroundColor: '#FAF6F0',
+  },
   settingsDeletedTodoTextWrap: {
     flex: 1,
     minWidth: 0,
+  },
+  settingsDeletedTodoOpenButton: {
+    alignItems: 'center',
+    flexShrink: 0,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
   },
   settingsDeletedTodoTitle: {
     color: THEME_TEXT,
@@ -5973,22 +6419,6 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     lineHeight: 16,
     marginTop: 3,
-  },
-  settingsRestoreDeletedButton: {
-    alignItems: 'center',
-    backgroundColor: THEME_ACCENT_SOFT,
-    borderRadius: 12,
-    justifyContent: 'center',
-    minHeight: 38,
-    minWidth: 74,
-    paddingHorizontal: 12,
-  },
-  settingsRestoreDeletedButtonText: {
-    color: THEME_ACCENT,
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-    letterSpacing: 0.1,
   },
   settingsSegmentedControl: {
     minHeight: 44,
@@ -6408,6 +6838,7 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingTop: Platform.OS === 'android' ? TOP_SAFE_GAP : 8,
+    position: 'relative',
   },
   appHeaderTitle: {
     color: THEME_TEXT,
@@ -6415,7 +6846,25 @@ const styles = StyleSheet.create({
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 26,
     letterSpacing: -0.2,
+    paddingHorizontal: 48,
     textAlign: 'center',
+    width: '100%',
+  },
+  appHeaderSettingsButton: {
+    alignItems: 'center',
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: HORIZONTAL_PADDING,
+    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+    width: 36,
+  },
+  appHeaderSettingsButtonActive: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  appHeaderSettingsButtonPressed: {
+    opacity: 0.72,
   },
   headerSearchRow: {
     backgroundColor: THEME_BG,
@@ -6434,8 +6883,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     height: BOTTOM_NAV_HEIGHT,
     justifyContent: 'space-around',
-    paddingBottom: Platform.OS === 'ios' ? 4 : 2,
-    paddingTop: 8,
+    paddingBottom: 0,
+    paddingTop: 18,
     shadowColor: '#000000',
     shadowOpacity: 0.04,
     shadowRadius: 8,

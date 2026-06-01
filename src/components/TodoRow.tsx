@@ -62,6 +62,7 @@ export type TodoRowProps = {
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
   item: Todo;
   isMenuTarget: boolean;
+  isMenuTargetHighlighted?: boolean;
   isPendingDelete?: boolean;
   layout?: 'standalone' | 'grouped';
   metaTagVisibility: MetaTagVisibility;
@@ -78,6 +79,7 @@ function TodoRowComponent({
   hiddenMetaTagKinds = [],
   item,
   isMenuTarget,
+  isMenuTargetHighlighted = false,
   isPendingDelete = false,
   layout = 'standalone',
   metaTagVisibility,
@@ -88,7 +90,6 @@ function TodoRowComponent({
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
-  const [isMenuSwipeActive, setIsMenuSwipeActive] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
   const fallbackRowHeight = isGroupedLayout ? 52 : 56;
@@ -112,7 +113,7 @@ function TodoRowComponent({
   );
   const content = item.content.trim();
   const contentPreview = content.replace(/\s+/g, ' ');
-  const isHighlightedForMenu = isMenuTarget || isMenuSwipeActive;
+  const isHighlightedForMenu = isMenuTargetHighlighted;
   const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget;
 
   useEffect(() => {
@@ -122,7 +123,6 @@ function TodoRowComponent({
 
     swipeableRef.current?.close();
     setIsSwipeOpen(false);
-    setIsMenuSwipeActive(false);
   }, [isMenuTarget]);
 
   const handleRowLayout = useCallback((event: LayoutChangeEvent) => {
@@ -140,7 +140,6 @@ function TodoRowComponent({
   const closeSwipeable = useCallback(() => {
     swipeableRef.current?.close();
     setIsSwipeOpen(false);
-    setIsMenuSwipeActive(false);
   }, []);
 
   const closeOtherOpenSwipeable = useCallback(() => {
@@ -270,30 +269,21 @@ function TodoRowComponent({
       closeOtherOpenSwipeable();
 
       if (direction === 'right') {
-        setIsMenuSwipeActive(true);
         openTodoMenu();
         return;
       }
 
-      setIsMenuSwipeActive(false);
       Haptics.selectionAsync().catch(() => undefined);
     },
     [closeOtherOpenSwipeable, closeSwipeable, isPendingDelete, openTodoMenu],
   );
 
-  const handleSwipeableWillClose = useCallback((direction: 'left' | 'right') => {
-    if (direction === 'right') {
-      setIsMenuSwipeActive(false);
-    }
-  }, []);
-
-  const handleSwipeableOpenStartDrag = useCallback((direction: 'left' | 'right') => {
+  const handleSwipeableOpenStartDrag = useCallback((_direction: 'left' | 'right') => {
     if (isPendingDelete) {
       return;
     }
 
     closeOtherOpenSwipeable();
-    setIsMenuSwipeActive(direction === 'right');
   }, [closeOtherOpenSwipeable, isPendingDelete]);
 
   const handleSwipeableOpen = useCallback(
@@ -314,7 +304,6 @@ function TodoRowComponent({
       }
 
       setIsSwipeOpen(false);
-      setIsMenuSwipeActive(false);
     },
     [],
   );
@@ -665,7 +654,6 @@ function TodoRowComponent({
           onSwipeableClose={handleSwipeableClose}
           onSwipeableOpen={handleSwipeableOpen}
           onSwipeableOpenStartDrag={handleSwipeableOpenStartDrag}
-          onSwipeableWillClose={handleSwipeableWillClose}
           onSwipeableWillOpen={handleSwipeableWillOpen}
           overshootLeft={false}
           overshootRight={false}

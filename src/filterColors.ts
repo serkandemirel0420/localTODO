@@ -1,4 +1,9 @@
-import { formatDateFilterValue } from './dates';
+import {
+  formatCompactDateFilterLabel,
+  formatDateFilterValue,
+  isCustomDateLabel,
+  SOMEDAY_DATE_LABEL,
+} from './dates';
 import { formatListLabel, type TodoFilters } from './todos';
 
 export type FilterColorKey = keyof TodoFilters;
@@ -313,6 +318,26 @@ const findSwatchByColor = (color: string) =>
     (swatch) => swatch.accent.toUpperCase() === color.toUpperCase(),
   );
 
+const getDateColorLookupValues = (value: string) => {
+  const formattedValue = formatDateFilterValue(value);
+  const values = [formattedValue];
+
+  if (isCustomDateLabel(formattedValue)) {
+    const compactLabel = formatCompactDateFilterLabel(formattedValue);
+
+    if (compactLabel !== formattedValue) {
+      values.push(formatDateFilterValue(compactLabel));
+    }
+
+    values.push(SOMEDAY_DATE_LABEL);
+  }
+
+  return values.filter((item, index) => item && values.indexOf(item) === index);
+};
+
+const getColorLookupValues = (filterKey: FilterColorKey, value: string) =>
+  filterKey === 'date' ? getDateColorLookupValues(value) : [value];
+
 const getFallbackSwatch = (value: string) => {
   const hash = value.split('').reduce(
     (total, character) => total + character.charCodeAt(0),
@@ -327,19 +352,25 @@ export const getFilterColor = (
   filterKey: FilterColorKey,
   value: string,
 ) => {
-  const savedColor = normalizeColorValue(colors[filterKey]?.[value]);
+  const lookupValues = getColorLookupValues(filterKey, value);
 
-  if (savedColor !== undefined) {
-    return savedColor;
+  for (const lookupValue of lookupValues) {
+    const savedColor = normalizeColorValue(colors[filterKey]?.[lookupValue]);
+
+    if (savedColor !== undefined) {
+      return savedColor;
+    }
   }
 
-  const defaultColor = normalizeColorValue(DEFAULT_FILTER_COLORS[filterKey]?.[value]);
+  for (const lookupValue of lookupValues) {
+    const defaultColor = normalizeColorValue(DEFAULT_FILTER_COLORS[filterKey]?.[lookupValue]);
 
-  if (defaultColor !== undefined) {
-    return defaultColor;
+    if (defaultColor !== undefined) {
+      return defaultColor;
+    }
   }
 
-  if (filterKey === 'list') {
+  if (filterKey === 'date' || filterKey === 'list') {
     return null;
   }
 

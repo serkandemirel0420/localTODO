@@ -81,6 +81,7 @@ export type AppSettings = {
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
+  hideDoneTodos: boolean;
   listMenuTree: StoredListMenuNode[];
   listOrderMode: ListOrderMode;
   menuPresets: StoredMenuPreset[];
@@ -118,6 +119,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   googleDriveBackupEnabled: false,
   googleDriveLastBackupAt: null,
   googleDriveLastRestoreAt: null,
+  hideDoneTodos: false,
   listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   listOrderMode: 'alphabetical',
   menuPresets: [],
@@ -490,6 +492,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       ...DEFAULT_APP_SETTINGS,
       deletedTodos: [],
       filterColors: cloneFilterColors(),
+      hideDoneTodos: false,
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
       menuPresets: [],
       selectedFilters: cloneTodoFilters(),
@@ -507,6 +510,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       typeof value.googleDriveLastBackupAt === 'string' ? value.googleDriveLastBackupAt : null,
     googleDriveLastRestoreAt:
       typeof value.googleDriveLastRestoreAt === 'string' ? value.googleDriveLastRestoreAt : null,
+    hideDoneTodos: value.hideDoneTodos === true,
     listMenuTree: normalizeListMenuTree(value.listMenuTree),
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
     menuPresets: normalizeMenuPresets(value.menuPresets),

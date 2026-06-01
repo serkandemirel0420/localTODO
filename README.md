@@ -73,27 +73,38 @@ The default Metro port is `8083`. Override it with `make start PORT=8090`.
 Google Drive backup is one action in the app: tap **Back up to Google Drive**,
 Google login opens if permission is needed, then the backup continues. Android
 uses native Google Sign-In authorization; iOS uses the OAuth browser flow. The
-backup uploads `local-todo-backup.json` to the Drive `appDataFolder`, which is
-private app storage in the user's Drive.
+production build uploads `local-todo-backup.json` to Drive `appDataFolder`.
+Development builds use `local-todo-dev-backup.json` so dev and prod restores do
+not overwrite each other.
 
 There is no API key or client secret in the app. Google still requires OAuth
-client IDs so the user can grant Drive permission to this build. Create OAuth
-clients in Google Cloud for:
+client IDs so the user can grant Drive permission to each build identity. Create
+separate OAuth clients in Google Cloud for:
 
-- iOS bundle ID: `com.localtodo.app`
-- Android package: `com.localtodo.app`
+- iOS dev bundle ID: `com.localtodo.app.dev`
+- iOS prod bundle ID: `com.localtodo.app`
+- Android dev package: `com.localtodo.app.dev`
+- Android prod package: `com.localtodo.app`
 - Web, if you run the web target
 
 Then copy `.env.example` to `.env` and fill:
 
 ```sh
-EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=...
-EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=...
+EXPO_PUBLIC_GOOGLE_IOS_DEV_CLIENT_ID=...
+EXPO_PUBLIC_GOOGLE_IOS_PROD_CLIENT_ID=...
+EXPO_PUBLIC_GOOGLE_ANDROID_DEV_CLIENT_ID=...
+EXPO_PUBLIC_GOOGLE_ANDROID_PROD_CLIENT_ID=...
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...
 ```
 
-For the local APK installed with `make android-release-install`, use this Android
-OAuth client setup in Google Cloud:
+For the local dev APK installed with `make android-dev`, use this Android OAuth
+client setup in Google Cloud:
+
+- Application type: Android
+- Package name: `com.localtodo.app.dev`
+- SHA-1: `5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25`
+
+For the local production APK installed with `make android-release-install`, use:
 
 - Application type: Android
 - Package name: `com.localtodo.app`
@@ -115,7 +126,7 @@ The Google Cloud checklist is:
    `https://www.googleapis.com/auth/drive.appdata`.
 3. Open Google Auth Platform > Clients and create the Android OAuth client for
    the APK you are installing, using the package name and matching SHA-1 above.
-4. Put the created Android client ID in `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`
+4. Put the created Android client ID in the matching dev or prod env variable
    and rebuild/reinstall the APK.
 
 OAuth redirects require a development or production build with the app scheme
@@ -124,9 +135,9 @@ does not use this app's custom scheme.
 
 Android Google Sign-In also requires a development or production build because
 the native Google module is not included in Expo Go. The Android OAuth client
-must use package `com.localtodo.app` and the SHA-1 fingerprint of the certificate
-that signs the APK you install. For EAS cloud APKs, use the SHA-1 from the EAS
-Android credentials for this project.
+must use the package name and SHA-1 fingerprint of the certificate that signs
+the APK you install. For EAS cloud APKs, use the SHA-1 from the EAS Android
+credentials for this project.
 
 ## Use
 

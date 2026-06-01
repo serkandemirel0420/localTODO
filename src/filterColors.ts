@@ -3,27 +3,42 @@ import { formatListLabel, type TodoFilters } from './todos';
 
 export type FilterColorKey = keyof TodoFilters;
 
+export type FilterColorValue = string | null;
+
 export type FilterColorSettings = {
-  date: Record<string, string>;
-  list: Record<string, string>;
-  priority: Record<string, string>;
+  date: Record<string, FilterColorValue>;
+  list: Record<string, FilterColorValue>;
+  priority: Record<string, FilterColorValue>;
 };
 
 export type FilterColorSwatch = {
-  accent: string;
+  accent: string | null;
   border: string;
   id: string;
+  isNoColor?: boolean;
   label: string;
   text: string;
   tint: string;
 };
 
-export type FilterColorTheme = FilterColorSwatch & {
+export type FilterColorTheme = Omit<FilterColorSwatch, 'accent'> & {
+  accent: string;
   filterKey: FilterColorKey;
   value: string;
 };
 
+export const NO_FILTER_COLOR_SWATCH_ID = 'no-color';
+
 export const FILTER_COLOR_SWATCHES: FilterColorSwatch[] = [
+  {
+    accent: null,
+    border: '#DAD3CB',
+    id: NO_FILTER_COLOR_SWATCH_ID,
+    isNoColor: true,
+    label: 'No color',
+    text: '#6A625A',
+    tint: '#FFFFFF',
+  },
   {
     accent: '#CF413A',
     border: '#F0C8C3',
@@ -137,7 +152,7 @@ const DEFAULT_DATE_COLORS: Record<string, string> = {
   Tomorrow: '#2F8AA0',
 };
 
-const DEFAULT_LIST_COLORS: Record<string, string> = {
+const LEGACY_DEFAULT_LIST_COLORS: Record<string, string> = {
   Active: '#2F6F62',
   Afternoon: '#D77B30',
   Archive: '#8C847C',
@@ -176,6 +191,8 @@ const DEFAULT_LIST_COLORS: Record<string, string> = {
   Work: '#3E78B2',
 };
 
+const DEFAULT_LIST_COLORS: Record<string, string> = {};
+
 export const DEFAULT_FILTER_COLORS: FilterColorSettings = {
   date: DEFAULT_DATE_COLORS,
   list: DEFAULT_LIST_COLORS,
@@ -184,6 +201,10 @@ export const DEFAULT_FILTER_COLORS: FilterColorSettings = {
 
 const FILTER_COLOR_PRECEDENCE: FilterColorKey[] = ['priority', 'list', 'date'];
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+const NO_COLOR_VALUES = new Set(['none', 'no-color']);
+const COLOR_SWATCHES = FILTER_COLOR_SWATCHES.filter(
+  (swatch): swatch is FilterColorSwatch & { accent: string } => swatch.accent !== null,
+);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -193,11 +214,35 @@ const normalizeHexColor = (value: unknown) =>
     ? value.toUpperCase()
     : null;
 
+const normalizeColorValue = (value: unknown): FilterColorValue | undefined => {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value === 'string' && NO_COLOR_VALUES.has(value.trim().toLocaleLowerCase())) {
+    return null;
+  }
+
+  return normalizeHexColor(value) ?? undefined;
+};
+
+const isLegacyDefaultListColorMap = (value: Record<string, unknown>) => {
+  const legacyEntries = Object.entries(LEGACY_DEFAULT_LIST_COLORS);
+  const legacyMatchCount = legacyEntries.reduce((count, [label, color]) => {
+    const storedColor = normalizeColorValue(value[label]);
+    const legacyColor = normalizeHexColor(color);
+
+    return storedColor === legacyColor ? count + 1 : count;
+  }, 0);
+
+  return legacyMatchCount >= Math.ceil(legacyEntries.length * 0.75);
+};
+
 const normalizeColorMap = (
   value: unknown,
-  fallback: Record<string, string>,
+  fallback: Record<string, FilterColorValue>,
   formatLabel: (label: string) => string = (label) => label,
-): Record<string, string> => {
+): Record<string, FilterColorValue> => {
   const colors = { ...fallback };
 
   if (!isRecord(value)) {
@@ -205,10 +250,10 @@ const normalizeColorMap = (
   }
 
   Object.entries(value).forEach(([label, color]) => {
-    const normalizedColor = normalizeHexColor(color);
+    const normalizedColor = normalizeColorValue(color);
     const formattedLabel = formatLabel(label);
 
-    if (normalizedColor && formattedLabel) {
+    if (normalizedColor !== undefined && formattedLabel) {
       colors[formattedLabel] = normalizedColor;
     }
   });
@@ -218,21 +263,32 @@ const normalizeColorMap = (
 
 const normalizeListColorMap = (
   value: unknown,
-  fallback: Record<string, string>,
-): Record<string, string> => {
+  fallback: Record<string, FilterColorValue>,
+): Record<string, FilterColorValue> => {
   const colors = { ...fallback };
 
   if (!isRecord(value)) {
     return colors;
   }
 
+  const shouldDropLegacyDefaults = isLegacyDefaultListColorMap(value);
+
   Object.entries(value).forEach(([label, color]) => {
-    const normalizedColor = normalizeHexColor(color);
+    const normalizedColor = normalizeColorValue(color);
     const formattedLabel = formatListLabel(label);
 
-    if (normalizedColor && formattedLabel) {
-      colors[formattedLabel] = normalizedColor;
+    if (normalizedColor === undefined || !formattedLabel) {
+      return;
     }
+
+    if (shouldDropLegacyDefaults && normalizedColor !== null) {
+      const legacyColor = normalizeHexColor(LEGACY_DEFAULT_LIST_COLORS[formattedLabel]);
+      if (legacyColor === normalizedColor) {
+        return;
+      }
+    }
+
+    colors[formattedLabel] = normalizedColor;
   });
 
   return colors;
@@ -253,7 +309,7 @@ export const cloneFilterColors = (
 ): FilterColorSettings => normalizeFilterColors(colors);
 
 const findSwatchByColor = (color: string) =>
-  FILTER_COLOR_SWATCHES.find(
+  COLOR_SWATCHES.find(
     (swatch) => swatch.accent.toUpperCase() === color.toUpperCase(),
   );
 
@@ -263,7 +319,7 @@ const getFallbackSwatch = (value: string) => {
     0,
   );
 
-  return FILTER_COLOR_SWATCHES[hash % FILTER_COLOR_SWATCHES.length];
+  return COLOR_SWATCHES[hash % COLOR_SWATCHES.length];
 };
 
 export const getFilterColor = (
@@ -271,16 +327,20 @@ export const getFilterColor = (
   filterKey: FilterColorKey,
   value: string,
 ) => {
-  const savedColor = normalizeHexColor(colors[filterKey]?.[value]);
+  const savedColor = normalizeColorValue(colors[filterKey]?.[value]);
 
-  if (savedColor) {
+  if (savedColor !== undefined) {
     return savedColor;
   }
 
-  const defaultColor = normalizeHexColor(DEFAULT_FILTER_COLORS[filterKey]?.[value]);
+  const defaultColor = normalizeColorValue(DEFAULT_FILTER_COLORS[filterKey]?.[value]);
 
-  if (defaultColor) {
+  if (defaultColor !== undefined) {
     return defaultColor;
+  }
+
+  if (filterKey === 'list') {
+    return null;
   }
 
   return getFallbackSwatch(value).accent;
@@ -290,8 +350,12 @@ export const getFilterColorTheme = (
   colors: FilterColorSettings,
   filterKey: FilterColorKey,
   value: string,
-): FilterColorTheme => {
+): FilterColorTheme | null => {
   const accent = getFilterColor(colors, filterKey, value);
+  if (!accent) {
+    return null;
+  }
+
   const swatch = findSwatchByColor(accent) ?? getFallbackSwatch(value);
 
   return {
@@ -310,7 +374,10 @@ export const getTodoPrimaryColorTheme = (
     const value = filters[filterKey][0];
 
     if (value) {
-      return getFilterColorTheme(colors, filterKey, value);
+      const theme = getFilterColorTheme(colors, filterKey, value);
+      if (theme) {
+        return theme;
+      }
     }
   }
 
@@ -325,7 +392,7 @@ export const getTodoColorThemes = (
 
   return FILTER_COLOR_PRECEDENCE.flatMap((filterKey) =>
     filters[filterKey].map((value) => getFilterColorTheme(colors, filterKey, value)),
-  ).filter((theme) => {
+  ).filter((theme): theme is FilterColorTheme => Boolean(theme)).filter((theme) => {
     const colorKey = theme.accent.toUpperCase();
     if (seenColors.has(colorKey)) {
       return false;

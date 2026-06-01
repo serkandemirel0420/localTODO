@@ -16,7 +16,6 @@ import {
 
 import { TodoMetaTags } from './TodoMetaTags';
 import {
-  getTodoColorThemes,
   getTodoPrimaryColorTheme,
   type FilterColorSettings,
 } from '../filterColors';
@@ -96,7 +95,6 @@ function TodoRowComponent({
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
   const swipeActionInset = isGroupedLayout ? 2 : 0;
   const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
-  const todoColorDots = getTodoColorThemes(item.filters, filterColors).slice(0, 5);
   const rawDateStatusLabel = getBestOrderedFilterLabel(
     item.filters.date,
     DATE_MENU_ITEMS,
@@ -614,20 +612,6 @@ function TodoRowComponent({
               visibility={effectiveMetaTagVisibility}
             />
           )}
-          {!isPendingDelete && !isGroupedLayout && todoColorDots.length > 0 ? (
-            <View style={styles.colorDotRow}>
-              {todoColorDots.map((theme) => (
-                <View
-                  key={`${theme.filterKey}-${theme.value}`}
-                  style={[
-                    styles.colorDot,
-                    { backgroundColor: theme.accent },
-                    item.done && styles.colorDotDone,
-                  ]}
-                />
-              ))}
-            </View>
-          ) : null}
         </View>
       </GestureTouchableOpacity>
     </View>
@@ -931,18 +915,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     lineHeight: 16,
     marginTop: 6,
-  },
-  colorDotRow: {
-    flexDirection: 'row',
-    gap: 5,
-    marginTop: 8,
-  },
-  colorDot: {
-    borderRadius: 4,
-    height: 8,
-    width: 8,
-  },
-  colorDotDone: {
-    opacity: 0.45,
   },
 });

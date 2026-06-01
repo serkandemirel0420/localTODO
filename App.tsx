@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { TokenResponse } from 'expo-auth-session';
+import { makeRedirectUri, TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import DateTimePicker, {
@@ -67,6 +67,7 @@ import {
 } from './src/dates';
 import { localTodoStore } from './src/storage/todoStore';
 import {
+  cloneTodo,
   cloneTodoFilters,
   getTodoTextMaxLength,
   makeTodo,
@@ -75,6 +76,7 @@ import {
   formatListLabel,
   normalizeTodoText,
   truncateTodoText,
+  type DeletedTodo,
   type Todo,
   type TodoFilters,
 } from './src/todos';
@@ -89,12 +91,12 @@ import {
   googleAuthStore,
   type StoredGoogleAuth,
 } from './src/google/googleAuthStore';
+import { isDevAppVariant } from './src/appVariant';
 import {
   cloneFilterColors,
   FILTER_COLOR_SWATCHES,
   getFilterColorTheme,
   type FilterColorKey,
-  type FilterColorTheme,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
@@ -390,13 +392,21 @@ const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const MENU_DISMISS_RELEASE = 52;
 const MENU_DISMISS_VELOCITY = 680;
-const TODO_DELETE_HIDE_DELAY_MS = 3000;
-const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+const GOOGLE_IOS_LEGACY_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
+const GOOGLE_IOS_CLIENT_ID = isDevAppVariant
+  ? process.env.EXPO_PUBLIC_GOOGLE_IOS_DEV_CLIENT_ID ?? ''
+  : process.env.EXPO_PUBLIC_GOOGLE_IOS_PROD_CLIENT_ID ?? GOOGLE_IOS_LEGACY_CLIENT_ID;
+const GOOGLE_ANDROID_LEGACY_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+const GOOGLE_ANDROID_CLIENT_ID = isDevAppVariant
+  ? process.env.EXPO_PUBLIC_GOOGLE_ANDROID_DEV_CLIENT_ID ?? ''
+  : process.env.EXPO_PUBLIC_GOOGLE_ANDROID_PROD_CLIENT_ID ?? GOOGLE_ANDROID_LEGACY_CLIENT_ID;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+const GOOGLE_ANDROID_PACKAGE_NAME = isDevAppVariant ? 'com.localtodo.app.dev' : 'com.localtodo.app';
+const GOOGLE_REDIRECT_SCHEME = isDevAppVariant ? 'com.localtodo.app.dev' : 'com.localtodo.app';
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
 const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
+const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_EXPANSION_SETTLE_MS = 120;
@@ -530,6 +540,14 @@ const isGoogleOAuthConfigured = () => Boolean(getGoogleClientIdForPlatform());
 const formatBackupTime = (value: string | null) =>
   value ? new Date(value).toLocaleString() : null;
 
+const formatDeletedTodoTime = (value: number) =>
+  new Date(value).toLocaleString(undefined, {
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    month: 'short',
+  });
+
 const triggerLightTickHaptic = () => {
   const feedback = Platform.OS === 'android'
     ? Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Clock_Tick)
@@ -574,7 +592,7 @@ const normalizeNativeGoogleSignInError = (error: unknown, stage = 'Google sign-i
   }
 
   if (message.includes('DEVELOPER_ERROR')) {
-    return new Error(`${stagePrefix}Google Android OAuth setup does not match this build. Check package name com.localtodo.app and the SHA-1 certificate fingerprint.`);
+    return new Error(`${stagePrefix}Google Android OAuth setup does not match this build. Check package name ${GOOGLE_ANDROID_PACKAGE_NAME} and the SHA-1 certificate fingerprint.`);
   }
 
   return error instanceof Error ? new Error(`${stagePrefix}${error.message}`) : new Error(`${stagePrefix}${message}`);
@@ -750,11 +768,15 @@ export default function App() {
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
   const [presetSaveName, setPresetSaveName] = useState('');
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
-  const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(true);
-  const [settingsListsExpanded, setSettingsListsExpanded] = useState(true);
+  const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
+  const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
+  const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
+  const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
+  const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
   );
+  const [hideDoneTodos, setHideDoneTodos] = useState(false);
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
   const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
@@ -794,9 +816,6 @@ export default function App() {
   const todoDetailDraftTodoIdRef = useRef<string | null>(null);
   const listMenuRef = useRef<GestureFlatList<BottomMenuItem> | null>(null);
   const todoListRef = useRef<FlashListRef<VisibleTodoListRow> | null>(null);
-  const pendingDeleteTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
   const searchRequestIdRef = useRef(0);
   const scrollOffsetY = useRef(0);
   const listMenuScrollOffsetY = useRef(0);
@@ -832,6 +851,7 @@ export default function App() {
       prompt: 'consent select_account',
     },
     iosClientId: GOOGLE_IOS_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
+    redirectUri: makeRedirectUri({ scheme: GOOGLE_REDIRECT_SCHEME }),
     scopes: GOOGLE_AUTH_SCOPES,
     webClientId: GOOGLE_WEB_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
   });
@@ -892,14 +912,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(
-    () => () => {
-      pendingDeleteTimersRef.current.forEach((timer) => clearTimeout(timer));
-      pendingDeleteTimersRef.current.clear();
-    },
-    [],
-  );
-
   useEffect(() => {
     let alive = true;
 
@@ -913,10 +925,12 @@ export default function App() {
         }
 
         setSelectedFilters(settings.selectedFilters);
+        setDeletedTodos(settings.deletedTodos);
         setFilterColors(settings.filterColors);
         setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
         setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
         setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
+        setHideDoneTodos(settings.hideDoneTodos);
         setListMenuTree(settings.listMenuTree);
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
@@ -948,10 +962,12 @@ export default function App() {
 
     const settings: AppSettings = {
       collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+      deletedTodos,
       filterColors,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
+      hideDoneTodos,
       listMenuTree,
       listOrderMode,
       menuPresets,
@@ -959,7 +975,6 @@ export default function App() {
       selectedFilters,
       todoGroupMode,
       todoSortMode,
-      deletedTodos: [],
     };
 
     const saveTimer = setTimeout(() => {
@@ -969,10 +984,12 @@ export default function App() {
     return () => clearTimeout(saveTimer);
   }, [
     collapsedTodoGroupIds,
+    deletedTodos,
     filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    hideDoneTodos,
     listMenuTree,
     listOrderMode,
     menuPresets,
@@ -1407,8 +1424,17 @@ export default function App() {
       : todos;
 
     return matchedTodos
+      .filter((todo) => !hideDoneTodos || !todo.done)
       .filter((todo) => todoMatchesFilters(todo, selectedFilters, listMenuTree));
-  }, [listMenuTree, searchQuery, searchResultIds, selectedFilters, todos, todosById]);
+  }, [
+    hideDoneTodos,
+    listMenuTree,
+    searchQuery,
+    searchResultIds,
+    selectedFilters,
+    todos,
+    todosById,
+  ]);
 
   const closeCreateDrawer = useCallback(() => {
     Keyboard.dismiss();
@@ -1604,45 +1630,53 @@ export default function App() {
   }, []);
 
   const deleteTodo = useCallback((id: string) => {
-    if (!todos.some((todo) => todo.id === id) || pendingDeleteIds.has(id)) {
+    const todoToDelete = todos.find((todo) => todo.id === id);
+
+    if (!todoToDelete || pendingDeleteIds.has(id)) {
       return;
     }
 
+    const deletedTodo: DeletedTodo = {
+      ...cloneTodo(todoToDelete),
+      deletedAt: Date.now(),
+    };
+
     localTodoStore.delete(id).catch(() => undefined);
-
-    setPendingDeleteIds((current) => {
-      if (current.has(id)) {
-        return current;
-      }
-
-      const next = new Set(current);
-      next.add(id);
-      return next;
-    });
+    setTodos((current) => current.filter((todo) => todo.id !== id));
+    setDeletedTodos((current) => [
+      deletedTodo,
+      ...current.filter((todo) => todo.id !== id),
+    ]);
     setActiveTodoMenuId((current) => (current === id ? null : current));
     setActiveTodoDetailId((current) => (current === id ? null : current));
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+  }, [pendingDeleteIds, todos]);
 
-    const existingTimer = pendingDeleteTimersRef.current.get(id);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
+  const restoreDeletedTodo = useCallback((id: string) => {
+    const deletedTodo = deletedTodos.find((todo) => todo.id === id);
+
+    if (!deletedTodo || todos.some((todo) => todo.id === id)) {
+      return;
     }
 
-    const timer = setTimeout(() => {
-      pendingDeleteTimersRef.current.delete(id);
-      setTodos((current) => current.filter((todo) => todo.id !== id));
-      setPendingDeleteIds((current) => {
-        if (!current.has(id)) {
-          return current;
-        }
+    const restoredTodo: Todo = {
+      id: deletedTodo.id,
+      content: deletedTodo.content,
+      text: deletedTodo.text,
+      done: deletedTodo.done,
+      createdAt: deletedTodo.createdAt,
+      filters: cloneTodoFilters(deletedTodo.filters),
+    };
 
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
-    }, TODO_DELETE_HIDE_DELAY_MS);
-
-    pendingDeleteTimersRef.current.set(id, timer);
-  }, [pendingDeleteIds, todos]);
+    setTodos((current) => (
+      current.some((todo) => todo.id === restoredTodo.id)
+        ? current
+        : [restoredTodo, ...current]
+    ));
+    setDeletedTodos((current) => current.filter((todo) => todo.id !== id));
+    localTodoStore.upsert(restoredTodo).catch(() => undefined);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+  }, [deletedTodos, todos]);
 
   const setTodoDone = useCallback((id: string, done: boolean) => {
     if (pendingDeleteIds.has(id)) {
@@ -1654,8 +1688,12 @@ export default function App() {
         todo.id === id && todo.done !== done ? { ...todo, done } : todo
       )),
     );
+    if (done && hideDoneTodos) {
+      setActiveTodoMenuId((current) => (current === id ? null : current));
+      setActiveTodoDetailId((current) => (current === id ? null : current));
+    }
     localTodoStore.updateDone(id, done).catch(() => undefined);
-  }, [pendingDeleteIds]);
+  }, [hideDoneTodos, pendingDeleteIds]);
 
   const updateTodoFilters = useCallback((
     id: string,
@@ -2484,7 +2522,7 @@ export default function App() {
   const setFilterColor = useCallback((
     filterKey: FilterKey,
     value: string,
-    color: string,
+    color: string | null,
   ) => {
     setFilterColors((current) => ({
       ...current,
@@ -2554,6 +2592,11 @@ export default function App() {
       ...current,
       [key]: !current[key],
     }));
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const toggleHideDoneTodos = useCallback(() => {
+    setHideDoneTodos((current) => !current);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, []);
 
@@ -2912,6 +2955,11 @@ export default function App() {
     Keyboard.dismiss();
     setMenuMode(null);
     setActiveTodoMenuId(null);
+    setSettingsBackupExpanded(false);
+    setSettingsColorsExpanded(false);
+    setSettingsDeletedExpanded(false);
+    setSettingsDoneExpanded(false);
+    setSettingsListsExpanded(false);
     setSettingsModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
@@ -3169,11 +3217,12 @@ export default function App() {
     const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
     const payload = createBackupPayload(backupTodos, {
       collapsedTodoGroupIds: [...collapsedTodoGroupIds],
-      deletedTodos: [],
+      deletedTodos,
       filterColors,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
+      hideDoneTodos,
       listMenuTree,
       listOrderMode,
       menuPresets,
@@ -3190,10 +3239,12 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   }, [
     collapsedTodoGroupIds,
+    deletedTodos,
     filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    hideDoneTodos,
     listMenuTree,
     listOrderMode,
     menuPresets,
@@ -3217,16 +3268,16 @@ export default function App() {
 
     const restoredAt = new Date().toISOString();
     setPendingDeleteIds(new Set());
-    pendingDeleteTimersRef.current.forEach((timer) => clearTimeout(timer));
-    pendingDeleteTimersRef.current.clear();
     await localTodoStore.replaceAll(backup.payload.todos);
     await localTodoStore.markInitialSeeded();
     setTodos(backup.payload.todos);
+    setDeletedTodos(backup.payload.settings.deletedTodos);
     setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
     setFilterColors(backup.payload.settings.filterColors);
     setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
     setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
+    setHideDoneTodos(backup.payload.settings.hideDoneTodos);
     setListMenuTree(
       backup.payload.settings.listMenuTree.length > 0
         ? backup.payload.settings.listMenuTree
@@ -3703,7 +3754,9 @@ export default function App() {
                           <View
                             style={[
                               styles.listMenuColorDot,
-                              { backgroundColor: colorTheme.accent },
+                              colorTheme
+                                ? { backgroundColor: colorTheme.accent }
+                                : styles.listMenuColorDotNoColor,
                             ]}
                           />
                           <View style={styles.searchFilterRowText}>
@@ -3745,12 +3798,18 @@ export default function App() {
                         {query.trim() ? '⌕' : '✎'}
                       </Text>
                       <Text style={styles.emptyTitle}>
-                        {query.trim() ? 'No matching items' : 'No items yet'}
+                        {query.trim()
+                          ? 'No matching items'
+                          : hideDoneTodos
+                            ? 'No active items'
+                            : 'No items yet'}
                       </Text>
                       <Text style={styles.emptyText}>
                         {query.trim()
                           ? 'Try a different search term.'
-                          : 'Tap + in the bar below to add a todo.'}
+                          : hideDoneTodos
+                            ? 'Done items are hidden.'
+                            : 'Tap + in the bar below to add a todo.'}
                       </Text>
                     </View>
                   }
@@ -3781,7 +3840,7 @@ export default function App() {
 
         </View>
 
-        <View style={styles.bottomNav}>
+        <View style={[styles.bottomNav, settingsModalVisible && styles.bottomNavFlat]}>
           <Pressable
             accessibilityRole="button"
             accessibilityHint="Opens the new todo drawer"
@@ -4017,14 +4076,21 @@ export default function App() {
                                       <View
                                         style={[
                                           styles.listMenuColorDot,
-                                          { backgroundColor: colorTheme.accent },
+                                          colorTheme
+                                            ? { backgroundColor: colorTheme.accent }
+                                            : styles.listMenuColorDotNoColor,
                                         ]}
                                       />
                                       <Text style={styles.listMenuRowTitle}>{item.label}</Text>
                                     </View>
                                   </Pressable>
                                   <View style={styles.listMenuSubmenuZone}>
-                                    <Text style={[styles.filterTypeText, { color: colorTheme.text }]}>
+                                    <Text style={[
+                                      styles.filterTypeText,
+                                      colorTheme
+                                        ? { color: colorTheme.text }
+                                        : styles.filterTypeTextNoColor,
+                                    ]}>
                                       {item.filterKey}
                                     </Text>
                                     <Pressable
@@ -4263,7 +4329,7 @@ export default function App() {
                                   style={({ pressed }) => [
                                     styles.listMenuRow,
                                     (isSelected || pressed) && styles.listMenuRowSelected,
-                                    (isSelected || pressed) && {
+                                    colorTheme && (isSelected || pressed) && {
                                       backgroundColor: colorTheme.tint,
                                       borderBottomColor: colorTheme.border,
                                     },
@@ -4273,7 +4339,9 @@ export default function App() {
                                     <View
                                       style={[
                                         styles.listMenuColorDot,
-                                        { backgroundColor: colorTheme.accent },
+                                        colorTheme
+                                          ? { backgroundColor: colorTheme.accent }
+                                          : styles.listMenuColorDotNoColor,
                                       ]}
                                     />
                                     <Text style={styles.listMenuRowTitle}>{displayLabel}</Text>
@@ -4297,7 +4365,10 @@ export default function App() {
                                     pressed && styles.listMenuClearButtonPressed,
                                   ]}
                                 >
-                                  <Text style={[styles.listMenuClearButtonText, { color: colorTheme.text }]}>
+                                  <Text style={[
+                                    styles.listMenuClearButtonText,
+                                    colorTheme ? { color: colorTheme.text } : styles.listMenuClearButtonTextNoColor,
+                                  ]}>
                                     ×
                                   </Text>
                                 </Pressable>
@@ -4326,7 +4397,7 @@ export default function App() {
                                   styles.listMenuRow,
                                   item.depth > 0 && styles.listMenuRowIndented,
                                   (isSelected || pressed) && styles.listMenuRowSelected,
-                                  (isSelected || pressed) && {
+                                  listColorTheme && (isSelected || pressed) && {
                                     backgroundColor: listColorTheme.tint,
                                     borderBottomColor: listColorTheme.border,
                                   },
@@ -4339,7 +4410,9 @@ export default function App() {
                                     <View
                                       style={[
                                         styles.listMenuColorDot,
-                                        { backgroundColor: listColorTheme.accent },
+                                        listColorTheme
+                                          ? { backgroundColor: listColorTheme.accent }
+                                          : styles.listMenuColorDotNoColor,
                                       ]}
                                     />
                                   )}
@@ -4367,7 +4440,12 @@ export default function App() {
                                   pressed && styles.listMenuClearButtonPressed,
                                 ]}
                               >
-                                <Text style={[styles.listMenuClearButtonText, { color: listColorTheme.text }]}>
+                                <Text style={[
+                                  styles.listMenuClearButtonText,
+                                  listColorTheme
+                                    ? { color: listColorTheme.text }
+                                    : styles.listMenuClearButtonTextNoColor,
+                                ]}>
                                   ×
                                 </Text>
                               </Pressable>
@@ -4821,33 +4899,34 @@ export default function App() {
               style={styles.settingsBody}
             >
               <View style={styles.settingsSection}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: settingsBackupExpanded }}
-                  {...getInstantPressHandlers(
-                    'settings:backup',
-                    () => setSettingsBackupExpanded((current) => !current),
-                  )}
-                  style={({ pressed }) => [
-                    styles.settingsSectionHeader,
-                    pressed && styles.settingsOptionRowPressed,
-                  ]}
-                >
+                <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Backup</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       Google Drive · {googleConnected ? 'Connected' : 'Not signed in'}
                     </Text>
                   </View>
-                  <Text
-                    style={[
-                      styles.settingsSectionChevron,
-                      settingsBackupExpanded && styles.settingsSectionChevronExpanded,
+                  <Pressable
+                    accessibilityLabel={`${settingsBackupExpanded ? 'Collapse' : 'Expand'} Backup section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsBackupExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsBackupExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
                     ]}
                   >
-                    ›
-                  </Text>
-                </Pressable>
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsBackupExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
 
                 {settingsBackupExpanded ? (
                   <View style={styles.settingsCard}>
@@ -4945,34 +5024,186 @@ export default function App() {
                   </View>
                 ) : null}
               </View>
-                <View style={styles.settingsSection}>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Done items</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {hideDoneTodos ? 'Hidden from lists' : 'Visible in lists'}
+                    </Text>
+                  </View>
                   <Pressable
+                    accessibilityLabel={`${settingsDoneExpanded ? 'Collapse' : 'Expand'} Done items section`}
                     accessibilityRole="button"
-                    accessibilityState={{ expanded: settingsListsExpanded }}
-                    {...getInstantPressHandlers(
-                      'settings:lists',
-                      () => setSettingsListsExpanded((current) => !current),
-                    )}
+                    accessibilityState={{ expanded: settingsDoneExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsDoneExpanded((current) => !current)}
                     style={({ pressed }) => [
-                      styles.settingsSectionHeader,
-                      pressed && styles.settingsOptionRowPressed,
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
                     ]}
                   >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsDoneExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsDoneExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Pressable
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: hideDoneTodos }}
+                      onPress={toggleHideDoneTodos}
+                      style={({ pressed }) => [
+                        styles.settingsRow,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Hide done items</Text>
+                        <Text style={styles.settingsRowSubtitle}>Done todos stay saved.</Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.settingsStatusPill,
+                          hideDoneTodos && styles.settingsStatusPillEnabled,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.settingsStatusText,
+                            hideDoneTodos && styles.settingsStatusTextEnabled,
+                          ]}
+                        >
+                          {hideDoneTodos ? 'Hidden' : 'Visible'}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Deleted items</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {deletedTodos.length} {deletedTodos.length === 1 ? 'item' : 'items'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsDeletedExpanded ? 'Collapse' : 'Expand'} Deleted items section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsDeletedExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsDeletedExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsDeletedExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsDeletedExpanded ? (
+                  <View style={styles.settingsCard}>
+                    {deletedTodos.length === 0 ? (
+                      <Text style={styles.settingsEmptyText}>No deleted items</Text>
+                    ) : (
+                      <View style={styles.settingsDeletedList}>
+                        {deletedTodos.map((todo) => {
+                          const contentPreview = todo.content.trim().replace(/\s+/g, ' ');
+
+                          return (
+                            <View key={todo.id} style={styles.settingsDeletedTodoRow}>
+                              <View style={styles.settingsDeletedTodoTextWrap}>
+                                <Text
+                                  numberOfLines={1}
+                                  style={styles.settingsDeletedTodoTitle}
+                                >
+                                  {todo.text}
+                                </Text>
+                                {contentPreview ? (
+                                  <Text
+                                    numberOfLines={1}
+                                    style={styles.settingsDeletedTodoContent}
+                                  >
+                                    {contentPreview}
+                                  </Text>
+                                ) : null}
+                                <Text
+                                  numberOfLines={1}
+                                  style={styles.settingsDeletedTodoMeta}
+                                >
+                                  Deleted {formatDeletedTodoTime(todo.deletedAt)}
+                                </Text>
+                              </View>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={`Restore ${todo.text}`}
+                                onPress={() => restoreDeletedTodo(todo.id)}
+                                style={({ pressed }) => [
+                                  styles.settingsRestoreDeletedButton,
+                                  pressed && styles.settingsSecondaryButtonPressed,
+                                ]}
+                              >
+                                <Text style={styles.settingsRestoreDeletedButtonText}>
+                                  Restore
+                                </Text>
+                              </Pressable>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Lists</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       {listMenuTree.length} items · {listOrderMode === 'alphabetical' ? 'Alphabetical' : 'Manual order'}
                     </Text>
                   </View>
-                  <Text
-                    style={[
-                      styles.settingsSectionChevron,
-                      settingsListsExpanded && styles.settingsSectionChevronExpanded,
+                  <Pressable
+                    accessibilityLabel={`${settingsListsExpanded ? 'Collapse' : 'Expand'} Lists section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsListsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsListsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
                     ]}
                   >
-                    ›
-                  </Text>
-                </Pressable>
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsListsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
 
                 {settingsListsExpanded ? (
                   <View style={styles.settingsCard}>
@@ -5179,33 +5410,34 @@ export default function App() {
               </View>
 
               <View style={styles.settingsSection}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: settingsColorsExpanded }}
-                  {...getInstantPressHandlers(
-                    'settings:colors',
-                    () => setSettingsColorsExpanded((current) => !current),
-                  )}
-                  style={({ pressed }) => [
-                    styles.settingsSectionHeader,
-                    pressed && styles.settingsOptionRowPressed,
-                  ]}
-                >
+                <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Colors</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       {settingsColorItemCount} items · Priority, dates, lists
                     </Text>
                   </View>
-                  <Text
-                    style={[
-                      styles.settingsSectionChevron,
-                      settingsColorsExpanded && styles.settingsSectionChevronExpanded,
+                  <Pressable
+                    accessibilityLabel={`${settingsColorsExpanded ? 'Collapse' : 'Expand'} Colors section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsColorsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsColorsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
                     ]}
                   >
-                    ›
-                  </Text>
-                </Pressable>
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsColorsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
 
                 {settingsColorsExpanded ? (
                   <View style={styles.settingsCard}>
@@ -5220,6 +5452,7 @@ export default function App() {
                         <Text style={styles.settingsColorGroupTitle}>{group.title}</Text>
                         {group.values.map((value) => {
                           const colorTheme = getFilterColorTheme(filterColors, group.filterKey, value);
+                          const noColorSelected = colorTheme === null;
 
                           return (
                             <View key={`${group.filterKey}-${value}`} style={styles.settingsColorRow}>
@@ -5227,7 +5460,9 @@ export default function App() {
                                 <View
                                   style={[
                                     styles.settingsColorPreviewDot,
-                                    { backgroundColor: colorTheme.accent },
+                                    colorTheme
+                                      ? { backgroundColor: colorTheme.accent }
+                                      : styles.settingsColorPreviewDotNoColor,
                                   ]}
                                 />
                                 <Text style={styles.settingsColorLabel}>{value}</Text>
@@ -5240,8 +5475,13 @@ export default function App() {
                                 contentContainerStyle={styles.settingsColorSwatches}
                               >
                                 {FILTER_COLOR_SWATCHES.map((swatch) => {
-                                  const selected =
-                                    swatch.accent.toUpperCase() === colorTheme.accent.toUpperCase();
+                                  const selected = swatch.isNoColor === true
+                                    ? noColorSelected
+                                    : Boolean(
+                                      colorTheme
+                                        && swatch.accent
+                                        && swatch.accent.toUpperCase() === colorTheme.accent.toUpperCase(),
+                                    );
 
                                   return (
                                     <Pressable
@@ -5254,17 +5494,26 @@ export default function App() {
                                         styles.settingsColorSwatchButton,
                                         selected && {
                                           backgroundColor: swatch.tint,
-                                          borderColor: swatch.accent,
+                                          borderColor: swatch.accent ?? '#8F877F',
                                         },
                                         pressed && styles.settingsOptionRowPressed,
                                       ]}
                                     >
-                                      <View
-                                        style={[
+                                      {swatch.isNoColor ? (
+                                        <View style={[
                                           styles.settingsColorSwatch,
-                                          { backgroundColor: swatch.accent },
-                                        ]}
-                                      />
+                                          styles.settingsColorSwatchNoColor,
+                                        ]}>
+                                          <Ionicons color="#8F877F" name="remove" size={16} />
+                                        </View>
+                                      ) : (
+                                        <View
+                                          style={[
+                                            styles.settingsColorSwatch,
+                                            { backgroundColor: swatch.accent ?? 'transparent' },
+                                          ]}
+                                        />
+                                      )}
                                     </Pressable>
                                   );
                                 })}
@@ -5391,7 +5640,6 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: LIST_MENU_OVERLAY_BOTTOM,
     zIndex: 19,
-    elevation: 8,
     backgroundColor: THEME_BG,
   },
   settingsModal: {
@@ -5635,6 +5883,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 2,
   },
+  settingsSectionChevronButton: {
+    alignItems: 'center',
+    borderRadius: 21,
+    height: 42,
+    justifyContent: 'center',
+    marginLeft: 12,
+    marginRight: 2,
+    width: 42,
+  },
+  settingsSectionChevronButtonPressed: {
+    backgroundColor: '#F6EFE8',
+    opacity: 0.76,
+  },
   settingsSectionTitle: {
     color: THEME_TEXT,
     fontSize: 16,
@@ -5667,6 +5928,67 @@ const styles = StyleSheet.create({
     borderColor: '#E4DED6',
     padding: 14,
     overflow: 'hidden',
+  },
+  settingsEmptyText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 19,
+    letterSpacing: 0.1,
+  },
+  settingsDeletedList: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  settingsDeletedTodoRow: {
+    alignItems: 'center',
+    borderBottomColor: '#F2EBE3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 66,
+    paddingVertical: 10,
+  },
+  settingsDeletedTodoTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsDeletedTodoTitle: {
+    color: THEME_TEXT,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  settingsDeletedTodoContent: {
+    color: '#5F5B57',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  settingsDeletedTodoMeta: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 3,
+  },
+  settingsRestoreDeletedButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 12,
+    justifyContent: 'center',
+    minHeight: 38,
+    minWidth: 74,
+    paddingHorizontal: 12,
+  },
+  settingsRestoreDeletedButtonText: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    letterSpacing: 0.1,
   },
   settingsSegmentedControl: {
     minHeight: 44,
@@ -5864,6 +6186,11 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
   },
+  settingsColorPreviewDotNoColor: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#A79F96',
+  },
   settingsColorLabel: {
     flex: 1,
     color: THEME_TEXT,
@@ -5893,6 +6220,13 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
     borderRadius: 9,
+  },
+  settingsColorSwatchNoColor: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#DAD3CB',
   },
   settingsIconButton: {
     width: 34,
@@ -6108,6 +6442,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     elevation: 8,
   },
+  bottomNavFlat: {
+    borderTopColor: 'transparent',
+    borderTopWidth: 0,
+    elevation: 0,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0,
+    shadowRadius: 0,
+  },
   bottomNavItem: {
     alignItems: 'center',
     flex: 1,
@@ -6179,7 +6521,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: '#E4DDD4',
     paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'android' ? 10 : 8,
+    paddingBottom: Platform.OS === 'android' ? 24 : 22,
     shadowColor: '#000000',
     shadowOpacity: 0.14,
     shadowRadius: 24,
@@ -6426,6 +6768,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     textTransform: 'capitalize',
   },
+  filterTypeTextNoColor: {
+    color: '#8F877F',
+  },
   listMenuValueText: {
     color: THEME_TEXT_SECONDARY,
     fontSize: 12,
@@ -6519,6 +6864,11 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     flexShrink: 0,
   },
+  listMenuColorDotNoColor: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#A79F96',
+  },
   listMenuRowTitle: {
     color: '#2A2520',
     fontSize: 15,
@@ -6572,6 +6922,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
+  },
+  listMenuClearButtonTextNoColor: {
+    color: '#8F877F',
   },
   listMenuArrowButton: {
     width: 34,

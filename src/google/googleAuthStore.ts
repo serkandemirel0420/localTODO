@@ -1,6 +1,8 @@
 import * as SecureStore from 'expo-secure-store';
 
-const STORAGE_KEY = 'local-todo.google-auth.v1';
+import { APP_VARIANT } from '../appVariant';
+
+const STORAGE_KEY = `local-todo.google-auth.${APP_VARIANT}.v1`;
 
 export type StoredGoogleAuth = {
   accessToken: string;

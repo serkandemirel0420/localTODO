@@ -60,8 +60,8 @@ function MetaTag({
       style={[
         styles.tag,
         {
-          backgroundColor: useOverdueStyle ? '#FFF0EE' : theme.tint,
-          borderColor: useOverdueStyle ? '#F0C8C3' : theme.border,
+          backgroundColor: useOverdueStyle ? '#FFF0EE' : theme?.tint ?? '#FFFFFF',
+          borderColor: useOverdueStyle ? '#F0C8C3' : theme?.border ?? '#E8E2DA',
         },
         done && styles.tagDone,
       ]}
@@ -70,7 +70,7 @@ function MetaTag({
         numberOfLines={1}
         style={[
           styles.tagText,
-          { color: useOverdueStyle ? '#CF413A' : theme.text },
+          { color: useOverdueStyle ? '#CF413A' : theme?.text ?? '#6A625A' },
           done && styles.tagTextDone,
         ]}
       >

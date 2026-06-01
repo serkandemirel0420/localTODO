@@ -19,11 +19,12 @@ import {
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
 } from '../metaTags';
+import { isDevAppVariant } from '../appVariant';
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
 
-const BACKUP_FILE_NAME = 'local-todo-backup.json';
+const BACKUP_FILE_NAME = isDevAppVariant ? 'local-todo-dev-backup.json' : 'local-todo-backup.json';
 const BACKUP_MIME_TYPE = 'application/json';
 
 export type BackupListOrderMode = 'alphabetical' | 'manual';
@@ -56,6 +57,7 @@ export type BackupSettings = {
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
+  hideDoneTodos: boolean;
   listMenuTree: BackupListMenuNode[];
   listOrderMode: BackupListOrderMode;
   menuPresets: BackupMenuPreset[];
@@ -340,6 +342,7 @@ export const createBackupPayload = (
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
       googleDriveLastBackupAt: exportedAt,
       googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
+      hideDoneTodos: settings.hideDoneTodos,
       listMenuTree: cloneListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode,
       menuPresets: cloneMenuPresets(settings.menuPresets),
@@ -373,6 +376,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
         typeof settings.googleDriveLastBackupAt === 'string' ? settings.googleDriveLastBackupAt : null,
       googleDriveLastRestoreAt:
         typeof settings.googleDriveLastRestoreAt === 'string' ? settings.googleDriveLastRestoreAt : null,
+      hideDoneTodos: settings.hideDoneTodos === true,
       listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
       menuPresets: normalizeBackupMenuPresets(settings.menuPresets),

@@ -249,6 +249,7 @@
 				);
 				INFOPLIST_FILE = LocalTodo/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LOCALTODO_DISPLAY_NAME = "Local Todo Dev";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -259,8 +260,8 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.localtodo.app";
-				PRODUCT_NAME = "LocalTodo";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.localtodo.app.dev";
+				PRODUCT_NAME = "LocalTodoDev";
 				SWIFT_OBJC_BRIDGING_HEADER = "LocalTodo/LocalTodo-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -278,6 +279,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = LocalTodo/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LOCALTODO_DISPLAY_NAME = "Local Todo";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

@@ -5,6 +5,7 @@
     "scheme": "com.localtodo.app",
     "version": "1.0.3",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "backgroundColor": "#F7F4EF"
@@ -19,7 +20,8 @@
     "android": {
       "package": "com.localtodo.app",
       "versionCode": 4,
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "icon": "./assets/icon.png"
     },
     "plugins": [
       "expo-web-browser",

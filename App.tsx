@@ -464,6 +464,7 @@ const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
+const NEW_TODO_HIGHLIGHT_DURATION_MS = 2400;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_EXPANSION_SETTLE_MS = TODO_GROUP_REVEAL_ANIMATION_MS;
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
@@ -932,6 +933,9 @@ export default function App() {
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
   const [activeTodoMenuHighlightId, setActiveTodoMenuHighlightId] = useState<string | null>(null);
+  const [newlyCreatedTodoHighlightId, setNewlyCreatedTodoHighlightId] = useState<string | null>(
+    null,
+  );
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
@@ -1005,6 +1009,7 @@ export default function App() {
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todosRef = useRef<Todo[]>(todos);
   const loadedRef = useRef(loaded);
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
@@ -1228,6 +1233,30 @@ export default function App() {
     pendingTodoMenuHighlightRef.current = null;
   }, []);
 
+  const clearNewlyCreatedTodoHighlight = useCallback(() => {
+    if (newlyCreatedTodoHighlightTimerRef.current) {
+      clearTimeout(newlyCreatedTodoHighlightTimerRef.current);
+      newlyCreatedTodoHighlightTimerRef.current = null;
+    }
+
+    setNewlyCreatedTodoHighlightId(null);
+  }, []);
+
+  const highlightNewlyCreatedTodo = useCallback((id: string) => {
+    if (newlyCreatedTodoHighlightTimerRef.current) {
+      clearTimeout(newlyCreatedTodoHighlightTimerRef.current);
+      newlyCreatedTodoHighlightTimerRef.current = null;
+    }
+
+    setNewlyCreatedTodoHighlightId(id);
+    newlyCreatedTodoHighlightTimerRef.current = setTimeout(() => {
+      newlyCreatedTodoHighlightTimerRef.current = null;
+      setNewlyCreatedTodoHighlightId((current) => (
+        current === id ? null : current
+      ));
+    }, NEW_TODO_HIGHLIGHT_DURATION_MS);
+  }, []);
+
   const revealTodoMenuHighlight = useCallback((id: string) => {
     if (activeTodoMenuIdRef.current !== id || !listMenuOpenRef.current) {
       return;
@@ -1296,8 +1325,11 @@ export default function App() {
   );
 
   useEffect(
-    () => () => clearTodoMenuHighlightRequest(),
-    [clearTodoMenuHighlightRequest],
+    () => () => {
+      clearTodoMenuHighlightRequest();
+      clearNewlyCreatedTodoHighlight();
+    },
+    [clearNewlyCreatedTodoHighlight, clearTodoMenuHighlightRequest],
   );
 
   useEffect(() => {
@@ -2033,6 +2065,7 @@ export default function App() {
 
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setTodos((current) => [todo, ...current]);
+    highlightNewlyCreatedTodo(todo.id);
     localTodoStore.upsert(todo).catch(() => undefined);
     syncTodoAlarm(todo).catch(() => undefined);
     Keyboard.dismiss();
@@ -2047,6 +2080,7 @@ export default function App() {
     createDraftContent,
     createDraftFilters,
     createDraftText,
+    highlightNewlyCreatedTodo,
     listMenuTree,
     pendingDeleteIds,
     resetCreateDrawerState,
@@ -2855,6 +2889,7 @@ export default function App() {
       activeTodoMenuId,
       collapsingTodoGroupId,
       menuMode,
+      newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       selectedTodoKey,
       settlingTodoGroupId,
@@ -2864,6 +2899,7 @@ export default function App() {
       activeTodoMenuId,
       collapsingTodoGroupId,
       menuMode,
+      newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       selectedTodoKey,
       settlingTodoGroupId,
@@ -4482,6 +4518,28 @@ export default function App() {
     visibleTodoListRows,
   ]);
 
+  useEffect(() => {
+    if (!newlyCreatedTodoHighlightId) {
+      return;
+    }
+
+    const highlightedId = newlyCreatedTodoHighlightId;
+    const isVisible = visibleTodoListRows.some((row) => (
+      (row.type === 'todo' || row.type === 'groupedTodo') &&
+      row.todo.id === highlightedId
+    ));
+
+    if (!isVisible) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      scrollTodoAboveMenu(highlightedId);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [newlyCreatedTodoHighlightId, scrollTodoAboveMenu, visibleTodoListRows]);
+
   const requestTodoMenuTargetScroll = useCallback((
     id: string,
     options?: { revealHighlight?: boolean },
@@ -4622,6 +4680,8 @@ export default function App() {
         const isSelected = selectedTodoIds.has(item.todo.id);
         const sectionId = item.id.slice(0, item.id.indexOf('::'));
         const isBodyRevealed = collapsingTodoGroupId !== sectionId;
+        const isNewlyCreatedTodo =
+          newlyCreatedTodoHighlightId === item.todo.id;
 
         return (
           <View>
@@ -4642,6 +4702,7 @@ export default function App() {
                   item={item.todo}
                   isMenuTarget={isTodoMenuTarget}
                   isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
+                  isNewlyCreated={isNewlyCreatedTodo}
                   isPendingDelete={isPendingDelete}
                   layout="grouped"
                   metaTagVisibility={metaTagVisibility}
@@ -4673,6 +4734,8 @@ export default function App() {
         isTodoMenuTarget &&
         activeTodoMenuHighlightId === item.todo.id;
       const isSelected = selectedTodoIds.has(item.todo.id);
+      const isNewlyCreatedTodo =
+        newlyCreatedTodoHighlightId === item.todo.id;
 
       return (
         <View>
@@ -4684,6 +4747,7 @@ export default function App() {
             item={item.todo}
             isMenuTarget={isTodoMenuTarget}
             isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
+            isNewlyCreated={isNewlyCreatedTodo}
             isPendingDelete={isPendingDelete}
             metaTagVisibility={metaTagVisibility}
             onDelete={deleteTodo}
@@ -4709,6 +4773,7 @@ export default function App() {
       groupedHiddenMetaTagKinds,
       menuMode,
       metaTagVisibility,
+      newlyCreatedTodoHighlightId,
       openTodoDetailModal,
       openMenuForTodoAction,
       pendingDeleteIds,

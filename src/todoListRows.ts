@@ -95,6 +95,7 @@ const shouldGapBeforeVisibleRow = (
 export const flattenTodoListRows = (
   rows: TodoListRow[],
   collapsedGroupIds: Set<string>,
+  collapsingGroupId: string | null = null,
 ): VisibleTodoListRow[] => {
   const visible: VisibleTodoListRow[] = [];
   let previous: VisibleTodoListRow | null = null;
@@ -112,7 +113,8 @@ export const flattenTodoListRows = (
       return;
     }
 
-    const isCollapsed = collapsedGroupIds.has(row.id);
+    const isCollapsed =
+      collapsedGroupIds.has(row.id) && collapsingGroupId !== row.id;
     const sectionHeader: VisibleTodoListRow = {
       count: row.count,
       gapBefore: shouldGapBeforeVisibleRow(previous),

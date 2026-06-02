@@ -54,6 +54,7 @@ import {
   type ReminderTimeModalSource,
 } from './src/components/ReminderTimeModal';
 import { RepeatReminderModal } from './src/components/RepeatReminderModal';
+import { FilterConfigScreen } from './src/components/FilterConfigScreen';
 import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
 import { TodoRow } from './src/components/TodoRow';
 
@@ -888,6 +889,7 @@ export default function App() {
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
   const [presetSaveName, setPresetSaveName] = useState('');
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
@@ -1614,6 +1616,20 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const closeFilterConfigModal = useCallback(() => {
+    setFilterConfigModalVisible(false);
+    setNavTab((current) => (current === 'calendar' ? null : current));
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const openFilterConfigModal = useCallback(() => {
+    Keyboard.dismiss();
+    closeListMenuState();
+    setSettingsModalVisible(false);
+    setFilterConfigModalVisible(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [closeListMenuState]);
+
   const closePresetSaveModal = useCallback(() => {
     Keyboard.dismiss();
     setPresetSaveModalVisible(false);
@@ -1755,6 +1771,11 @@ export default function App() {
       return true;
     }
 
+    if (filterConfigModalVisible) {
+      closeFilterConfigModal();
+      return true;
+    }
+
     if (menuMode === 'presetsQuickApply') {
       setMenuMode('presets');
       Haptics.selectionAsync().catch(() => undefined);
@@ -1788,6 +1809,8 @@ export default function App() {
     repeatReminderModalVisible,
     presetSaveModalVisible,
     resetCreateDrawerState,
+    closeFilterConfigModal,
+    filterConfigModalVisible,
     settingsModalVisible,
     submenuOpen,
     todoSelectMode,
@@ -2662,6 +2685,10 @@ export default function App() {
     () => buildVisibleListMenuItems(orderedListMenuTree, Boolean(activeTodoMenuId)),
     [activeTodoMenuId, orderedListMenuTree],
   );
+  const filterConfigListItems = useMemo(
+    () => buildVisibleListMenuItems(orderedListMenuTree, true),
+    [orderedListMenuTree],
+  );
   const orderedListLabels = useMemo(
     () => collectListNodeLabels(orderedListMenuTree),
     [orderedListMenuTree],
@@ -2910,6 +2937,20 @@ export default function App() {
     [effectiveGroupMode, effectiveSortMode, listOrderMode, selectedFilters],
   );
   const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
+  const filterConfigPresetSummaries = useMemo(
+    () => Object.fromEntries(
+      menuPresets.map((preset) => [
+        preset.id,
+        formatPresetSummary(
+          preset.filters,
+          preset.todoSortMode,
+          preset.todoGroupMode,
+          preset.listOrderMode,
+        ),
+      ]),
+    ),
+    [menuPresets],
+  );
   const currentPresetSummary = formatPresetSummary(
     menuFilters,
     effectiveSortMode,
@@ -3778,6 +3819,7 @@ export default function App() {
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
     closeListMenuState();
+    setFilterConfigModalVisible(false);
     setSettingsBackupExpanded(false);
     setSettingsColorsExpanded(false);
     setSettingsDeletedExpanded(false);
@@ -3831,6 +3873,7 @@ export default function App() {
     closeListMenuState();
     exitTodoSelectMode();
     setSettingsModalVisible(false);
+    setFilterConfigModalVisible(false);
     setNavTab(null);
     setQuery('');
 
@@ -3848,11 +3891,18 @@ export default function App() {
     exitTodoSelectMode();
 
     const sameCalendarOpen =
-      tab === 'calendar' && listMenuOpen && (navTab === 'calendar' || menuMode === 'date');
+      tab === 'calendar' && filterConfigModalVisible;
     const sameMenuOpen =
       tab === 'menu' && listMenuOpen && (navTab === 'menu' || menuMode === 'main');
 
-    if (sameCalendarOpen || sameMenuOpen) {
+    if (sameCalendarOpen) {
+      Keyboard.dismiss();
+      searchInputRef.current?.blur();
+      closeFilterConfigModal();
+      return;
+    }
+
+    if (sameMenuOpen) {
       Keyboard.dismiss();
       searchInputRef.current?.blur();
       closeListMenu();
@@ -3884,8 +3934,7 @@ export default function App() {
     switch (tab) {
       case 'calendar':
         setNavTab('calendar');
-        Keyboard.dismiss();
-        setMenuMode('date');
+        openFilterConfigModal();
         break;
       case 'menu':
         setNavTab('menu');
@@ -3902,19 +3951,22 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [
     closeHeaderSearch,
+    closeFilterConfigModal,
     closeListMenu,
     closeSettingsModal,
     exitTodoSelectMode,
+    filterConfigModalVisible,
     focusHeaderSearch,
     listMenuOpen,
     menuMode,
     navTab,
+    openFilterConfigModal,
     openSettingsModal,
     settingsModalVisible,
   ]);
 
   useEffect(() => {
-    if (!listMenuOpen && (navTab === 'calendar' || navTab === 'menu')) {
+    if (!listMenuOpen && navTab === 'menu') {
       setNavTab(null);
     }
   }, [listMenuOpen, navTab]);
@@ -4814,7 +4866,10 @@ export default function App() {
 
         </View>
 
-        <View style={[styles.bottomNav, settingsModalVisible && styles.bottomNavFlat]}>
+        <View style={[
+          styles.bottomNav,
+          (settingsModalVisible || filterConfigModalVisible) && styles.bottomNavFlat,
+        ]}>
           <Pressable
             accessibilityRole="button"
             accessibilityHint="Opens the new todo drawer"
@@ -4829,8 +4884,8 @@ export default function App() {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Calendar"
-            accessibilityState={{ selected: navTab === 'calendar' || menuMode === 'date' }}
+            accessibilityLabel="Filters"
+            accessibilityState={{ selected: filterConfigModalVisible }}
             onPress={() => handleNavTabPress('calendar')}
             style={({ pressed }) => [
               styles.bottomNavItem,
@@ -4838,8 +4893,8 @@ export default function App() {
             ]}
           >
             <Ionicons
-              color={navTab === 'calendar' || menuMode === 'date' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-              name="calendar-number-outline"
+              color={filterConfigModalVisible ? NAV_ACCENT : NAV_ICON_INACTIVE}
+              name="funnel-outline"
               size={25}
             />
           </Pressable>
@@ -4880,7 +4935,11 @@ export default function App() {
             accessibilityHint="Shows the todo items list"
             accessibilityLabel="Show items"
             accessibilityState={{
-              selected: navTab === null && !listMenuOpen && !settingsModalVisible,
+              selected:
+                navTab === null
+                && !listMenuOpen
+                && !settingsModalVisible
+                && !filterConfigModalVisible,
             }}
             onPress={showTodoItems}
             style={({ pressed }) => [
@@ -4890,7 +4949,10 @@ export default function App() {
           >
             <Ionicons
               color={
-                navTab === null && !listMenuOpen && !settingsModalVisible
+                navTab === null
+                && !listMenuOpen
+                && !settingsModalVisible
+                && !filterConfigModalVisible
                   ? NAV_ACCENT
                   : NAV_ICON_INACTIVE
               }
@@ -6039,6 +6101,40 @@ export default function App() {
           onConfirm={confirmCreateRepeat}
           value={repeatDraft}
           visible={repeatReminderModalVisible}
+        />
+
+        <FilterConfigScreen
+          activeMenuPreset={activeMenuPreset}
+          currentPresetSummary={currentPresetSummary}
+          filterColors={filterColors}
+          filters={selectedFilters}
+          isListItemSelected={(item) => (
+            isListMenuItemSelected(item, selectedFilters.list, listMenuTree)
+          )}
+          latestMenuPreset={latestMenuPreset}
+          listMenuItems={filterConfigListItems}
+          menuPresets={menuPresets}
+          metaTagVisibility={metaTagVisibility}
+          groupMode={effectiveGroupMode}
+          onApplyPreset={applyMenuPreset}
+          onClearFilters={clearFilters}
+          onClearSection={clearMenuSection}
+          onClose={closeFilterConfigModal}
+          onDateMenuPress={handleDateMenuLabelPress}
+          onOpenSavePreset={openSavePresetPrompt}
+          onRemoveFilter={removeFilter}
+          onRemoveListItem={removeListMenuItem}
+          onRemovePreset={removeMenuPreset}
+          onSelectGroup={selectTodoGroupMode}
+          onSelectSort={selectTodoSortMode}
+          onShowResults={showTodoItems}
+          onToggleFilter={toggleFilterValue}
+          onToggleListItem={toggleListMenuItem}
+          onToggleMetaTag={toggleMetaTagVisibility}
+          presetSummaries={filterConfigPresetSummaries}
+          resultCount={filteredTodos.length}
+          sortMode={effectiveSortMode}
+          visible={filterConfigModalVisible}
         />
 
         {settingsModalVisible ? (

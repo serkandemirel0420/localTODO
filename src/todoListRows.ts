@@ -96,7 +96,6 @@ const shouldGapBeforeVisibleRow = (
 export const flattenTodoListRows = (
   rows: TodoListRow[],
   collapsedGroupIds: Set<string>,
-  collapsingGroupId: string | null = null,
 ): VisibleTodoListRow[] => {
   const visible: VisibleTodoListRow[] = [];
   let previous: VisibleTodoListRow | null = null;
@@ -114,8 +113,7 @@ export const flattenTodoListRows = (
       return;
     }
 
-    const isCollapsed =
-      collapsedGroupIds.has(row.id) && collapsingGroupId !== row.id;
+    const isCollapsed = collapsedGroupIds.has(row.id);
     const sectionHeader: VisibleTodoListRow = {
       count: row.count,
       gapBefore: shouldGapBeforeVisibleRow(previous),
@@ -154,12 +152,17 @@ const appendSectionRows = (
   sectionId: string,
   label: string,
   sectionTodos: Todo[],
+  sortMode?: TodoSortMode,
 ): void => {
+  const todos = sortMode
+    ? [...sectionTodos].sort((first, second) => compareTodosBySortMode(first, second, sortMode))
+    : sectionTodos;
+
   rows.push({
-    count: sectionTodos.length,
+    count: todos.length,
     id: sectionId,
     label,
-    todos: sectionTodos,
+    todos,
     type: 'section',
   });
 };
@@ -379,6 +382,7 @@ const getTodoSubsectionLabels = (
 const buildSubsectionRows = (
   todos: Todo[],
   context: ListSubsectionContext,
+  sortMode: TodoSortMode,
 ): TodoListRow[] => {
   const scopedTodos = todos.filter((todo) => (
     todoBelongsToListParent(todo, context.parentLabel, context.subsectionLabels)
@@ -401,7 +405,7 @@ const buildSubsectionRows = (
     const sectionTodos = buckets.get(label) ?? [];
     const sectionId = `subsection-${context.parentLabel}-${label}`;
 
-    appendSectionRows(rows, sectionId, label, sectionTodos);
+    appendSectionRows(rows, sectionId, label, sectionTodos, sortMode);
   });
 
   return rows;
@@ -410,6 +414,7 @@ const buildSubsectionRows = (
 const buildGroupedSectionRows = (
   todos: Todo[],
   groupMode: Exclude<TodoGroupMode, 'none'>,
+  sortMode: TodoSortMode,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
   dateLabelDisplayMode: DateLabelDisplayMode,
@@ -446,7 +451,7 @@ const buildGroupedSectionRows = (
     .forEach((group) => {
       const groupId = `group-${groupMode}-${group.key}`;
 
-      appendSectionRows(rows, groupId, group.label, group.todos);
+      appendSectionRows(rows, groupId, group.label, group.todos, sortMode);
     });
 
   return rows;
@@ -455,6 +460,7 @@ const buildGroupedSectionRows = (
 export const buildTodoListRows = (
   todos: Todo[],
   groupMode: TodoGroupMode,
+  sortMode: TodoSortMode,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
   selectedListFilters: string[],
@@ -466,7 +472,7 @@ export const buildTodoListRows = (
     : null;
 
   if (subsectionContext) {
-    return buildSubsectionRows(todos, subsectionContext);
+    return buildSubsectionRows(todos, subsectionContext, sortMode);
   }
 
   if (groupMode === 'none') {
@@ -480,6 +486,7 @@ export const buildTodoListRows = (
   return buildGroupedSectionRows(
     todos,
     groupMode,
+    sortMode,
     orderedListLabels,
     listMenuTree,
     dateLabelDisplayMode,

@@ -56,11 +56,6 @@ import {
 import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { FilterConfigScreen } from './src/components/FilterConfigScreen';
 import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
-import {
-  AnimatedTodoSectionChevron,
-  TODO_GROUP_REVEAL_ANIMATION_MS,
-  TodoGroupReveal,
-} from './src/components/TodoGroupReveal';
 import { TodoRow } from './src/components/TodoRow';
 
 import {
@@ -467,7 +462,6 @@ const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = 3200;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
-const TODO_GROUP_EXPANSION_SETTLE_MS = TODO_GROUP_REVEAL_ANIMATION_MS;
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 
@@ -1018,8 +1012,6 @@ export default function App() {
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [collapsingTodoGroupId, setCollapsingTodoGroupId] = useState<string | null>(null);
-  const [settlingTodoGroupId, setSettlingTodoGroupId] = useState<string | null>(null);
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
   const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
     () => cloneMetaTagVisibility(),
@@ -1065,6 +1057,7 @@ export default function App() {
   const didApplyTodoListInitialOffsetRef = useRef(false);
   const hadTodoListRowsRef = useRef(false);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const todoRowTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
@@ -1102,16 +1095,6 @@ export default function App() {
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const getInstantPressHandlers = useInstantPress();
-  const settlingTodoGroupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (settlingTodoGroupTimerRef.current) {
-        clearTimeout(settlingTodoGroupTimerRef.current);
-      }
-    },
-    [],
-  );
 
   useEffect(() => {
     let alive = true;
@@ -2756,6 +2739,11 @@ export default function App() {
     [registerListTap],
   );
 
+  const markTodoRowTouchStart = useCallback((event: GestureResponderEvent) => {
+    const { pageX, pageY, timestamp } = event.nativeEvent;
+    todoRowTouchStartRef.current = { pageX, pageY, timestamp };
+  }, []);
+
   const handleListFrameTouchStart = useCallback((event: GestureResponderEvent) => {
     const { pageX, pageY, timestamp } = event.nativeEvent;
     listTouchStartRef.current = { pageX, pageY, timestamp };
@@ -2772,9 +2760,27 @@ export default function App() {
         return;
       }
 
+      if (todoSelectMode) {
+        const todoRowTouchStart = todoRowTouchStartRef.current;
+        const startedOnTodoRow =
+          Math.abs(start.timestamp - todoRowTouchStart.timestamp) < 48 &&
+          Math.hypot(
+            start.pageX - todoRowTouchStart.pageX,
+            start.pageY - todoRowTouchStart.pageY,
+          ) < 6;
+
+        if (!startedOnTodoRow) {
+          lastListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
+          exitTodoSelectMode();
+          Haptics.selectionAsync().catch(() => undefined);
+        }
+
+        return;
+      }
+
       registerListTap(pageX, pageY, timestamp);
     },
-    [registerListTap],
+    [exitTodoSelectMode, registerListTap, todoSelectMode],
   );
 
   const handleMenuBackStateChange = useCallback(
@@ -2932,6 +2938,7 @@ export default function App() {
     () => buildTodoListRows(
       sortedTodos,
       todoListGroupMode,
+      todoListSortMode,
       orderedListLabels,
       listMenuTree,
       deferredSelectedFilters.list,
@@ -2945,16 +2952,13 @@ export default function App() {
       orderedListLabels,
       sortedTodos,
       todoListGroupMode,
+      todoListSortMode,
       todoListUseSubsectionLayout,
     ],
   );
   const visibleTodoListRows = useMemo(
-    () => flattenTodoListRows(
-      todoListRows,
-      collapsedTodoGroupIds,
-      collapsingTodoGroupId,
-    ),
-    [collapsedTodoGroupIds, collapsingTodoGroupId, todoListRows],
+    () => flattenTodoListRows(todoListRows, collapsedTodoGroupIds),
+    [collapsedTodoGroupIds, todoListRows],
   );
   const pendingDeleteKey = useMemo(
     () => [...pendingDeleteIds].sort().join('|'),
@@ -2968,22 +2972,18 @@ export default function App() {
     () => ({
       activeTodoMenuHighlightId,
       activeTodoMenuId,
-      collapsingTodoGroupId,
       menuMode,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       selectedTodoKey,
-      settlingTodoGroupId,
     }),
     [
       activeTodoMenuHighlightId,
       activeTodoMenuId,
-      collapsingTodoGroupId,
       menuMode,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       selectedTodoKey,
-      settlingTodoGroupId,
     ],
   );
   const todoListOneHandedOffset = useMemo(() => {
@@ -3147,20 +3147,6 @@ export default function App() {
     [effectiveGroupMode, effectiveSortMode, listOrderMode, selectedFilters],
   );
   const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
-  const filterConfigPresetSummaries = useMemo(
-    () => Object.fromEntries(
-      menuPresets.map((preset) => [
-        preset.id,
-        formatPresetSummary(
-          preset.filters,
-          preset.todoSortMode,
-          preset.todoGroupMode,
-          preset.listOrderMode,
-        ),
-      ]),
-    ),
-    [menuPresets],
-  );
   const currentPresetSummary = formatPresetSummary(
     menuFilters,
     effectiveSortMode,
@@ -3291,13 +3277,6 @@ export default function App() {
     if (todoSelectMode) {
       return [
         {
-          count: menuPresets.length || undefined,
-          id: 'main-presets',
-          label: 'Presets',
-          menuMode: 'presets',
-          type: 'menu',
-        },
-        {
           count: menuFilters.list.length || undefined,
           id: 'main-lists',
           label: 'Lists',
@@ -3320,18 +3299,6 @@ export default function App() {
           label: 'Date',
           menuMode: 'date',
           type: 'menu',
-        },
-        {
-          count: activeFilterCount || undefined,
-          id: 'main-filters',
-          label: 'Filters',
-          menuMode: 'filters',
-          type: 'menu',
-        },
-        {
-          id: 'main-clear-filters',
-          label: 'Clear filters',
-          type: 'clearFilters',
         },
       ];
     }
@@ -3706,42 +3673,19 @@ export default function App() {
   }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
-    const isOpening =
-      collapsedTodoGroupIds.has(groupId) || collapsingTodoGroupId === groupId;
+    setCollapsedTodoGroupIds((current) => {
+      const next = new Set(current);
 
-    if (settlingTodoGroupTimerRef.current) {
-      clearTimeout(settlingTodoGroupTimerRef.current);
-      settlingTodoGroupTimerRef.current = null;
-    }
-
-    if (isOpening) {
-      setCollapsingTodoGroupId((current) => (current === groupId ? null : current));
-      setCollapsedTodoGroupIds((current) => {
-        const next = new Set(current);
+      if (next.has(groupId)) {
         next.delete(groupId);
         return next;
-      });
-      setSettlingTodoGroupId(groupId);
-      settlingTodoGroupTimerRef.current = setTimeout(() => {
-        setSettlingTodoGroupId((current) => (current === groupId ? null : current));
-        settlingTodoGroupTimerRef.current = null;
-      }, TODO_GROUP_EXPANSION_SETTLE_MS);
-      return;
-    }
+      }
 
-    setSettlingTodoGroupId((current) => (current === groupId ? null : current));
-    setCollapsingTodoGroupId(groupId);
-    settlingTodoGroupTimerRef.current = setTimeout(() => {
-      setCollapsedTodoGroupIds((current) => {
-        const next = new Set(current);
-        next.add(groupId);
-        return next;
-      });
-      setCollapsingTodoGroupId((current) => (current === groupId ? null : current));
       todoListRef.current?.clearLayoutCacheOnUpdate();
-      settlingTodoGroupTimerRef.current = null;
-    }, TODO_GROUP_EXPANSION_SETTLE_MS);
-  }, [collapsedTodoGroupIds, collapsingTodoGroupId]);
+      next.add(groupId);
+      return next;
+    });
+  }, []);
 
   const toggleMetaTagVisibility = useCallback((key: MetaTagKey) => {
     setMetaTagVisibility((current) => ({
@@ -4197,15 +4141,8 @@ export default function App() {
     setFilterConfigModalVisible(false);
     setNavTab(null);
     setQuery('');
-
-    requestAnimationFrame(() => {
-      todoListRef.current?.scrollToOffset({
-        animated: true,
-        offset: todoListOneHandedOffset,
-      });
-    });
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenuState, exitTodoSelectMode, todoListOneHandedOffset]);
+  }, [closeListMenuState, exitTodoSelectMode]);
 
   const handleNavTabPress = useCallback((tab: NavTab) => {
     const shouldKeepSelection = todoSelectMode && (tab === 'menu' || tab === 'calendar');
@@ -4857,22 +4794,22 @@ export default function App() {
     ({ item }: { item: VisibleTodoListRow }) => {
       if (item.type === 'sectionHeader') {
         const isExpanded = !item.isCollapsed && item.count > 0;
-        const isBodyRevealed = collapsingTodoGroupId !== item.id;
-        const isVisuallyExpanded = isExpanded && isBodyRevealed;
 
         return (
           <View>
             {renderVisibleTodoRowGap(item.gapBefore)}
             <View
+              collapsable={false}
               style={[
                 styles.todoSectionCardShadow,
-                isVisuallyExpanded && styles.todoSectionCardShadowExpanded,
+                isExpanded && styles.todoSectionCardShadowExpanded,
               ]}
             >
               <Pressable
                 accessibilityRole="button"
-                accessibilityState={{ expanded: isVisuallyExpanded }}
+                accessibilityState={{ expanded: isExpanded }}
                 accessibilityLabel={`${item.label}, ${item.count} items`}
+                collapsable={false}
                 unstable_pressDelay={TODO_GROUP_HEADER_PRESS_DELAY_MS}
                 {...getInstantPressHandlers(
                   `todo-group:${item.id}`,
@@ -4881,7 +4818,7 @@ export default function App() {
                 )}
                 style={({ pressed }) => [
                   styles.todoSectionCard,
-                  isVisuallyExpanded && styles.todoSectionCardExpanded,
+                  isExpanded && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
                   pressed && styles.todoGroupHeaderPressed,
                 ]}
@@ -4891,9 +4828,9 @@ export default function App() {
                 </Text>
                 <View style={styles.todoSectionHeaderMeta}>
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
-                  <AnimatedTodoSectionChevron
+                  <Ionicons
+                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
                     color={THEME_TEXT_SECONDARY}
-                    expanded={isVisuallyExpanded}
                     size={18}
                   />
                 </View>
@@ -4913,49 +4850,42 @@ export default function App() {
           isTodoMenuTarget &&
           activeTodoMenuHighlightId === item.todo.id;
         const isSelected = selectedTodoIds.has(item.todo.id);
-        const sectionId = item.id.slice(0, item.id.indexOf('::'));
-        const isBodyRevealed = collapsingTodoGroupId !== sectionId;
         const isNewlyCreatedTodo =
           newlyCreatedTodoHighlightId === item.todo.id;
 
         return (
           <View>
             {renderVisibleTodoRowGap(item.gapBefore)}
-            <TodoGroupReveal key={item.id} reveal={isBodyRevealed}>
-              <View
-                style={[
-                  styles.todoSectionGroupedShell,
-                  item.isLastInSection && styles.todoSectionGroupedShellLast,
-                ]}
-              >
-                {!item.isFirstInSection ? <View style={styles.todoRowDivider} /> : null}
-                <TodoRow
-                  dateLabelDisplayMode={dateLabelDisplayMode}
-                  filterColors={filterColors}
-                  hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
-                  isSelected={isSelected}
-                  item={item.todo}
-                  isMenuTarget={isTodoMenuTarget}
-                  isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
-                  isNewlyCreated={isNewlyCreatedTodo}
-                  isPendingDelete={isPendingDelete}
-                  layout="grouped"
-                  metaTagVisibility={metaTagVisibility}
-                  onDelete={deleteTodo}
-                  onEnterSelectMode={enterTodoSelectMode}
-                  onOpenDetail={openTodoDetailModal}
-                  onOpenMenu={openMenuForTodoAction}
-                  onSetDone={setTodoDone}
-                  onToggleSelect={toggleTodoSelection}
-                  selectMode={todoSelectMode}
-                  sectionLabel={item.sectionLabel}
-                  deferSwipeable={
-                    settlingTodoGroupId !== null &&
-                    item.id.startsWith(`${settlingTodoGroupId}::`)
-                  }
-                />
-              </View>
-            </TodoGroupReveal>
+            <View
+              style={[
+                styles.todoSectionGroupedShell,
+                item.isLastInSection && styles.todoSectionGroupedShellLast,
+              ]}
+            >
+              {!item.isFirstInSection ? <View style={styles.todoRowDivider} /> : null}
+              <TodoRow
+                dateLabelDisplayMode={dateLabelDisplayMode}
+                filterColors={filterColors}
+                hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
+                isSelected={isSelected}
+                item={item.todo}
+                isMenuTarget={isTodoMenuTarget}
+                isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
+                isNewlyCreated={isNewlyCreatedTodo}
+                isPendingDelete={isPendingDelete}
+                layout="grouped"
+                metaTagVisibility={metaTagVisibility}
+                onDelete={deleteTodo}
+                onEnterSelectMode={enterTodoSelectMode}
+                onOpenDetail={openTodoDetailModal}
+                onOpenMenu={openMenuForTodoAction}
+                onSetDone={setTodoDone}
+                onTouchStart={markTodoRowTouchStart}
+                onToggleSelect={toggleTodoSelection}
+                selectMode={todoSelectMode}
+                sectionLabel={item.sectionLabel}
+              />
+            </View>
           </View>
         );
       }
@@ -4990,6 +4920,7 @@ export default function App() {
             onOpenDetail={openTodoDetailModal}
             onOpenMenu={openMenuForTodoAction}
             onSetDone={setTodoDone}
+            onTouchStart={markTodoRowTouchStart}
             onToggleSelect={toggleTodoSelection}
             selectMode={todoSelectMode}
           />
@@ -4999,7 +4930,6 @@ export default function App() {
     [
       activeTodoMenuId,
       activeTodoMenuHighlightId,
-      collapsingTodoGroupId,
       dateLabelDisplayMode,
       deleteTodo,
       enterTodoSelectMode,
@@ -5008,6 +4938,7 @@ export default function App() {
       groupedHiddenMetaTagKinds,
       menuMode,
       metaTagVisibility,
+      markTodoRowTouchStart,
       newlyCreatedTodoHighlightId,
       openTodoDetailModal,
       openMenuForTodoAction,
@@ -5015,7 +4946,6 @@ export default function App() {
       renderVisibleTodoRowGap,
       selectedTodoIds,
       setTodoDone,
-      settlingTodoGroupId,
       toggleTodoGroupCollapsed,
       toggleTodoSelection,
       todoSelectMode,
@@ -6514,28 +6444,21 @@ export default function App() {
         />
 
         <FilterConfigScreen
-          activeMenuPreset={activeMenuPreset}
-          currentPresetSummary={currentPresetSummary}
           dateLabelDisplayMode={dateLabelDisplayMode}
           filterColors={filterColors}
           filters={selectedFilters}
           isListItemSelected={(item) => (
             isListMenuItemSelected(item, selectedFilters.list, listMenuTree)
           )}
-          latestMenuPreset={latestMenuPreset}
           listMenuItems={filterConfigListItems}
-          menuPresets={menuPresets}
           metaTagVisibility={metaTagVisibility}
           groupMode={effectiveGroupMode}
-          onApplyPreset={applyMenuPreset}
           onClearFilters={clearFilters}
           onClearSection={clearMenuSection}
           onClose={closeFilterConfigModal}
           onDateMenuPress={handleDateMenuLabelPress}
-          onOpenSavePreset={openSavePresetPrompt}
           onRemoveFilter={removeFilter}
           onRemoveListItem={removeListMenuItem}
-          onRemovePreset={removeMenuPreset}
           onSelectGroup={selectTodoGroupMode}
           onSelectSort={selectTodoSortMode}
           onShowResults={showTodoItems}
@@ -6543,7 +6466,6 @@ export default function App() {
           onToggleListItem={toggleListMenuItem}
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
           onToggleMetaTag={toggleMetaTagVisibility}
-          presetSummaries={filterConfigPresetSummaries}
           resultCount={filteredTodos.length}
           sortMode={effectiveSortMode}
           visible={filterConfigModalVisible}

@@ -1,12 +1,14 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -32,7 +34,6 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
-  type StoredMenuPreset,
   type TodoGroupMode,
   type TodoSortMode,
 } from '../storage/appSettingsStore';
@@ -56,6 +57,8 @@ const THEME_ACCENT = '#4C78FF';
 const THEME_ACCENT_SOFT = '#E8EEFF';
 const SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const OPTION_ROW_HEIGHT = 48;
+const FILTER_CONFIG_ONE_HANDED_SCROLL_RATIO = 0.35;
+const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 8 : 0;
 
 export type FilterConfigListItem = {
   depth: number;
@@ -75,11 +78,6 @@ type FilterConfigScreenProps = {
   sortMode: TodoSortMode;
   groupMode: TodoGroupMode;
   metaTagVisibility: MetaTagVisibility;
-  menuPresets: StoredMenuPreset[];
-  activeMenuPreset: StoredMenuPreset | null;
-  latestMenuPreset: StoredMenuPreset | null;
-  currentPresetSummary: string;
-  presetSummaries: Record<string, string>;
   resultCount: number;
   dateLabelDisplayMode: DateLabelDisplayMode;
   isListItemSelected: (item: FilterConfigListItem) => boolean;
@@ -93,12 +91,9 @@ type FilterConfigScreenProps = {
   onSelectSort: (mode: TodoSortMode) => void;
   onSelectGroup: (mode: TodoGroupMode) => void;
   onToggleMetaTag: (key: MetaTagKey) => void;
-  onApplyPreset: (preset: StoredMenuPreset) => void;
-  onRemovePreset: (presetId: string) => void;
-  onOpenSavePreset: () => void;
   onClearFilters: () => void;
   onClearSection: (
-    section: 'presets' | 'lists' | 'priority' | 'date' | 'sort' | 'group' | 'metaTags',
+    section: 'lists' | 'priority' | 'date' | 'sort' | 'group' | 'metaTags',
   ) => void;
   onToggleDateLabelDisplayMode: () => void;
 };
@@ -186,11 +181,6 @@ export const FilterConfigScreen = ({
   sortMode,
   groupMode,
   metaTagVisibility,
-  menuPresets,
-  activeMenuPreset,
-  latestMenuPreset,
-  currentPresetSummary,
-  presetSummaries,
   resultCount,
   dateLabelDisplayMode,
   isListItemSelected,
@@ -204,13 +194,12 @@ export const FilterConfigScreen = ({
   onSelectSort,
   onSelectGroup,
   onToggleMetaTag,
-  onApplyPreset,
-  onRemovePreset,
-  onOpenSavePreset,
   onClearFilters,
   onClearSection,
   onToggleDateLabelDisplayMode,
 }: FilterConfigScreenProps) => {
+  const scrollViewRef = useRef<ScrollView>(null);
+  const { height: windowHeight } = useWindowDimensions();
   const formatActiveDateLabel = (value: string) => (
     dateLabelDisplayMode === 'remaining'
       ? formatDateDisplayLabel(value, 'remaining')
@@ -218,13 +207,45 @@ export const FilterConfigScreen = ({
   );
   const getDateMenuDisplayLabel = (menuLabel: string) =>
     getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
-  const [presetsExpanded, setPresetsExpanded] = useState(false);
   const [listsExpanded, setListsExpanded] = useState(true);
   const [priorityExpanded, setPriorityExpanded] = useState(false);
   const [dateExpanded, setDateExpanded] = useState(true);
   const [sortExpanded, setSortExpanded] = useState(false);
   const [groupExpanded, setGroupExpanded] = useState(false);
   const [metaTagsExpanded, setMetaTagsExpanded] = useState(false);
+  const oneHandedScrollOffset = useMemo(
+    () => Math.max(
+      OPTION_ROW_HEIGHT,
+      Math.round(
+        (windowHeight * FILTER_CONFIG_ONE_HANDED_SCROLL_RATIO) /
+          OPTION_ROW_HEIGHT,
+      ) * OPTION_ROW_HEIGHT,
+    ),
+    [windowHeight],
+  );
+  const scrollContentOffset = useMemo(
+    () => ({ x: 0, y: oneHandedScrollOffset }),
+    [oneHandedScrollOffset],
+  );
+  const scrollSpacerStyle = useMemo(
+    () => ({ height: oneHandedScrollOffset }),
+    [oneHandedScrollOffset],
+  );
+
+  useEffect(() => {
+    if (!visible) {
+      return undefined;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({
+        animated: false,
+        y: oneHandedScrollOffset,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [oneHandedScrollOffset, visible]);
 
   const renderOptionRow = useCallback(
     (
@@ -293,106 +314,36 @@ export const FilterConfigScreen = ({
       visible={visible}
     >
       <SafeAreaView style={styles.safeArea}>
-      <View style={styles.modal}>
-        <View style={styles.header}>
-          <View style={styles.headerTextWrap}>
-            <Text style={styles.title}>Filters</Text>
-            <Text style={styles.subtitle}>Configure how items are shown</Text>
-          </View>
-          <Pressable
-            accessibilityLabel="Close filters"
-            accessibilityRole="button"
-            onPress={onClose}
-            style={({ pressed }) => [
-              styles.closeButton,
-              pressed && styles.closeButtonPressed,
-            ]}
-          >
-            <Text style={styles.closeIcon}>×</Text>
-          </Pressable>
-        </View>
-
-        <ScrollView
-          contentContainerStyle={styles.bodyContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          style={styles.body}
-        >
-          <AccordionSection
-            canClear={activeMenuPreset !== null}
-            expanded={presetsExpanded}
-            onClear={() => onClearSection('presets')}
-            onToggle={() => setPresetsExpanded((current) => !current)}
-            subtitle={activeMenuPreset?.label ?? 'No preset applied'}
-            title="Presets"
-          >
-            {latestMenuPreset ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => onApplyPreset(latestMenuPreset)}
-                style={({ pressed }) => [
-                  styles.presetRow,
-                  pressed && styles.optionRowSelected,
-                ]}
-              >
-                <View style={styles.presetTextWrap}>
-                  <Text style={styles.optionLabel}>Quick apply</Text>
-                  <Text numberOfLines={1} style={styles.presetSummary}>
-                    {latestMenuPreset.label}
-                  </Text>
-                </View>
-                <Text style={styles.presetAction}>Apply</Text>
-              </Pressable>
-            ) : null}
-            {menuPresets.map((preset) => (
-              <View key={preset.id} style={styles.presetRowWrap}>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => onApplyPreset(preset)}
-                  style={({ pressed }) => [
-                    styles.presetRow,
-                    pressed && styles.optionRowSelected,
-                  ]}
-                >
-                  <View style={styles.presetTextWrap}>
-                    <Text style={styles.optionLabel}>{preset.label}</Text>
-                    <Text numberOfLines={1} style={styles.presetSummary}>
-                      {presetSummaries[preset.id] ?? ''}
-                    </Text>
-                  </View>
-                  <Text style={styles.presetAction}>Apply</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`Delete preset ${preset.label}`}
-                  accessibilityRole="button"
-                  onPress={() => onRemovePreset(preset.id)}
-                  style={({ pressed }) => [
-                    styles.presetDeleteButton,
-                    pressed && styles.sectionClearButtonPressed,
-                  ]}
-                >
-                  <Text style={styles.presetDeleteText}>×</Text>
-                </Pressable>
-              </View>
-            ))}
+        <StatusBar backgroundColor={THEME_BG} barStyle="dark-content" />
+        <View style={styles.modal}>
+          <View style={styles.header}>
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.title}>Filters</Text>
+              <Text style={styles.subtitle}>Configure how items are shown</Text>
+            </View>
             <Pressable
+              accessibilityLabel="Close filters"
               accessibilityRole="button"
-              onPress={onOpenSavePreset}
+              onPress={onClose}
               style={({ pressed }) => [
-                styles.savePresetRow,
-                pressed && styles.optionRowSelected,
+                styles.closeButton,
+                pressed && styles.closeButtonPressed,
               ]}
             >
-              <View style={styles.presetTextWrap}>
-                <Text style={styles.optionLabel}>Save current as preset</Text>
-                <Text numberOfLines={1} style={styles.presetSummary}>
-                  {currentPresetSummary}
-                </Text>
-              </View>
-              <Text style={styles.presetAction}>+</Text>
+              <Text style={styles.closeIcon}>×</Text>
             </Pressable>
-          </AccordionSection>
+          </View>
 
+          <ScrollView
+            ref={scrollViewRef}
+            contentOffset={scrollContentOffset}
+            contentContainerStyle={styles.bodyContent}
+            keyboardShouldPersistTaps="handled"
+            overScrollMode="never"
+            showsVerticalScrollIndicator={false}
+            style={styles.body}
+          >
+          <View pointerEvents="none" style={scrollSpacerStyle} />
           <AccordionSection
             canClear={filters.list.length > 0}
             expanded={listsExpanded}
@@ -582,16 +533,30 @@ export const FilterConfigScreen = ({
             ))}
           </AccordionSection>
 
-          <Pressable
-            accessibilityRole="button"
-            onPress={onClearFilters}
-            style={({ pressed }) => [
-              styles.clearAllRow,
-              pressed && styles.sectionHeaderPressed,
-            ]}
-          >
-            <Text style={styles.clearAllText}>Clear all filters</Text>
-          </Pressable>
+          <View style={styles.filterActionRow}>
+            <Pressable
+              accessibilityLabel="Clear all filters"
+              accessibilityRole="button"
+              onPress={onClearFilters}
+              style={({ pressed }) => [
+                styles.filterActionLink,
+                pressed && styles.sectionHeaderPressed,
+              ]}
+            >
+              <Text style={styles.clearAllText}>Clear filters</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.filterActionLink,
+                pressed && styles.sectionHeaderPressed,
+              ]}
+            >
+              <Text style={styles.closePageText}>Close page</Text>
+            </Pressable>
+          </View>
+          <View pointerEvents="none" style={scrollSpacerStyle} />
         </ScrollView>
 
         <View style={styles.footer}>
@@ -606,7 +571,7 @@ export const FilterConfigScreen = ({
             <Text style={styles.showResultsButtonText}>{resultsLabel}</Text>
           </Pressable>
         </View>
-      </View>
+        </View>
       </SafeAreaView>
     </Modal>
   );
@@ -616,6 +581,7 @@ const styles = StyleSheet.create({
   safeArea: {
     backgroundColor: THEME_BG,
     flex: 1,
+    paddingTop: TOP_SAFE_GAP,
   },
   modal: {
     flex: 1,
@@ -627,7 +593,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingBottom: 12,
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'android' ? 12 : 8,
+    paddingTop: 8,
   },
   headerTextWrap: {
     flex: 1,
@@ -852,65 +818,25 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     lineHeight: 22,
   },
-  presetRowWrap: {
-    position: 'relative',
-  },
-  presetRow: {
-    alignItems: 'center',
-    borderBottomColor: '#F2EBE3',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: OPTION_ROW_HEIGHT,
-    paddingHorizontal: 14,
-    paddingRight: 48,
-  },
-  presetTextWrap: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: 8,
-  },
-  presetSummary: {
-    color: THEME_TEXT_SECONDARY,
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    letterSpacing: 0.1,
-    lineHeight: 16,
-    marginTop: 2,
-  },
-  presetAction: {
-    color: THEME_ACCENT,
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
-  },
-  presetDeleteButton: {
-    alignItems: 'center',
-    height: 34,
-    justifyContent: 'center',
-    position: 'absolute',
-    right: 8,
-    top: (OPTION_ROW_HEIGHT - 34) / 2,
-    width: 34,
-  },
-  presetDeleteText: {
-    color: '#8F4D46',
-    fontSize: 22,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 22,
-  },
-  savePresetRow: {
+  filterActionRow: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: OPTION_ROW_HEIGHT,
-    paddingHorizontal: 14,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
-  clearAllRow: {
-    alignItems: 'center',
+  filterActionLink: {
     justifyContent: 'center',
     minHeight: 44,
-    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  closePageText: {
+    color: THEME_ACCENT,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0.1,
+    lineHeight: 20,
   },
   clearAllText: {
     color: '#8F4D46',

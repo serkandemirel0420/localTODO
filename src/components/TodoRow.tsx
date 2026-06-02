@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
+  type GestureResponderEvent,
   StyleSheet,
   Text,
   type LayoutChangeEvent,
@@ -80,7 +81,6 @@ const getTodoRowTextPreview = (text: string, maxLength: number) => {
 
 export type TodoRowProps = {
   dateLabelDisplayMode?: DateLabelDisplayMode;
-  deferSwipeable?: boolean;
   filterColors: FilterColorSettings;
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
   isSelected?: boolean;
@@ -96,6 +96,7 @@ export type TodoRowProps = {
   onOpenDetail: (id: string) => void;
   onOpenMenu: (id: string) => void;
   onSetDone: (id: string, done: boolean) => void;
+  onTouchStart?: (event: GestureResponderEvent) => void;
   onToggleSelect?: (id: string) => void;
   sectionLabel?: string;
   selectMode?: boolean;
@@ -103,7 +104,6 @@ export type TodoRowProps = {
 
 function TodoRowComponent({
   dateLabelDisplayMode = 'exact',
-  deferSwipeable = false,
   filterColors,
   hiddenMetaTagKinds = [],
   isSelected = false,
@@ -119,6 +119,7 @@ function TodoRowComponent({
   onOpenDetail,
   onOpenMenu,
   onSetDone,
+  onTouchStart,
   onToggleSelect,
   selectMode = false,
 }: TodoRowProps) {
@@ -154,7 +155,8 @@ function TodoRowComponent({
   const isHighlightedForSelection = selectMode && isSelected;
   const showRowHighlight =
     isHighlightedForMenu || isHighlightedForCreate || isHighlightedForSelection;
-  const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget && !selectMode;
+  const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
+  const useStaticRowContainer = selectMode;
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -723,6 +725,7 @@ function TodoRowComponent({
 
   return (
     <View
+      onTouchStart={onTouchStart}
       style={[
         styles.shell,
         isGroupedLayout && styles.shellGrouped,
@@ -730,7 +733,7 @@ function TodoRowComponent({
         showRowHighlight && isGroupedLayout && styles.shellMenuTargetGrouped,
       ]}
     >
-      {deferSwipeable ? (
+      {useStaticRowContainer ? (
         <View
           style={[
             styles.swipeableContainer,
@@ -785,6 +788,8 @@ function TodoRowComponent({
           style={[
             styles.selectionFrame,
             isGroupedLayout && styles.selectionFrameGrouped,
+            isHighlightedForSelection && styles.selectionFrameSelected,
+            isHighlightedForSelection && isGroupedLayout && styles.selectionFrameSelectedGrouped,
             isHighlightedForCreate && styles.selectionFrameNewlyCreated,
           ]}
         />
@@ -819,7 +824,6 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.isSelected === next.isSelected &&
   prev.isPendingDelete === next.isPendingDelete &&
   prev.selectMode === next.selectMode &&
-  prev.deferSwipeable === next.deferSwipeable &&
   prev.layout === next.layout &&
   prev.sectionLabel === next.sectionLabel &&
   prev.dateLabelDisplayMode === next.dateLabelDisplayMode &&
@@ -832,6 +836,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.onOpenMenu === next.onOpenMenu &&
   prev.onSetDone === next.onSetDone &&
   prev.onEnterSelectMode === next.onEnterSelectMode &&
+  prev.onTouchStart === next.onTouchStart &&
   prev.onToggleSelect === next.onToggleSelect
 );
 
@@ -875,6 +880,19 @@ const styles = StyleSheet.create({
     left: -7,
     right: -7,
     top: 1,
+  },
+  selectionFrameSelected: {
+    borderRadius: ROW_BORDER_RADIUS,
+    bottom: 3,
+    left: -6,
+    right: -6,
+    top: 3,
+  },
+  selectionFrameSelectedGrouped: {
+    bottom: 4,
+    left: -10,
+    right: -10,
+    top: 4,
   },
   swipeableContainer: {
     alignSelf: 'stretch',

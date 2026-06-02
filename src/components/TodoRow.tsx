@@ -3,6 +3,7 @@ import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Easing,
   StyleSheet,
   Text,
   type LayoutChangeEvent,
@@ -56,6 +57,8 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = 60;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
+const NEW_TODO_HIGHLIGHT_PULSE_MS = 520;
+const NEW_TODO_HIGHLIGHT_PULSE_COUNT = 3;
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
 
@@ -120,6 +123,7 @@ function TodoRowComponent({
   selectMode = false,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
+  const createHighlightPulse = useRef(new Animated.Value(0)).current;
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -160,6 +164,39 @@ function TodoRowComponent({
     swipeableRef.current?.close();
     setIsSwipeOpen(false);
   }, [isMenuTarget]);
+
+  useEffect(() => {
+    if (!isNewlyCreated) {
+      createHighlightPulse.setValue(0);
+      return;
+    }
+
+    createHighlightPulse.setValue(1);
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(createHighlightPulse, {
+          toValue: 0.45,
+          duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: false,
+        }),
+        Animated.timing(createHighlightPulse, {
+          toValue: 1,
+          duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: false,
+        }),
+      ]),
+      { iterations: NEW_TODO_HIGHLIGHT_PULSE_COUNT },
+    );
+
+    pulse.start();
+
+    return () => {
+      pulse.stop();
+      createHighlightPulse.setValue(0);
+    };
+  }, [createHighlightPulse, isNewlyCreated, item.id]);
 
   const handleRowLayout = useCallback((event: LayoutChangeEvent) => {
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -752,11 +789,53 @@ function TodoRowComponent({
           ]}
         />
       ) : null}
+      {isHighlightedForCreate ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.newlyCreatedOverlay,
+            isGroupedLayout && styles.newlyCreatedOverlayGrouped,
+            {
+              backgroundColor: createHighlightPulse.interpolate({
+                inputRange: [0.45, 1],
+                outputRange: ['rgba(76, 120, 255, 0.2)', 'rgba(76, 120, 255, 0.38)'],
+              }),
+              borderColor: createHighlightPulse.interpolate({
+                inputRange: [0.45, 1],
+                outputRange: ['rgba(76, 120, 255, 0.55)', 'rgba(76, 120, 255, 0.9)'],
+              }),
+            },
+          ]}
+        />
+      ) : null}
     </View>
   );
 }
 
-export const TodoRow = React.memo(TodoRowComponent);
+const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
+  prev.isNewlyCreated === next.isNewlyCreated &&
+  prev.isMenuTargetHighlighted === next.isMenuTargetHighlighted &&
+  prev.isMenuTarget === next.isMenuTarget &&
+  prev.isSelected === next.isSelected &&
+  prev.isPendingDelete === next.isPendingDelete &&
+  prev.selectMode === next.selectMode &&
+  prev.deferSwipeable === next.deferSwipeable &&
+  prev.layout === next.layout &&
+  prev.sectionLabel === next.sectionLabel &&
+  prev.dateLabelDisplayMode === next.dateLabelDisplayMode &&
+  prev.item === next.item &&
+  prev.filterColors === next.filterColors &&
+  prev.metaTagVisibility === next.metaTagVisibility &&
+  prev.hiddenMetaTagKinds === next.hiddenMetaTagKinds &&
+  prev.onDelete === next.onDelete &&
+  prev.onOpenDetail === next.onOpenDetail &&
+  prev.onOpenMenu === next.onOpenMenu &&
+  prev.onSetDone === next.onSetDone &&
+  prev.onEnterSelectMode === next.onEnterSelectMode &&
+  prev.onToggleSelect === next.onToggleSelect
+);
+
+export const TodoRow = React.memo(TodoRowComponent, areTodoRowPropsEqual);
 
 const styles = StyleSheet.create({
   shell: {
@@ -904,13 +983,31 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   rowNewlyCreated: {
-    backgroundColor: 'rgba(76, 120, 255, 0.1)',
+    backgroundColor: 'rgba(76, 120, 255, 0.16)',
   },
   rowNewlyCreatedGrouped: {
-    backgroundColor: 'rgba(76, 120, 255, 0.08)',
+    backgroundColor: 'rgba(76, 120, 255, 0.14)',
   },
   selectionFrameNewlyCreated: {
-    borderColor: 'rgba(76, 120, 255, 0.5)',
+    borderColor: 'rgba(76, 120, 255, 0.72)',
+    borderWidth: 2,
+  },
+  newlyCreatedOverlay: {
+    borderRadius: ROW_BORDER_RADIUS,
+    borderWidth: 2,
+    bottom: -2,
+    left: -2,
+    position: 'absolute',
+    right: -2,
+    top: -2,
+    zIndex: 4,
+  },
+  newlyCreatedOverlayGrouped: {
+    borderRadius: 0,
+    bottom: 0,
+    left: -6,
+    right: -6,
+    top: 0,
   },
   colorRail: {
     alignSelf: 'stretch',

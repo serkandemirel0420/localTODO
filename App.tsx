@@ -464,7 +464,7 @@ const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
-const NEW_TODO_HIGHLIGHT_DURATION_MS = 2400;
+const NEW_TODO_HIGHLIGHT_DURATION_MS = 3200;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_EXPANSION_SETTLE_MS = TODO_GROUP_REVEAL_ANIMATION_MS;
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
@@ -4532,11 +4532,24 @@ export default function App() {
       return;
     }
 
-    const frame = requestAnimationFrame(() => {
-      scrollTodoAboveMenu(highlightedId);
-    });
+    let cancelled = false;
+    const scrollHighlightedTodoIntoView = () => {
+      if (!cancelled) {
+        scrollTodoAboveMenu(highlightedId);
+      }
+    };
 
-    return () => cancelAnimationFrame(frame);
+    const frame = requestAnimationFrame(scrollHighlightedTodoIntoView);
+    const retryTimers = [
+      setTimeout(scrollHighlightedTodoIntoView, 120),
+      setTimeout(scrollHighlightedTodoIntoView, 320),
+    ];
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      retryTimers.forEach(clearTimeout);
+    };
   }, [newlyCreatedTodoHighlightId, scrollTodoAboveMenu, visibleTodoListRows]);
 
   const requestTodoMenuTargetScroll = useCallback((

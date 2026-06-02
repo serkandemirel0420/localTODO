@@ -6281,6 +6281,7 @@ export default function App() {
         <FilterConfigScreen
           activeMenuPreset={activeMenuPreset}
           currentPresetSummary={currentPresetSummary}
+          dateLabelDisplayMode={dateLabelDisplayMode}
           filterColors={filterColors}
           filters={selectedFilters}
           isListItemSelected={(item) => (
@@ -6305,6 +6306,7 @@ export default function App() {
           onShowResults={showTodoItems}
           onToggleFilter={toggleFilterValue}
           onToggleListItem={toggleListMenuItem}
+          onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
           onToggleMetaTag={toggleMetaTagVisibility}
           presetSummaries={filterConfigPresetSummaries}
           resultCount={filteredTodos.length}
@@ -6339,6 +6341,51 @@ export default function App() {
               showsVerticalScrollIndicator={false}
               style={styles.settingsBody}
             >
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Date labels</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {dateLabelDisplayMode === 'remaining' ? 'Days remaining' : 'Exact day'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.settingsCard}>
+                  <Pressable
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
+                    onPress={toggleDateLabelDisplayMode}
+                    style={({ pressed }) => [
+                      styles.settingsRow,
+                      pressed && styles.settingsOptionRowPressed,
+                    ]}
+                  >
+                    <View style={styles.settingsRowTextWrap}>
+                      <Text style={styles.settingsRowTitle}>Show days remaining</Text>
+                      <Text style={styles.settingsRowSubtitle}>
+                        0 days, 1 day, 3 days… instead of Today, Tomorrow, Jun 5.
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.settingsStatusPill,
+                        dateLabelDisplayMode === 'remaining' && styles.settingsStatusPillEnabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.settingsStatusText,
+                          dateLabelDisplayMode === 'remaining' && styles.settingsStatusTextEnabled,
+                        ]}
+                      >
+                        {dateLabelDisplayMode === 'remaining' ? 'Remaining' : 'Exact'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
+              </View>
+
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
@@ -6529,51 +6576,6 @@ export default function App() {
                     </Pressable>
                   </View>
                 ) : null}
-              </View>
-
-              <View style={styles.settingsSection}>
-                <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Date labels</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {dateLabelDisplayMode === 'remaining' ? 'Days remaining' : 'Exact day'}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.settingsCard}>
-                  <Pressable
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
-                    onPress={toggleDateLabelDisplayMode}
-                    style={({ pressed }) => [
-                      styles.settingsRow,
-                      pressed && styles.settingsOptionRowPressed,
-                    ]}
-                  >
-                    <View style={styles.settingsRowTextWrap}>
-                      <Text style={styles.settingsRowTitle}>Show days remaining</Text>
-                      <Text style={styles.settingsRowSubtitle}>
-                        0 days, 1 day, 3 days… instead of Today, Tomorrow, Jun 5.
-                      </Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.settingsStatusPill,
-                        dateLabelDisplayMode === 'remaining' && styles.settingsStatusPillEnabled,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.settingsStatusText,
-                          dateLabelDisplayMode === 'remaining' && styles.settingsStatusTextEnabled,
-                        ]}
-                      >
-                        {dateLabelDisplayMode === 'remaining' ? 'Remaining' : 'Exact'}
-                      </Text>
-                    </View>
-                  </Pressable>
-                </View>
               </View>
 
               <View style={styles.settingsSection}>

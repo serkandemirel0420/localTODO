@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   StyleSheet,
   Text,
@@ -79,6 +78,7 @@ export type TodoRowProps = {
   deferSwipeable?: boolean;
   filterColors: FilterColorSettings;
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
+  isSelected?: boolean;
   item: Todo;
   isMenuTarget: boolean;
   isMenuTargetHighlighted?: boolean;
@@ -86,16 +86,20 @@ export type TodoRowProps = {
   layout?: 'standalone' | 'grouped';
   metaTagVisibility: MetaTagVisibility;
   onDelete: (id: string) => void;
+  onEnterSelectMode?: (id: string) => void;
   onOpenDetail: (id: string) => void;
   onOpenMenu: (id: string) => void;
   onSetDone: (id: string, done: boolean) => void;
+  onToggleSelect?: (id: string) => void;
   sectionLabel?: string;
+  selectMode?: boolean;
 };
 
 function TodoRowComponent({
   deferSwipeable = false,
   filterColors,
   hiddenMetaTagKinds = [],
+  isSelected = false,
   item,
   isMenuTarget,
   isMenuTargetHighlighted = false,
@@ -103,9 +107,12 @@ function TodoRowComponent({
   layout = 'standalone',
   metaTagVisibility,
   onDelete,
+  onEnterSelectMode,
   onOpenDetail,
   onOpenMenu,
   onSetDone,
+  onToggleSelect,
+  selectMode = false,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
@@ -134,7 +141,8 @@ function TodoRowComponent({
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
   const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_PREVIEW_MAX_LENGTH);
   const isHighlightedForMenu = isMenuTargetHighlighted;
-  const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget;
+  const isHighlightedForSelection = selectMode && isSelected;
+  const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget && !selectMode;
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -173,15 +181,38 @@ function TodoRowComponent({
     return false;
   }, []);
 
+  const toggleSelection = useCallback(() => {
+    if (isPendingDelete) {
+      return;
+    }
+
+    closeOtherOpenSwipeable();
+    onToggleSelect?.(item.id);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [closeOtherOpenSwipeable, isPendingDelete, item.id, onToggleSelect]);
+
   const toggleDoneFromCheckbox = useCallback(() => {
     if (isPendingDelete) {
+      return;
+    }
+
+    if (selectMode) {
+      toggleSelection();
       return;
     }
 
     closeOtherOpenSwipeable();
     onSetDone(item.id, !item.done);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeOtherOpenSwipeable, isPendingDelete, item.done, item.id, onSetDone]);
+  }, [
+    closeOtherOpenSwipeable,
+    isPendingDelete,
+    item.done,
+    item.id,
+    onSetDone,
+    selectMode,
+    toggleSelection,
+  ]);
 
   const toggleDoneFromSwipe = useCallback(() => {
     if (isPendingDelete) {
@@ -220,6 +251,11 @@ function TodoRowComponent({
       return;
     }
 
+    if (selectMode) {
+      toggleSelection();
+      return;
+    }
+
     if (isSwipeOpen) {
       closeSwipeable();
       return;
@@ -237,45 +273,24 @@ function TodoRowComponent({
     isSwipeOpen,
     item.id,
     onOpenDetail,
+    selectMode,
+    toggleSelection,
   ]);
 
-  const openRowActions = useCallback(() => {
-    if (isPendingDelete) {
+  const enterSelectMode = useCallback(() => {
+    if (isPendingDelete || selectMode) {
       return;
     }
 
     closeOtherOpenSwipeable();
-
-    Alert.alert(
-      item.text,
-      content || undefined,
-      [
-        {
-          text: item.done ? 'Mark active' : 'Mark done',
-          onPress: () => onSetDone(item.id, !item.done),
-        },
-        {
-          text: 'More options',
-          onPress: openTodoMenu,
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => onDelete(item.id),
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
+    onEnterSelectMode?.(item.id);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
   }, [
     closeOtherOpenSwipeable,
-    content,
     isPendingDelete,
-    item.done,
     item.id,
-    item.text,
-    onDelete,
-    onSetDone,
-    openTodoMenu,
+    onEnterSelectMode,
+    selectMode,
   ]);
 
   const handleSwipeableWillOpen = useCallback(
@@ -538,6 +553,9 @@ function TodoRowComponent({
         isHighlightedForMenu && (
           isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
         ),
+        isHighlightedForSelection && (
+          isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
+        ),
       ]}
     >
       {!isGroupedLayout && todoColorTheme ? (
@@ -551,8 +569,14 @@ function TodoRowComponent({
       ) : null}
       <GestureTouchableOpacity
         accessibilityRole="checkbox"
-        accessibilityState={{ checked: item.done }}
-        accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
+        accessibilityState={{
+          checked: selectMode ? isSelected : item.done,
+        }}
+        accessibilityLabel={
+          selectMode
+            ? (isSelected ? 'Deselect todo' : 'Select todo')
+            : (item.done ? 'Mark todo active' : 'Mark todo done')
+        }
         activeOpacity={0.72}
         disabled={isPendingDelete}
         onPress={toggleDoneFromCheckbox}
@@ -561,10 +585,16 @@ function TodoRowComponent({
         <View
           style={[
             styles.checkbox,
-            item.done && styles.checkboxChecked,
+            selectMode
+              ? (isSelected ? styles.checkboxChecked : styles.checkboxSelectMode)
+              : (item.done && styles.checkboxChecked),
           ]}
         >
-          {item.done ? (
+          {selectMode ? (
+            isSelected ? (
+              <Ionicons color={THEME_CARD} name="checkmark" size={14} />
+            ) : null
+          ) : item.done ? (
             <Ionicons color={THEME_CARD} name="checkmark" size={14} />
           ) : null}
         </View>
@@ -572,12 +602,16 @@ function TodoRowComponent({
       <GestureTouchableOpacity
         accessibilityRole="button"
         accessibilityLabel={
-          isPendingDelete ? `Deleting todo: ${item.text}` : `Open todo details: ${item.text}`
+          isPendingDelete
+            ? `Deleting todo: ${item.text}`
+            : selectMode
+              ? (isSelected ? `Deselect todo: ${item.text}` : `Select todo: ${item.text}`)
+              : `Open todo details: ${item.text}`
         }
         activeOpacity={1}
         delayLongPress={280}
         disabled={isPendingDelete}
-        onLongPress={openRowActions}
+        onLongPress={enterSelectMode}
         onPress={handleTodoPress}
         style={styles.textPressable}
       >
@@ -639,8 +673,8 @@ function TodoRowComponent({
       style={[
         styles.shell,
         isGroupedLayout && styles.shellGrouped,
-        isHighlightedForMenu && styles.shellMenuTarget,
-        isHighlightedForMenu && isGroupedLayout && styles.shellMenuTargetGrouped,
+        (isHighlightedForMenu || isHighlightedForSelection) && styles.shellMenuTarget,
+        (isHighlightedForMenu || isHighlightedForSelection) && isGroupedLayout && styles.shellMenuTargetGrouped,
       ]}
     >
       {deferSwipeable ? (
@@ -692,7 +726,7 @@ function TodoRowComponent({
           {rowContent}
         </Swipeable>
       )}
-      {isHighlightedForMenu ? (
+      {(isHighlightedForMenu || isHighlightedForSelection) ? (
         <View
           pointerEvents="none"
           style={[
@@ -877,6 +911,9 @@ const styles = StyleSheet.create({
   },
   checkboxChecked: {
     backgroundColor: THEME_ACCENT,
+    borderColor: THEME_ACCENT,
+  },
+  checkboxSelectMode: {
     borderColor: THEME_ACCENT,
   },
   textPressable: {

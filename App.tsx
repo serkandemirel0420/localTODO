@@ -915,6 +915,9 @@ export default function App() {
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [selectedTodoIds, setSelectedTodoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
@@ -967,6 +970,8 @@ export default function App() {
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
+  const todoSelectMode = selectedTodoIds.size > 0;
+  const selectedTodoCount = selectedTodoIds.size;
   menuModeRef.current = menuMode;
   activeTodoMenuIdRef.current = activeTodoMenuId;
   listMenuOpenRef.current = listMenuOpen;
@@ -1326,6 +1331,34 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, [closeListMenuState]);
 
+  const exitTodoSelectMode = useCallback(() => {
+    setSelectedTodoIds(new Set());
+  }, []);
+
+  const enterTodoSelectMode = useCallback((id: string) => {
+    closeListMenuState();
+    setSettingsModalVisible(false);
+    setActiveTodoDetailId(null);
+    setActiveTodoDetailDraftContent('');
+    setActiveTodoDetailDraftText('');
+    todoDetailDraftTodoIdRef.current = null;
+    setSelectedTodoIds(new Set([id]));
+  }, [closeListMenuState]);
+
+  const toggleTodoSelection = useCallback((id: string) => {
+    setSelectedTodoIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+
+      return next;
+    });
+  }, []);
+
   const closeTodoDetailModal = useCallback(() => {
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
@@ -1684,6 +1717,12 @@ export default function App() {
       return true;
     }
 
+    if (todoSelectMode) {
+      exitTodoSelectMode();
+      Haptics.selectionAsync().catch(() => undefined);
+      return true;
+    }
+
     if (datePickerVisible) {
       setDatePickerVisible(false);
       return true;
@@ -1744,12 +1783,14 @@ export default function App() {
     createDrawerPicker,
     createDrawerVisible,
     datePickerVisible,
+    exitTodoSelectMode,
     menuMode,
     repeatReminderModalVisible,
     presetSaveModalVisible,
     resetCreateDrawerState,
     settingsModalVisible,
     submenuOpen,
+    todoSelectMode,
   ]);
 
   useEffect(() => {
@@ -2057,6 +2098,15 @@ export default function App() {
     ]);
     setActiveTodoMenuId((current) => (current === id ? null : current));
     setActiveTodoDetailId((current) => (current === id ? null : current));
+    setSelectedTodoIds((current) => {
+      if (!current.has(id)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
   }, [pendingDeleteIds, todos]);
 
@@ -2155,6 +2205,47 @@ export default function App() {
       cancelTodoAlarm(id).catch(() => undefined);
     }
   }, [hideDoneTodos, pendingDeleteIds, todos]);
+
+  const deleteSelectedTodos = useCallback(() => {
+    const ids = [...selectedTodoIds];
+
+    if (ids.length === 0) {
+      return;
+    }
+
+    Alert.alert(
+      ids.length === 1 ? 'Delete item?' : `Delete ${ids.length} items?`,
+      undefined,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            ids.forEach((id) => deleteTodo(id));
+            exitTodoSelectMode();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+              () => undefined,
+            );
+          },
+        },
+      ],
+    );
+  }, [deleteTodo, exitTodoSelectMode, selectedTodoIds]);
+
+  const markSelectedTodosDone = useCallback((done: boolean) => {
+    selectedTodoIds.forEach((id) => setTodoDone(id, done));
+    exitTodoSelectMode();
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [exitTodoSelectMode, selectedTodoIds, setTodoDone]);
+
+  const selectedTodosAllDone = useMemo(() => {
+    if (selectedTodoIds.size === 0) {
+      return false;
+    }
+
+    return [...selectedTodoIds].every((id) => todosById.get(id)?.done);
+  }, [selectedTodoIds, todosById]);
 
   const updateTodoFilters = useCallback((
     id: string,
@@ -2667,15 +2758,27 @@ export default function App() {
     () => [...pendingDeleteIds].sort().join('|'),
     [pendingDeleteIds],
   );
+  const selectedTodoKey = useMemo(
+    () => [...selectedTodoIds].sort().join('|'),
+    [selectedTodoIds],
+  );
   const todoListExtraData = useMemo(
     () => ({
       activeTodoMenuHighlightId,
       activeTodoMenuId,
       menuMode,
       pendingDeleteKey,
+      selectedTodoKey,
       settlingTodoGroupId,
     }),
-    [activeTodoMenuHighlightId, activeTodoMenuId, menuMode, pendingDeleteKey, settlingTodoGroupId],
+    [
+      activeTodoMenuHighlightId,
+      activeTodoMenuId,
+      menuMode,
+      pendingDeleteKey,
+      selectedTodoKey,
+      settlingTodoGroupId,
+    ],
   );
   const todoListOneHandedOffset = useMemo(() => {
     if (visibleTodoListRows.length === 0) {
@@ -3685,6 +3788,12 @@ export default function App() {
   }, [closeListMenuState]);
 
   const appHeaderTitle = useMemo(() => {
+    if (todoSelectMode) {
+      return selectedTodoCount === 1
+        ? '1 selected'
+        : `${selectedTodoCount} selected`;
+    }
+
     const activeListTitle =
       activeListDisplay.listLabel
       ?? (selectedFilters.list.length === 1 ? selectedFilters.list[0] : null);
@@ -3698,7 +3807,7 @@ export default function App() {
     }
 
     return 'TODO';
-  }, [activeListDisplay.listLabel, menuMode, selectedFilters.list]);
+  }, [activeListDisplay.listLabel, menuMode, selectedFilters.list, selectedTodoCount, todoSelectMode]);
 
   const focusHeaderSearch = useCallback(() => {
     setNavTab('search');
@@ -3720,6 +3829,7 @@ export default function App() {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     closeListMenuState();
+    exitTodoSelectMode();
     setSettingsModalVisible(false);
     setNavTab(null);
     setQuery('');
@@ -3731,10 +3841,11 @@ export default function App() {
       });
     });
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenuState, todoListOneHandedOffset]);
+  }, [closeListMenuState, exitTodoSelectMode, todoListOneHandedOffset]);
 
   const handleNavTabPress = useCallback((tab: NavTab) => {
     setActiveTodoMenuId(null);
+    exitTodoSelectMode();
 
     const sameCalendarOpen =
       tab === 'calendar' && listMenuOpen && (navTab === 'calendar' || menuMode === 'date');
@@ -3793,6 +3904,7 @@ export default function App() {
     closeHeaderSearch,
     closeListMenu,
     closeSettingsModal,
+    exitTodoSelectMode,
     focusHeaderSearch,
     listMenuOpen,
     menuMode,
@@ -4366,6 +4478,7 @@ export default function App() {
         const isTodoMenuTargetHighlighted =
           isTodoMenuTarget &&
           activeTodoMenuHighlightId === item.todo.id;
+        const isSelected = selectedTodoIds.has(item.todo.id);
 
         return (
           <View>
@@ -4380,6 +4493,7 @@ export default function App() {
               <TodoRow
                 filterColors={filterColors}
                 hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
+                isSelected={isSelected}
                 item={item.todo}
                 isMenuTarget={isTodoMenuTarget}
                 isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
@@ -4387,9 +4501,12 @@ export default function App() {
                 layout="grouped"
                 metaTagVisibility={metaTagVisibility}
                 onDelete={deleteTodo}
+                onEnterSelectMode={enterTodoSelectMode}
                 onOpenDetail={openTodoDetailModal}
                 onOpenMenu={openMenuForTodoAction}
                 onSetDone={setTodoDone}
+                onToggleSelect={toggleTodoSelection}
+                selectMode={todoSelectMode}
                 sectionLabel={item.sectionLabel}
                 deferSwipeable={
                   settlingTodoGroupId !== null &&
@@ -4409,21 +4526,26 @@ export default function App() {
       const isTodoMenuTargetHighlighted =
         isTodoMenuTarget &&
         activeTodoMenuHighlightId === item.todo.id;
+      const isSelected = selectedTodoIds.has(item.todo.id);
 
       return (
         <View>
           {renderVisibleTodoRowGap(item.gapBefore)}
           <TodoRow
             filterColors={filterColors}
+            isSelected={isSelected}
             item={item.todo}
             isMenuTarget={isTodoMenuTarget}
             isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
             isPendingDelete={isPendingDelete}
             metaTagVisibility={metaTagVisibility}
             onDelete={deleteTodo}
+            onEnterSelectMode={enterTodoSelectMode}
             onOpenDetail={openTodoDetailModal}
             onOpenMenu={openMenuForTodoAction}
             onSetDone={setTodoDone}
+            onToggleSelect={toggleTodoSelection}
+            selectMode={todoSelectMode}
           />
         </View>
       );
@@ -4432,6 +4554,7 @@ export default function App() {
       activeTodoMenuId,
       activeTodoMenuHighlightId,
       deleteTodo,
+      enterTodoSelectMode,
       filterColors,
       getInstantPressHandlers,
       groupedHiddenMetaTagKinds,
@@ -4441,9 +4564,12 @@ export default function App() {
       openMenuForTodoAction,
       pendingDeleteIds,
       renderVisibleTodoRowGap,
+      selectedTodoIds,
       setTodoDone,
       settlingTodoGroupId,
       toggleTodoGroupCollapsed,
+      toggleTodoSelection,
+      todoSelectMode,
     ],
   );
 
@@ -4453,27 +4579,76 @@ export default function App() {
         <StatusBar barStyle="dark-content" />
         <View style={styles.screen}>
         <View style={styles.appHeader}>
+          {todoSelectMode ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel selection"
+              onPress={() => {
+                exitTodoSelectMode();
+                Haptics.selectionAsync().catch(() => undefined);
+              }}
+              style={({ pressed }) => [
+                styles.appHeaderSideButton,
+                styles.appHeaderSideButtonLeft,
+                pressed && styles.appHeaderSideButtonPressed,
+              ]}
+            >
+              <Ionicons color={NAV_ACCENT} name="close" size={24} />
+            </Pressable>
+          ) : null}
           <Text numberOfLines={1} style={styles.appHeaderTitle}>
             {appHeaderTitle}
           </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityHint="Opens settings"
-            accessibilityLabel="Settings"
-            accessibilityState={{ selected: navTab === 'settings' }}
-            onPress={() => handleNavTabPress('settings')}
-            style={({ pressed }) => [
-              styles.appHeaderSettingsButton,
-              navTab === 'settings' && styles.appHeaderSettingsButtonActive,
-              pressed && styles.appHeaderSettingsButtonPressed,
-            ]}
-          >
-            <Ionicons
-              color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-              name="cog-outline"
-              size={23}
-            />
-          </Pressable>
+          {todoSelectMode ? (
+            <View style={styles.appHeaderSelectActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={selectedTodosAllDone ? 'Mark selected active' : 'Mark selected done'}
+                onPress={() => markSelectedTodosDone(!selectedTodosAllDone)}
+                style={({ pressed }) => [
+                  styles.appHeaderSideButton,
+                  pressed && styles.appHeaderSideButtonPressed,
+                ]}
+              >
+                <Ionicons
+                  color={NAV_ACCENT}
+                  name={selectedTodosAllDone ? 'arrow-undo' : 'checkmark'}
+                  size={23}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Delete selected items"
+                onPress={deleteSelectedTodos}
+                style={({ pressed }) => [
+                  styles.appHeaderSideButton,
+                  pressed && styles.appHeaderSideButtonPressed,
+                ]}
+              >
+                <Ionicons color="#D14A42" name="trash-outline" size={22} />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityHint="Opens settings"
+              accessibilityLabel="Settings"
+              accessibilityState={{ selected: navTab === 'settings' }}
+              onPress={() => handleNavTabPress('settings')}
+              style={({ pressed }) => [
+                styles.appHeaderSideButton,
+                styles.appHeaderSideButtonRight,
+                navTab === 'settings' && styles.appHeaderSettingsButtonActive,
+                pressed && styles.appHeaderSideButtonPressed,
+              ]}
+            >
+              <Ionicons
+                color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+                name="cog-outline"
+                size={23}
+              />
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.headerSearchRow}>
@@ -7505,21 +7680,34 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     width: '100%',
   },
-  appHeaderSettingsButton: {
+  appHeaderSideButton: {
     alignItems: 'center',
     borderRadius: 18,
     height: 36,
     justifyContent: 'center',
     position: 'absolute',
-    right: HORIZONTAL_PADDING,
     top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
     width: 36,
   },
+  appHeaderSideButtonLeft: {
+    left: HORIZONTAL_PADDING,
+  },
+  appHeaderSideButtonRight: {
+    right: HORIZONTAL_PADDING,
+  },
+  appHeaderSideButtonPressed: {
+    opacity: 0.72,
+  },
+  appHeaderSelectActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    position: 'absolute',
+    right: HORIZONTAL_PADDING - 4,
+    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+  },
   appHeaderSettingsButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
-  },
-  appHeaderSettingsButtonPressed: {
-    opacity: 0.72,
   },
   headerSearchRow: {
     backgroundColor: THEME_BG,

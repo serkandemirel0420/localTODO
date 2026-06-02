@@ -12,11 +12,13 @@ import {
 
 import {
   CUSTOM_DATE_LABEL,
+  formatDateDisplayLabel,
   formatDateFilterLabel,
   getDateMenuClearValue,
   getDateMenuColorLookupValue,
   getDateMenuItemDisplayLabel,
   isDateMenuItemSelected,
+  type DateLabelDisplayMode,
 } from '../dates';
 import {
   getFilterColorTheme,
@@ -79,6 +81,7 @@ type FilterConfigScreenProps = {
   currentPresetSummary: string;
   presetSummaries: Record<string, string>;
   resultCount: number;
+  dateLabelDisplayMode: DateLabelDisplayMode;
   isListItemSelected: (item: FilterConfigListItem) => boolean;
   onClose: () => void;
   onShowResults: () => void;
@@ -97,6 +100,7 @@ type FilterConfigScreenProps = {
   onClearSection: (
     section: 'presets' | 'lists' | 'priority' | 'date' | 'sort' | 'group' | 'metaTags',
   ) => void;
+  onToggleDateLabelDisplayMode: () => void;
 };
 
 const formatSelectionSummary = (values: string[], emptyLabel: string) => {
@@ -188,6 +192,7 @@ export const FilterConfigScreen = ({
   currentPresetSummary,
   presetSummaries,
   resultCount,
+  dateLabelDisplayMode,
   isListItemSelected,
   onClose,
   onShowResults,
@@ -204,7 +209,15 @@ export const FilterConfigScreen = ({
   onOpenSavePreset,
   onClearFilters,
   onClearSection,
+  onToggleDateLabelDisplayMode,
 }: FilterConfigScreenProps) => {
+  const formatActiveDateLabel = (value: string) => (
+    dateLabelDisplayMode === 'remaining'
+      ? formatDateDisplayLabel(value, 'remaining')
+      : formatDateFilterLabel(value)
+  );
+  const getDateMenuDisplayLabel = (menuLabel: string) =>
+    getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
   const [presetsExpanded, setPresetsExpanded] = useState(false);
   const [listsExpanded, setListsExpanded] = useState(true);
   const [priorityExpanded, setPriorityExpanded] = useState(false);
@@ -455,14 +468,35 @@ export const FilterConfigScreen = ({
             onClear={() => onClearSection('date')}
             onToggle={() => setDateExpanded((current) => !current)}
             subtitle={formatSelectionSummary(
-              filters.date.map((value) => formatDateFilterLabel(value)),
+              filters.date.map((value) => formatActiveDateLabel(value)),
               'Any date',
             )}
             title="Date"
           >
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
+              onPress={onToggleDateLabelDisplayMode}
+              style={({ pressed }) => [
+                styles.dateDisplayModeRow,
+                pressed && styles.optionRowSelected,
+              ]}
+            >
+              <View style={styles.dateDisplayModeTextWrap}>
+                <Text style={styles.optionLabel}>Show days remaining</Text>
+                <Text style={styles.dateDisplayModeSubtitle}>
+                  {dateLabelDisplayMode === 'remaining'
+                    ? '0 days, 1 day, 3 days…'
+                    : 'Today, Tomorrow, Jun 5…'}
+                </Text>
+              </View>
+              <Text style={styles.dateDisplayModeValue}>
+                {dateLabelDisplayMode === 'remaining' ? 'On' : 'Off'}
+              </Text>
+            </Pressable>
             {DATE_MENU_ITEMS.map((label) => {
               const selected = isDateMenuItemSelected(label, filters.date);
-              const displayLabel = getDateMenuItemDisplayLabel(label, filters.date);
+              const displayLabel = getDateMenuDisplayLabel(label);
               const colorLookupValue = getDateMenuColorLookupValue(label, filters.date);
               const colorTheme = getFilterColorTheme(
                 filterColors,
@@ -770,6 +804,35 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderColor: '#A79F96',
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  dateDisplayModeRow: {
+    alignItems: 'center',
+    borderBottomColor: '#F2EBE3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: OPTION_ROW_HEIGHT,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  dateDisplayModeTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+  dateDisplayModeSubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0.1,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  dateDisplayModeValue: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
   },
   selectableRow: {
     position: 'relative',

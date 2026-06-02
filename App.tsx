@@ -1391,13 +1391,14 @@ export default function App() {
       closeListMenu();
     }
 
+    exitTodoSelectMode();
     setNavTab((current) => (current === 'search' ? null : current));
     setActiveTodoDetailDraftContent(todo?.content ?? '');
     setActiveTodoDetailDraftText(todo?.text ?? '');
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenu, listMenuOpen, pendingDeleteIds, todos]);
+  }, [closeListMenu, exitTodoSelectMode, listMenuOpen, pendingDeleteIds, todos]);
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
     if (translationY <= 0) {
@@ -1869,6 +1870,7 @@ export default function App() {
       closeListMenu();
     }
 
+    exitTodoSelectMode();
     searchInputRef.current?.blur();
     setCreateDrawerPicker(null);
     resetCreateDrawerState();
@@ -1881,7 +1883,7 @@ export default function App() {
     Keyboard.dismiss();
     setCreateDrawerVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenu, listMenuOpen, resetCreateDrawerState, todoTextMaxLength]);
+  }, [closeListMenu, exitTodoSelectMode, listMenuOpen, resetCreateDrawerState, todoTextMaxLength]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -3778,6 +3780,7 @@ export default function App() {
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
     closeListMenuState();
+    exitTodoSelectMode();
     setSettingsBackupExpanded(false);
     setSettingsColorsExpanded(false);
     setSettingsDeletedExpanded(false);
@@ -3785,7 +3788,7 @@ export default function App() {
     setSettingsListsExpanded(false);
     setSettingsModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenuState]);
+  }, [closeListMenuState, exitTodoSelectMode]);
 
   const appHeaderTitle = useMemo(() => {
     if (todoSelectMode) {

@@ -4686,7 +4686,7 @@ export default function App() {
         return (
           <View>
             {renderVisibleTodoRowGap(item.gapBefore)}
-            <TodoGroupReveal reveal={isBodyRevealed}>
+            <TodoGroupReveal key={item.id} reveal={isBodyRevealed}>
               <View
                 style={[
                   styles.todoSectionGroupedShell,

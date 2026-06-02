@@ -9,7 +9,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-export const TODO_GROUP_REVEAL_ANIMATION_MS = 220;
+export const TODO_GROUP_REVEAL_ANIMATION_MS = 280;
 
 type TodoGroupRevealProps = {
   children: React.ReactNode;
@@ -63,33 +63,33 @@ export function AnimatedTodoSectionChevron({
 
 export function TodoGroupReveal({ children, reveal }: TodoGroupRevealProps) {
   const progress = useRef(new Animated.Value(reveal ? 0 : 1)).current;
-  const [measuredHeight, setMeasuredHeight] = useState(0);
+  const [layoutHeight, setLayoutHeight] = useState(0);
 
   useEffect(() => {
+    if (layoutHeight <= 0) {
+      return;
+    }
+
+    progress.setValue(reveal ? 0 : 1);
     Animated.timing(progress, {
       toValue: reveal ? 1 : 0,
       duration: TODO_GROUP_REVEAL_ANIMATION_MS,
       easing: reveal ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
       useNativeDriver: false,
     }).start();
-  }, [progress, reveal]);
+  }, [layoutHeight, progress, reveal]);
 
   const animatedStyle =
-    measuredHeight > 0
+    layoutHeight > 0
       ? {
           maxHeight: progress.interpolate({
             inputRange: [0, 1],
-            outputRange: [0, measuredHeight],
+            outputRange: [0, layoutHeight],
           }),
-          opacity: progress.interpolate({
-            inputRange: [0, 1],
-            outputRange: [0, 1],
-          }),
+          opacity: progress,
           overflow: 'hidden' as const,
         }
-      : reveal
-        ? { opacity: 0, overflow: 'hidden' as const }
-        : { height: 0, opacity: 0, overflow: 'hidden' as const };
+      : { opacity: 0, overflow: 'hidden' as const };
 
   return (
     <Animated.View style={animatedStyle}>
@@ -97,8 +97,8 @@ export function TodoGroupReveal({ children, reveal }: TodoGroupRevealProps) {
         onLayout={(event: LayoutChangeEvent) => {
           const nextHeight = Math.ceil(event.nativeEvent.layout.height);
 
-          if (nextHeight > 0 && nextHeight !== measuredHeight) {
-            setMeasuredHeight(nextHeight);
+          if (nextHeight > 0 && nextHeight !== layoutHeight) {
+            setLayoutHeight(nextHeight);
           }
         }}
       >

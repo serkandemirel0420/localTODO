@@ -74,6 +74,7 @@ import {
   getDateMenuItemDisplayLabel,
   getInitialDatePickerValue,
   getSelectedCustomDateLabel,
+  isCustomDateLabel,
   isDateFilterOverdue,
   isDateMenuItemSelected,
   startOfDay,
@@ -765,6 +766,47 @@ const normalizeFilterValues = (filters: TodoFilters) => ({
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
 
+const getSharedTodoFilters = (items: Todo[]): TodoFilters => {
+  if (items.length === 0) {
+    return cloneTodoFilters();
+  }
+
+  const [firstItem, ...remainingItems] = items;
+  const getSharedValues = (filterKey: keyof TodoFilters) =>
+    firstItem.filters[filterKey].filter((value) =>
+      remainingItems.every((item) => item.filters[filterKey].includes(value)),
+    );
+
+  return {
+    date: getSharedValues('date'),
+    list: getSharedValues('list'),
+    priority: getSharedValues('priority'),
+    reminder: getSharedValues('reminder'),
+  };
+};
+
+const getMergedTodoFilters = (items: Todo[]): TodoFilters => {
+  const merged = cloneTodoFilters();
+
+  items.forEach((item) => {
+    FILTER_KEYS.forEach((filterKey) => {
+      item.filters[filterKey].forEach((value) => {
+        if (!merged[filterKey].includes(value)) {
+          merged[filterKey].push(value);
+        }
+      });
+    });
+
+    item.filters.reminder.forEach((value) => {
+      if (!merged.reminder.includes(value)) {
+        merged.reminder.push(value);
+      }
+    });
+  });
+
+  return merged;
+};
+
 const menuPresetMatchesState = (
   preset: MenuPreset,
   filters: SelectedFilters,
@@ -989,6 +1031,7 @@ export default function App() {
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
+  const deferredSelectedFilters = useDeferredValue(selectedFilters);
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
   const createContentInputRef = useRef<TextInput>(null);
@@ -1954,13 +1997,13 @@ export default function App() {
 
     return matchedTodos
       .filter((todo) => !hideDoneTodos || !todo.done)
-      .filter((todo) => todoMatchesFilters(todo, selectedFilters, listMenuTree));
+      .filter((todo) => todoMatchesFilters(todo, deferredSelectedFilters, listMenuTree));
   }, [
+    deferredSelectedFilters,
     hideDoneTodos,
     listMenuTree,
     searchQuery,
     searchResultIds,
-    selectedFilters,
     todos,
     todosById,
   ]);
@@ -2357,38 +2400,62 @@ export default function App() {
     return [...selectedTodoIds].every((id) => todosById.get(id)?.done);
   }, [selectedTodoIds, todosById]);
 
-  const updateTodoFilters = useCallback((
-    id: string,
+  const updateTodoFiltersForIds = useCallback((
+    ids: string[],
     updater: (filters: SelectedFilters) => SelectedFilters,
   ) => {
-    if (pendingDeleteIds.has(id)) {
+    const targetIds = new Set(ids.filter((id) => !pendingDeleteIds.has(id)));
+
+    if (targetIds.size === 0) {
       return;
     }
 
     setTodos((current) => {
-      let nextFilters: TodoFilters | null = null;
-      let updatedTodo: Todo | null = null;
+      const updatedTodos: Todo[] = [];
       const nextTodos = current.map((todo) => {
-        if (todo.id !== id) {
+        if (!targetIds.has(todo.id)) {
           return todo;
         }
 
-        nextFilters = updater(cloneTodoFilters(todo.filters));
-        updatedTodo = { ...todo, filters: nextFilters };
+        const nextFilters = updater(cloneTodoFilters(todo.filters));
+        const updatedTodo = { ...todo, filters: nextFilters };
+        updatedTodos.push(updatedTodo);
         return updatedTodo;
       });
 
-      if (nextFilters) {
-        localTodoStore.updateFilters(id, nextFilters).catch(() => undefined);
-      }
-
-      if (updatedTodo) {
-        syncTodoAlarm(updatedTodo).catch(() => undefined);
+      if (updatedTodos.length > 0) {
+        localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
+        updatedTodos.forEach((todo) => {
+          syncTodoAlarm(todo).catch(() => undefined);
+        });
       }
 
       return nextTodos;
     });
   }, [pendingDeleteIds]);
+
+  const getCurrentTodoEditTargetIds = useCallback(() => {
+    if (activeTodoMenuIdRef.current) {
+      return pendingDeleteIds.has(activeTodoMenuIdRef.current)
+        ? []
+        : [activeTodoMenuIdRef.current];
+    }
+
+    return [...selectedTodoIds].filter((id) => !pendingDeleteIds.has(id));
+  }, [pendingDeleteIds, selectedTodoIds]);
+
+  const updateCurrentTodoTargetFilters = useCallback((
+    updater: (filters: SelectedFilters) => SelectedFilters,
+  ) => {
+    const targetIds = getCurrentTodoEditTargetIds();
+
+    if (targetIds.length > 0) {
+      updateTodoFiltersForIds(targetIds, updater);
+      return;
+    }
+
+    setSelectedFilters((current) => updater(cloneTodoFilters(current)));
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const closeDatePicker = useCallback(() => {
     setDatePickerVisible(false);
@@ -2403,15 +2470,13 @@ export default function App() {
 
     if (datePickerApplyRef.current === 'create') {
       setCreateDraftFilters(applyDate);
-    } else if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, applyDate);
     } else {
-      setSelectedFilters(applyDate);
+      updateCurrentTodoTargetFilters(applyDate);
     }
 
     closeDatePicker();
     Haptics.selectionAsync().catch(() => undefined);
-  }, [activeTodoMenuId, closeDatePicker, updateTodoFilters]);
+  }, [closeDatePicker, updateCurrentTodoTargetFilters]);
 
   const clearPickedDate = useCallback(() => {
     const clearDate = (current: SelectedFilters) => ({
@@ -2421,15 +2486,13 @@ export default function App() {
 
     if (datePickerApplyRef.current === 'create') {
       setCreateDraftFilters(clearDate);
-    } else if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, clearDate);
     } else {
-      setSelectedFilters(clearDate);
+      updateCurrentTodoTargetFilters(clearDate);
     }
 
     closeDatePicker();
     Haptics.selectionAsync().catch(() => undefined);
-  }, [activeTodoMenuId, closeDatePicker, updateTodoFilters]);
+  }, [closeDatePicker, updateCurrentTodoTargetFilters]);
 
   const clearCreateDraftDate = useCallback(() => {
     setCreateDraftFilters((current) => ({
@@ -2470,10 +2533,10 @@ export default function App() {
         };
       });
     } else {
-      const activeTodoId = activeTodoMenuIdRef.current;
+      const targetIds = getCurrentTodoEditTargetIds();
 
-      if (activeTodoId) {
-        updateTodoFilters(activeTodoId, (filters) => {
+      if (targetIds.length > 0) {
+        updateTodoFiltersForIds(targetIds, (filters) => {
           const current = decodeTodoReminder(filters.reminder);
 
           return {
@@ -2485,7 +2548,7 @@ export default function App() {
     }
 
     Haptics.selectionAsync().catch(() => undefined);
-  }, [updateTodoFilters]);
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const openCreateRepeatModal = useCallback(() => {
     repeatReminderApplyRef.current = 'create';
@@ -2512,10 +2575,10 @@ export default function App() {
         };
       });
     } else {
-      const activeTodoId = activeTodoMenuIdRef.current;
+      const targetIds = getCurrentTodoEditTargetIds();
 
-      if (activeTodoId) {
-        updateTodoFilters(activeTodoId, (filters) => {
+      if (targetIds.length > 0) {
+        updateTodoFiltersForIds(targetIds, (filters) => {
           const current = decodeTodoReminder(filters.reminder);
           const nextTime = repeat === 'none'
             ? current.time
@@ -2531,7 +2594,7 @@ export default function App() {
 
     setRepeatReminderModalVisible(false);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [updateTodoFilters]);
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const clearCreateReminderTime = useCallback(() => {
     setCreateDraftFilters((draft) => ({
@@ -2555,55 +2618,59 @@ export default function App() {
   }, []);
 
   const openActiveTodoReminderModal = useCallback(() => {
-    if (!activeTodoMenuId) {
+    const [firstTargetId] = getCurrentTodoEditTargetIds();
+
+    if (!firstTargetId) {
       return;
     }
 
-    const reminderValues = todos.find((todo) => todo.id === activeTodoMenuId)?.filters.reminder ?? [];
+    const reminderValues = todos.find((todo) => todo.id === firstTargetId)?.filters.reminder ?? [];
 
     reminderTimeModalRef.current?.open({
       source: 'activeTodo',
       value: decodeTodoReminder(reminderValues).time,
     });
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, todos]);
+  }, [getCurrentTodoEditTargetIds, todos]);
 
   const openActiveTodoRepeatModal = useCallback(() => {
-    if (!activeTodoMenuId) {
+    const [firstTargetId] = getCurrentTodoEditTargetIds();
+
+    if (!firstTargetId) {
       return;
     }
 
-    const reminderValues = todos.find((todo) => todo.id === activeTodoMenuId)?.filters.reminder ?? [];
+    const reminderValues = todos.find((todo) => todo.id === firstTargetId)?.filters.reminder ?? [];
 
     repeatReminderApplyRef.current = 'activeTodo';
     setRepeatDraft(decodeTodoReminder(reminderValues).repeat);
     setRepeatReminderModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [activeTodoMenuId, todos]);
+  }, [getCurrentTodoEditTargetIds, todos]);
 
   const clearActiveTodoReminderTime = useCallback(() => {
-    const activeTodoId = activeTodoMenuIdRef.current;
+    const targetIds = getCurrentTodoEditTargetIds();
 
-    if (!activeTodoId) {
+    if (targetIds.length === 0) {
       return;
     }
 
-    updateTodoFilters(activeTodoId, (filters) => ({
+    updateTodoFiltersForIds(targetIds, (filters) => ({
       ...filters,
       reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
     }));
     reminderTimeModalRef.current?.close();
     Haptics.selectionAsync().catch(() => undefined);
-  }, [updateTodoFilters]);
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const clearActiveTodoRepeat = useCallback(() => {
-    const activeTodoId = activeTodoMenuIdRef.current;
+    const targetIds = getCurrentTodoEditTargetIds();
 
-    if (!activeTodoId) {
+    if (targetIds.length === 0) {
       return;
     }
 
-    updateTodoFilters(activeTodoId, (filters) => {
+    updateTodoFiltersForIds(targetIds, (filters) => {
       const current = decodeTodoReminder(filters.reminder);
 
       return {
@@ -2612,7 +2679,7 @@ export default function App() {
       };
     });
     Haptics.selectionAsync().catch(() => undefined);
-  }, [updateTodoFilters]);
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const handleCreateDrawerDatePress = useCallback((label: string) => {
     if (label === REMINDER_PICKER_LABEL) {
@@ -2769,8 +2836,11 @@ export default function App() {
     [listMenuTree, listOrderMode],
   );
   const visibleListMenuItems = useMemo(
-    () => buildVisibleListMenuItems(orderedListMenuTree, Boolean(activeTodoMenuId)),
-    [activeTodoMenuId, orderedListMenuTree],
+    () => buildVisibleListMenuItems(
+      orderedListMenuTree,
+      Boolean(activeTodoMenuId) || todoSelectMode,
+    ),
+    [activeTodoMenuId, orderedListMenuTree, todoSelectMode],
   );
   const filterConfigListItems = useMemo(
     () => buildVisibleListMenuItems(orderedListMenuTree, true),
@@ -2819,6 +2889,17 @@ export default function App() {
   );
   const effectiveSortMode = activeListDisplay.sortMode;
   const effectiveGroupMode = activeListDisplay.groupMode;
+  const todoListDisplay = useMemo(
+    () => resolveListDisplaySettings(
+      listMenuTree,
+      deferredSelectedFilters.list,
+      todoSortMode,
+      todoGroupMode,
+    ),
+    [deferredSelectedFilters.list, listMenuTree, todoGroupMode, todoSortMode],
+  );
+  const todoListSortMode = todoListDisplay.sortMode;
+  const todoListGroupMode = todoListDisplay.groupMode;
   const activeMenuPreset = useMemo(() => {
     if (activeTodoMenuId) {
       return null;
@@ -2839,31 +2920,32 @@ export default function App() {
     menuPresets,
     selectedFilters,
   ]);
-  const useSubsectionLayout = activeListDisplay.isSubsectionView && effectiveGroupMode === 'none';
+  const todoListUseSubsectionLayout =
+    todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
   const sortedTodos = useMemo(
     () => [...filteredTodos].sort((first, second) => (
-      compareTodosBySortMode(first, second, effectiveSortMode)
+      compareTodosBySortMode(first, second, todoListSortMode)
     )),
-    [effectiveSortMode, filteredTodos],
+    [filteredTodos, todoListSortMode],
   );
   const todoListRows = useMemo(
     () => buildTodoListRows(
       sortedTodos,
-      effectiveGroupMode,
+      todoListGroupMode,
       orderedListLabels,
       listMenuTree,
-      selectedFilters.list,
-      useSubsectionLayout,
+      deferredSelectedFilters.list,
+      todoListUseSubsectionLayout,
       dateLabelDisplayMode,
     ),
     [
       dateLabelDisplayMode,
-      effectiveGroupMode,
+      deferredSelectedFilters.list,
       listMenuTree,
       orderedListLabels,
-      selectedFilters.list,
       sortedTodos,
-      useSubsectionLayout,
+      todoListGroupMode,
+      todoListUseSubsectionLayout,
     ],
   );
   const visibleTodoListRows = useMemo(
@@ -2923,10 +3005,39 @@ export default function App() {
     () => ({ x: 0, y: todoListOneHandedOffset }),
     [todoListOneHandedOffset],
   );
-  const activeTodoMenuFilters = useMemo(
-    () => todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null,
-    [activeTodoMenuId, todos],
+  const selectedTodosForBulk = useMemo(
+    () => todos.filter((todo) => (
+      selectedTodoIds.has(todo.id) &&
+      !pendingDeleteIds.has(todo.id)
+    )),
+    [pendingDeleteIds, selectedTodoIds, todos],
   );
+  const bulkTodoSharedFilters = useMemo(
+    () => (selectedTodosForBulk.length > 0
+      ? getSharedTodoFilters(selectedTodosForBulk)
+      : null),
+    [selectedTodosForBulk],
+  );
+  const bulkTodoMenuFilters = useMemo(
+    () => (selectedTodosForBulk.length > 0
+      ? getMergedTodoFilters(selectedTodosForBulk)
+      : null),
+    [selectedTodosForBulk],
+  );
+  const activeTodoMenuFilters = useMemo(() => {
+    if (activeTodoMenuId) {
+      return todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null;
+    }
+
+    return bulkTodoMenuFilters;
+  }, [activeTodoMenuId, bulkTodoMenuFilters, todos]);
+  const activeTodoMenuSelectionFilters = useMemo(() => {
+    if (activeTodoMenuId) {
+      return todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null;
+    }
+
+    return bulkTodoSharedFilters;
+  }, [activeTodoMenuId, bulkTodoSharedFilters, todos]);
   const activeTodoDetail = useMemo(
     () => todos.find((todo) => todo.id === activeTodoDetailId) ?? null,
     [activeTodoDetailId, todos],
@@ -3017,7 +3128,9 @@ export default function App() {
     activeTodoDetailDraftTextForSave,
   ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
-  const includeActiveTodoReminderRows = Boolean(activeTodoMenuId);
+  const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
+  const hasTodoEditTargets = Boolean(activeTodoMenuId) || selectedTodosForBulk.length > 0;
+  const includeActiveTodoReminderRows = hasTodoEditTargets;
   const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
   const searchFilterItems = useMemo(
     () => buildActiveFilterItems(selectedFilters, dateLabelDisplayMode),
@@ -3161,15 +3274,66 @@ export default function App() {
           ),
           type: 'preset' as const,
         })),
-        {
+      );
+
+      if (!hasTodoEditTargets) {
+        rows.push({
           id: 'preset-save-current',
           label: 'Save current as preset',
           summary: currentPresetSummary,
           type: 'savePreset' as const,
-        },
-      );
+        });
+      }
 
       return rows;
+    }
+
+    if (todoSelectMode) {
+      return [
+        {
+          count: menuPresets.length || undefined,
+          id: 'main-presets',
+          label: 'Presets',
+          menuMode: 'presets',
+          type: 'menu',
+        },
+        {
+          count: menuFilters.list.length || undefined,
+          id: 'main-lists',
+          label: 'Lists',
+          menuMode: 'lists',
+          type: 'menu',
+        },
+        {
+          count: menuFilters.priority.length || undefined,
+          id: 'main-priority',
+          label: 'Priority',
+          menuMode: 'priority',
+          type: 'menu',
+        },
+        {
+          count: countDateMenuSelections(
+            menuFilters,
+            includeActiveTodoReminderRows,
+          ) || undefined,
+          id: 'main-date',
+          label: 'Date',
+          menuMode: 'date',
+          type: 'menu',
+        },
+        {
+          count: activeFilterCount || undefined,
+          id: 'main-filters',
+          label: 'Filters',
+          menuMode: 'filters',
+          type: 'menu',
+        },
+        {
+          id: 'main-clear-filters',
+          label: 'Clear filters',
+          type: 'clearFilters',
+        },
+      ];
     }
 
     const rows: MenuRow[] = [
@@ -3251,6 +3415,7 @@ export default function App() {
     activeFilterCount,
     activeMenuPreset,
     currentPresetSummary,
+    hasTodoEditTargets,
     includeActiveTodoReminderRows,
     latestMenuPreset,
     listOrderMode,
@@ -3260,6 +3425,7 @@ export default function App() {
     effectiveGroupMode,
     effectiveSortMode,
     metaTagVisibility,
+    todoSelectMode,
     visibleListMenuItems,
   ]);
 
@@ -3313,23 +3479,50 @@ export default function App() {
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
       const currentValues = current[filterKey];
-      const hasValue = currentValues.includes(value);
+      const formattedValue = filterKey === 'date'
+        ? formatDateFilterValue(value)
+        : value;
+      const hasValue = hasTodoEditTargets
+        ? (
+          filterKey === 'date'
+            ? isDateMenuItemSelected(value, menuSelectionFilters.date)
+            : menuSelectionFilters[filterKey].includes(value)
+        )
+        : currentValues.includes(value);
+
+      if (filterKey === 'priority' && hasTodoEditTargets) {
+        return {
+          ...current,
+          priority: value === 'None' ? [] : [value],
+        };
+      }
+
+      if (filterKey === 'date' && hasTodoEditTargets) {
+        return {
+          ...current,
+          date: formattedValue ? [formattedValue] : [],
+        };
+      }
 
       return {
         ...current,
         [filterKey]: hasValue
-          ? currentValues.filter((item) => item !== value)
-          : [...currentValues, value],
+          ? currentValues.filter((item) => (
+            filterKey === 'date'
+              ? formatDateFilterValue(item) !== formattedValue
+              : item !== value
+          ))
+          : [...currentValues, formattedValue || value],
       };
     };
 
-    if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, toggleValue);
-    } else {
-      setSelectedFilters(toggleValue);
-    }
+    updateCurrentTodoTargetFilters(toggleValue);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, updateTodoFilters]);
+  }, [
+    hasTodoEditTargets,
+    menuSelectionFilters,
+    updateCurrentTodoTargetFilters,
+  ]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
     if (label === REMINDER_PICKER_LABEL) {
@@ -3359,6 +3552,10 @@ export default function App() {
   const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
     const toggleValue = (current: SelectedFilters): SelectedFilters => {
       const list = current.list;
+
+      if (hasTodoEditTargets) {
+        return { ...current, list: [item.label] };
+      }
 
       if (item.isSubsection && item.parentLabel) {
         const parentNode = findListMenuNode(listMenuTree, item.parentLabel);
@@ -3394,14 +3591,10 @@ export default function App() {
       return { ...current, list: [...withoutFamily, item.label] };
     };
 
-    if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, toggleValue);
-    } else {
-      setSelectedFilters(toggleValue);
-    }
+    updateCurrentTodoTargetFilters(toggleValue);
 
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, listMenuTree, updateTodoFilters]);
+  }, [hasTodoEditTargets, listMenuTree, updateCurrentTodoTargetFilters]);
 
   const removeListMenuItem = useCallback((item: VisibleListMenuItem) => {
     const removeValue = (current: SelectedFilters) => {
@@ -3422,31 +3615,37 @@ export default function App() {
       };
     };
 
-    if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, removeValue);
-    } else {
-      setSelectedFilters(removeValue);
-    }
+    updateCurrentTodoTargetFilters(removeValue);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, listMenuTree, updateTodoFilters]);
+  }, [listMenuTree, updateCurrentTodoTargetFilters]);
 
   const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
     const removeValue = (current: SelectedFilters) => {
-      const nextValues = current[filterKey].filter((item) => item !== value);
+      const formattedValue = filterKey === 'date'
+        ? formatDateFilterValue(value)
+        : value;
+      const nextValues = current[filterKey].filter((item) => {
+        if (filterKey !== 'date') {
+          return item !== value;
+        }
+
+        if (formattedValue === CUSTOM_DATE_LABEL) {
+          return !isCustomDateLabel(item);
+        }
+
+        return formatDateFilterValue(item) !== formattedValue;
+      });
+
       return { ...current, [filterKey]: nextValues };
     };
 
-    if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, removeValue);
-    } else {
-      setSelectedFilters(removeValue);
-    }
+    updateCurrentTodoTargetFilters(removeValue);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, updateTodoFilters]);
+  }, [updateCurrentTodoTargetFilters]);
 
   const clearAppliedMenuPreset = useCallback(() => {
-    if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, () => cloneTodoFilters());
+    if (hasTodoEditTargets) {
+      updateCurrentTodoTargetFilters(() => cloneTodoFilters());
     } else {
       setSelectedFilters(cloneTodoFilters());
       setTodoSortMode('newest');
@@ -3459,7 +3658,11 @@ export default function App() {
     searchInputRef.current?.blur();
     setNavTab(null);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, closeListMenuState, updateTodoFilters]);
+  }, [
+    closeListMenuState,
+    hasTodoEditTargets,
+    updateCurrentTodoTargetFilters,
+  ]);
 
   const clearFilters = useCallback(() => {
     clearAppliedMenuPreset();
@@ -3598,18 +3801,14 @@ export default function App() {
           [filterKey]: [],
         };
 
-        if (filterKey === 'date' && activeTodoMenuId) {
+        if (filterKey === 'date' && hasTodoEditTargets) {
           nextFilters.reminder = [];
         }
 
         return nextFilters;
       };
 
-      if (activeTodoMenuId) {
-        updateTodoFilters(activeTodoMenuId, clearKey);
-      } else {
-        setSelectedFilters(clearKey);
-      }
+      updateCurrentTodoTargetFilters(clearKey);
       requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
       return;
     }
@@ -3675,14 +3874,14 @@ export default function App() {
       requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
     }
   }, [
-    activeTodoMenuId,
     clearAppliedMenuPreset,
     clearFilters,
+    hasTodoEditTargets,
     listMenuTree,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
-    updateTodoFilters,
+    updateCurrentTodoTargetFilters,
   ]);
 
   const commitMenuPreset = useCallback((rawName: string) => {
@@ -3736,18 +3935,22 @@ export default function App() {
   const applyMenuPreset = useCallback((preset: MenuPreset) => {
     const nextFilters = cloneTodoFilters(preset.filters);
 
-    if (activeTodoMenuId) {
-      updateTodoFilters(activeTodoMenuId, () => cloneTodoFilters(nextFilters));
+    if (hasTodoEditTargets) {
+      updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
     } else {
       setSelectedFilters(nextFilters);
+      setListOrderMode(preset.listOrderMode);
+      setTodoGroupMode(preset.todoGroupMode);
+      setTodoSortMode(preset.todoSortMode);
     }
 
-    setListOrderMode(preset.listOrderMode);
-    setTodoGroupMode(preset.todoGroupMode);
-    setTodoSortMode(preset.todoSortMode);
     closeListMenuState();
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
-  }, [activeTodoMenuId, closeListMenuState, updateTodoFilters]);
+  }, [
+    closeListMenuState,
+    hasTodoEditTargets,
+    updateCurrentTodoTargetFilters,
+  ]);
 
   const removeMenuPreset = useCallback((id: string) => {
     const removed = menuPresets.find((preset) => preset.id === id);
@@ -4005,18 +4208,29 @@ export default function App() {
   }, [closeListMenuState, exitTodoSelectMode, todoListOneHandedOffset]);
 
   const handleNavTabPress = useCallback((tab: NavTab) => {
+    const shouldKeepSelection = todoSelectMode && (tab === 'menu' || tab === 'calendar');
+
     setActiveTodoMenuId(null);
-    exitTodoSelectMode();
+
+    if (!shouldKeepSelection) {
+      exitTodoSelectMode();
+    }
 
     const sameCalendarOpen =
-      tab === 'calendar' && filterConfigModalVisible;
+      tab === 'calendar' &&
+      (filterConfigModalVisible || (todoSelectMode && listMenuOpen && menuMode === 'date'));
     const sameMenuOpen =
       tab === 'menu' && listMenuOpen && (navTab === 'menu' || menuMode === 'main');
 
     if (sameCalendarOpen) {
       Keyboard.dismiss();
       searchInputRef.current?.blur();
-      closeFilterConfigModal();
+      if (filterConfigModalVisible) {
+        closeFilterConfigModal();
+      } else {
+        closeListMenu();
+        setNavTab(null);
+      }
       return;
     }
 
@@ -4051,6 +4265,14 @@ export default function App() {
 
     switch (tab) {
       case 'calendar':
+        if (shouldKeepSelection) {
+          setFilterConfigModalVisible(false);
+          setNavTab('calendar');
+          Keyboard.dismiss();
+          setMenuMode('date');
+          break;
+        }
+
         setNavTab('calendar');
         openFilterConfigModal();
         break;
@@ -4081,6 +4303,7 @@ export default function App() {
     openFilterConfigModal,
     openSettingsModal,
     settingsModalVisible,
+    todoSelectMode,
   ]);
 
   useEffect(() => {
@@ -4619,11 +4842,11 @@ export default function App() {
   }, [pendingDeleteIds, requestTodoMenuTargetScroll]);
 
   const groupedHiddenMetaTagKinds = useMemo((): HiddenMetaTagKind[] => {
-    if (effectiveGroupMode === 'date') return ['date'];
-    if (effectiveGroupMode === 'list') return ['list'];
-    if (effectiveGroupMode === 'priority') return ['priority'];
+    if (todoListGroupMode === 'date') return ['date'];
+    if (todoListGroupMode === 'list') return ['list'];
+    if (todoListGroupMode === 'priority') return ['priority'];
     return [];
-  }, [effectiveGroupMode]);
+  }, [todoListGroupMode]);
 
   const renderVisibleTodoRowGap = useCallback(
     (gapBefore: boolean) => (gapBefore ? <View style={styles.todoListRowGap} /> : null),
@@ -4978,7 +5201,7 @@ export default function App() {
                   bounces={false}
                   contentContainerStyle={[
                     styles.listContent,
-                    activeTodoMenuId !== null &&
+                    hasTodoEditTargets &&
                       listMenuOpen && {
                         paddingBottom: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 104,
                       },
@@ -5530,11 +5753,11 @@ export default function App() {
                             const isSelected = isDateValue
                               ? isDatePickerMenuItemSelected(
                                 item.label,
-                                menuFilters.date,
-                                menuFilters.reminder,
+                                menuSelectionFilters.date,
+                                menuSelectionFilters.reminder,
                                 isDateMenuItemSelected,
                               )
-                              : menuFilters[item.filterKey].includes(item.label);
+                              : menuSelectionFilters[item.filterKey].includes(item.label);
                             const displayLabel = isDateValue
                               ? getDatePickerMenuDisplayLabel(
                                 item.label,
@@ -5631,7 +5854,11 @@ export default function App() {
                             );
                           }
 
-                          const isSelected = isListMenuItemSelected(item, menuFilters.list, listMenuTree);
+                          const isSelected = isListMenuItemSelected(
+                            item,
+                            menuSelectionFilters.list,
+                            listMenuTree,
+                          );
                           const listColorTheme = getFilterColorTheme(
                             filterColors,
                             'list',

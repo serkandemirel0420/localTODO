@@ -3,7 +3,6 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import {
-  formatCreatedMetaLabel,
   formatDateDisplayLabel,
   formatDateFilterValue,
   isDateFilterOverdue,
@@ -15,6 +14,7 @@ import {
   type FilterColorSettings,
 } from '../filterColors';
 import {
+  formatCreatedAtMetaLabel,
   getCreatedAtMetaLookupValue,
   type MetaTagVisibility,
 } from '../metaTags';
@@ -132,8 +132,9 @@ function buildMetaTags(
   createdAt: number | undefined,
 ): MetaTagDescriptor[] {
   const tags: MetaTagDescriptor[] = [];
+  const hasVisibleDateTag = Boolean(visibility.date && dateLabel);
 
-  if (visibility.date && dateLabel) {
+  if (hasVisibleDateTag && dateLabel) {
     const lookupValue = formatDateFilterValue(dateLabel);
     tags.push({
       displayLabel: formatDateDisplayLabel(dateLabel, dateLabelDisplayMode),
@@ -161,9 +162,9 @@ function buildMetaTags(
     });
   }
 
-  if (visibility.createdAt && typeof createdAt === 'number') {
+  if (!hasVisibleDateTag && visibility.createdAt && typeof createdAt === 'number') {
     tags.push({
-      displayLabel: formatCreatedMetaLabel(createdAt),
+      displayLabel: formatCreatedAtMetaLabel(createdAt),
       filterKey: 'date',
       lookupValue: getCreatedAtMetaLookupValue(createdAt),
     });

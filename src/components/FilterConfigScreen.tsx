@@ -1,7 +1,9 @@
 import React, { useCallback, useState } from 'react';
 import {
+  Modal,
   Platform,
   Pressable,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -266,16 +268,18 @@ export const FilterConfigScreen = ({
     [],
   );
 
-  if (!visible) {
-    return null;
-  }
-
   const resultsLabel = resultCount === 1
     ? 'Show 1 result'
     : `Show ${resultCount} results`;
 
   return (
-    <View style={styles.overlay}>
+    <Modal
+      animationType="slide"
+      onRequestClose={onClose}
+      presentationStyle="fullScreen"
+      visible={visible}
+    >
+      <SafeAreaView style={styles.safeArea}>
       <View style={styles.modal}>
         <View style={styles.header}>
           <View style={styles.headerTextWrap}>
@@ -569,16 +573,15 @@ export const FilterConfigScreen = ({
           </Pressable>
         </View>
       </View>
-    </View>
+      </SafeAreaView>
+    </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 19,
+  safeArea: {
     backgroundColor: THEME_BG,
-    bottom: 74,
+    flex: 1,
   },
   modal: {
     flex: 1,

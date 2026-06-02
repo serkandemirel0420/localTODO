@@ -55,6 +55,8 @@ const RIGHT_SWIPE_OPEN_DISTANCE = 38;
 const TODO_ROW_TITLE_PREVIEW_MAX_LENGTH = 60;
 const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = 60;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
+const TODO_ROW_TEXT_RIGHT_INSET = 16;
+const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 40;
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
 
@@ -579,7 +581,10 @@ function TodoRowComponent({
         disabled={isPendingDelete}
         onLongPress={openRowActions}
         onPress={handleTodoPress}
-        style={styles.textPressable}
+        style={[
+          styles.textPressable,
+          isGroupedLayout && styles.textPressableGrouped,
+        ]}
       >
         <View style={styles.contentColumn}>
           <Text
@@ -880,6 +885,10 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
+    paddingRight: TODO_ROW_TEXT_RIGHT_INSET,
+  },
+  textPressableGrouped: {
+    paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
   },
   contentColumn: {
     alignItems: 'flex-start',

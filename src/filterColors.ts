@@ -1,7 +1,9 @@
 import {
+  CUSTOM_DATE_LABEL,
   formatCompactDateFilterLabel,
   formatDateFilterValue,
   isCustomDateLabel,
+  LATER_DATE_LABEL,
   SOMEDAY_DATE_LABEL,
 } from './dates';
 import { formatListLabel, type TodoFilters } from './todos';
@@ -150,6 +152,8 @@ const DEFAULT_PRIORITY_COLORS: Record<string, string> = {
 };
 
 const DEFAULT_DATE_COLORS: Record<string, string> = {
+  [CUSTOM_DATE_LABEL]: '#8C847C',
+  [LATER_DATE_LABEL]: '#8C847C',
   'Next Week': '#6D62B7',
   Someday: '#8C847C',
   'This Week': '#3E78B2',
@@ -329,6 +333,11 @@ const getDateColorLookupValues = (value: string) => {
       values.push(formatDateFilterValue(compactLabel));
     }
 
+    values.push(CUSTOM_DATE_LABEL);
+    values.push(SOMEDAY_DATE_LABEL);
+  }
+
+  if (formattedValue === LATER_DATE_LABEL) {
     values.push(SOMEDAY_DATE_LABEL);
   }
 

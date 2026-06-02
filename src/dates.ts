@@ -1,3 +1,5 @@
+export const CUSTOM_DATE_LABEL = 'Custom date';
+export const LATER_DATE_LABEL = 'Later';
 export const SOMEDAY_DATE_LABEL = 'Someday';
 
 export const DATE_FILTER_PRESETS = [
@@ -5,15 +7,21 @@ export const DATE_FILTER_PRESETS = [
   'Tomorrow',
   'This Week',
   'Next Week',
-  SOMEDAY_DATE_LABEL,
+  LATER_DATE_LABEL,
+  CUSTOM_DATE_LABEL,
 ] as const;
 
 const DATE_PRESET_LABELS: Record<string, string> = {
+  custom: CUSTOM_DATE_LABEL,
+  'custom date': CUSTOM_DATE_LABEL,
+  later: LATER_DATE_LABEL,
+  someday: LATER_DATE_LABEL,
   today: 'Today',
   tomorrow: 'Tomorrow',
   'this week': 'This Week',
+  thisweek: 'This Week',
   'next week': 'Next Week',
-  someday: SOMEDAY_DATE_LABEL,
+  nextweek: 'Next Week',
 };
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,11 +74,13 @@ export const parseISODateLabel = (label: string): Date | null => {
 };
 
 export const formatDateFilterLabel = (label: string): string => {
-  if (label === SOMEDAY_DATE_LABEL) {
-    return 'Someday';
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (formattedLabel === LATER_DATE_LABEL || formattedLabel === CUSTOM_DATE_LABEL) {
+    return formattedLabel;
   }
 
-  const customDate = parseISODateLabel(label);
+  const customDate = parseISODateLabel(formattedLabel);
   if (customDate) {
     return customDate.toLocaleDateString(undefined, {
       weekday: 'short',
@@ -79,7 +89,7 @@ export const formatDateFilterLabel = (label: string): string => {
     });
   }
 
-  return formatDateFilterValue(label);
+  return formattedLabel;
 };
 
 export const startOfDay = (date: Date): Date => {
@@ -90,14 +100,24 @@ export const startOfDay = (date: Date): Date => {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATE_SORT_SOMEDAY_RANK = 8_000_000_000_000_000;
-const DATE_SORT_NO_DATE_RANK = DATE_SORT_SOMEDAY_RANK + 1;
+const DATE_SORT_LATER_RANK = 8_000_000_000_000_000;
+const DATE_SORT_NO_DATE_RANK = DATE_SORT_LATER_RANK + 1;
 const RELATIVE_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
   today: 0,
   tomorrow: 1,
   'this week': 2,
   'next week': 7,
 };
+const EXACT_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
+  today: 0,
+  tomorrow: 1,
+};
+const LATER_DATE_FILTER_LABELS = new Set([
+  'tomorrow',
+  'this week',
+  'next week',
+  LATER_DATE_LABEL.toLocaleLowerCase(),
+]);
 
 const addDays = (date: Date, days: number): Date => {
   const next = new Date(date);
@@ -120,8 +140,8 @@ export const getDateFilterSortRank = (label: string, now = new Date()): number =
 
   const normalizedLabel = formatDateFilterValue(trimmed).toLocaleLowerCase();
 
-  if (normalizedLabel === 'someday') {
-    return DATE_SORT_SOMEDAY_RANK;
+  if (normalizedLabel === LATER_DATE_LABEL.toLocaleLowerCase()) {
+    return DATE_SORT_LATER_RANK;
   }
 
   const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[normalizedLabel];
@@ -134,11 +154,13 @@ export const getDateFilterSortRank = (label: string, now = new Date()): number =
 
 /** Short labels for list meta and group headers (Today, Yesterday, May 30). */
 export const formatCompactDateFilterLabel = (label: string): string => {
-  if (label === SOMEDAY_DATE_LABEL) {
-    return 'Someday';
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (formattedLabel === LATER_DATE_LABEL || formattedLabel === CUSTOM_DATE_LABEL) {
+    return formattedLabel;
   }
 
-  const customDate = parseISODateLabel(label);
+  const customDate = parseISODateLabel(formattedLabel);
   if (customDate) {
     const dayOffset = Math.round(
       (startOfDay(customDate).getTime() - startOfDay(new Date()).getTime()) / DAY_MS,
@@ -162,7 +184,7 @@ export const formatCompactDateFilterLabel = (label: string): string => {
     });
   }
 
-  return label;
+  return formattedLabel;
 };
 
 export const formatCreatedMetaLabel = (createdAt: number): string => {
@@ -207,46 +229,120 @@ export const getSelectedCustomDateLabel = (dateLabels: string[]): string | null 
   dateLabels.find(isCustomDateLabel) ?? null
 );
 
-export const isDateMenuItemSelected = (menuLabel: string, dateLabels: string[]): boolean => {
-  if (dateLabels.includes(menuLabel)) {
+export const isSameCalendarDay = (a: Date, b: Date): boolean =>
+  a.getFullYear() === b.getFullYear()
+  && a.getMonth() === b.getMonth()
+  && a.getDate() === b.getDate();
+
+const getExactDateFilterValueDate = (label: string, now = new Date()): Date | null => {
+  const formattedLabel = formatDateFilterValue(label);
+  const customDate = parseISODateLabel(formattedLabel);
+  if (customDate) {
+    return startOfDay(customDate);
+  }
+
+  const dayOffset = EXACT_DATE_FILTER_DAY_OFFSETS[formattedLabel.toLocaleLowerCase()];
+  if (dayOffset === undefined) {
+    return null;
+  }
+
+  return addDays(startOfDay(now), dayOffset);
+};
+
+export const isLaterDateFilterValue = (label: string, now = new Date()): boolean => {
+  const formattedLabel = formatDateFilterValue(label);
+  const customDate = parseISODateLabel(formattedLabel);
+  if (customDate) {
+    return startOfDay(customDate).getTime() > startOfDay(now).getTime();
+  }
+
+  return LATER_DATE_FILTER_LABELS.has(formattedLabel.toLocaleLowerCase());
+};
+
+export const dateFilterValueMatches = (
+  todoDateLabel: string,
+  selectedDateLabel: string,
+  now = new Date(),
+): boolean => {
+  const todoDateValue = formatDateFilterValue(todoDateLabel);
+  const selectedDateValue = formatDateFilterValue(selectedDateLabel);
+
+  if (!todoDateValue || !selectedDateValue || selectedDateValue === CUSTOM_DATE_LABEL) {
+    return false;
+  }
+
+  if (selectedDateValue === LATER_DATE_LABEL) {
+    return isLaterDateFilterValue(todoDateValue, now);
+  }
+
+  if (todoDateValue === selectedDateValue) {
     return true;
   }
 
-  return menuLabel === SOMEDAY_DATE_LABEL && dateLabels.some(isCustomDateLabel);
+  const selectedExactDate = getExactDateFilterValueDate(selectedDateValue, now);
+  const todoExactDate = getExactDateFilterValueDate(todoDateValue, now);
+
+  return Boolean(
+    selectedExactDate
+    && todoExactDate
+    && isSameCalendarDay(todoExactDate, selectedExactDate),
+  );
+};
+
+export const todoMatchesSelectedDateFilters = (
+  todoDateLabels: string[],
+  selectedDateLabels: string[],
+  now = new Date(),
+): boolean => {
+  if (selectedDateLabels.length === 0) {
+    return true;
+  }
+
+  return selectedDateLabels.some((selectedLabel) =>
+    todoDateLabels.some((todoLabel) =>
+      dateFilterValueMatches(todoLabel, selectedLabel, now),
+    ),
+  );
+};
+
+export const isDateMenuItemSelected = (menuLabel: string, dateLabels: string[]): boolean => {
+  const formattedMenuLabel = formatDateFilterValue(menuLabel);
+  if (dateLabels.some((label) => formatDateFilterValue(label) === formattedMenuLabel)) {
+    return true;
+  }
+
+  return formattedMenuLabel === CUSTOM_DATE_LABEL && dateLabels.some(isCustomDateLabel);
 };
 
 export const getDateMenuItemDisplayLabel = (menuLabel: string, dateLabels: string[]): string => {
-  if (menuLabel === SOMEDAY_DATE_LABEL) {
+  if (formatDateFilterValue(menuLabel) === CUSTOM_DATE_LABEL) {
     const customDate = getSelectedCustomDateLabel(dateLabels);
     if (customDate) {
       return formatDateFilterLabel(customDate);
     }
   }
 
-  return menuLabel;
+  return formatDateFilterLabel(menuLabel);
 };
 
 export const getDateMenuClearValue = (menuLabel: string, dateLabels: string[]): string | null => {
-  if (menuLabel === SOMEDAY_DATE_LABEL) {
-    return getSelectedCustomDateLabel(dateLabels)
-      ?? (dateLabels.includes(SOMEDAY_DATE_LABEL) ? SOMEDAY_DATE_LABEL : null);
+  const formattedMenuLabel = formatDateFilterValue(menuLabel);
+
+  if (formattedMenuLabel === CUSTOM_DATE_LABEL) {
+    return getSelectedCustomDateLabel(dateLabels);
   }
 
-  return dateLabels.includes(menuLabel) ? menuLabel : null;
+  return dateLabels.find((label) => formatDateFilterValue(label) === formattedMenuLabel) ?? null;
 };
 
 export const getDateMenuColorLookupValue = (menuLabel: string, dateLabels: string[]): string => {
-  if (menuLabel === SOMEDAY_DATE_LABEL && dateLabels.some(isCustomDateLabel)) {
-    return SOMEDAY_DATE_LABEL;
+  const formattedMenuLabel = formatDateFilterValue(menuLabel);
+  if (formattedMenuLabel === CUSTOM_DATE_LABEL && dateLabels.some(isCustomDateLabel)) {
+    return CUSTOM_DATE_LABEL;
   }
 
-  return menuLabel;
+  return formattedMenuLabel;
 };
-
-export const isSameCalendarDay = (a: Date, b: Date): boolean =>
-  a.getFullYear() === b.getFullYear()
-  && a.getMonth() === b.getMonth()
-  && a.getDate() === b.getDate();
 
 const addCalendarDays = (date: Date, days: number): Date => {
   const next = new Date(date);

@@ -8,7 +8,7 @@ import {
 export const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
 export const DATE_MENU_ITEMS: string[] = [...DATE_FILTER_PRESETS];
 
-/** Date drawer list: presets + Someday + Reminder + Repeating (not used for list filtering). */
+/** Date drawer list: presets + custom date + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS,
   REMINDER_PICKER_LABEL,

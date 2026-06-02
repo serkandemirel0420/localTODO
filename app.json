@@ -26,6 +26,7 @@
     "plugins": [
       "expo-web-browser",
       "expo-secure-store",
+      "expo-notifications",
       "@react-native-google-signin/google-signin",
       "@react-native-community/datetimepicker",
       "expo-sqlite"

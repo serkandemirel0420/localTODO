@@ -54,6 +54,7 @@ import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
 import { TodoRow } from './src/components/TodoRow';
 
 import {
+  CUSTOM_DATE_LABEL,
   formatDateFilterLabel,
   formatDateFilterValue,
   getDateMenuClearValue,
@@ -63,9 +64,9 @@ import {
   getSelectedCustomDateLabel,
   isDateFilterOverdue,
   isDateMenuItemSelected,
-  SOMEDAY_DATE_LABEL,
   startOfDay,
   toISODateString,
+  todoMatchesSelectedDateFilters,
 } from './src/dates';
 import { localTodoStore } from './src/storage/todoStore';
 import {
@@ -140,6 +141,11 @@ import {
   TODO_ROW_DIVIDER_HEIGHT,
   type VisibleTodoListRow,
 } from './src/todoListRows';
+import {
+  cancelTodoAlarm,
+  reconcileTodoAlarms,
+  syncTodoAlarm,
+} from './src/todoAlarms';
 import {
   decodeTodoReminder,
   encodeTodoReminder,
@@ -472,17 +478,19 @@ const FILTER_KIND_LABELS: Record<FilterKey, string> = {
 };
 
 type SearchFilterItem = {
+  displayLabel: string;
   filterKey: FilterKey;
   id: string;
-  label: string;
+  value: string;
 };
 
 const buildActiveFilterItems = (filters: SelectedFilters): SearchFilterItem[] =>
   FILTER_KEYS.flatMap((filterKey) =>
-    filters[filterKey].map((label) => ({
+    filters[filterKey].map((value) => ({
+      displayLabel: filterKey === 'date' ? formatDateFilterLabel(value) : value,
       filterKey,
-      id: `search-filter-${filterKey}-${label}`,
-      label,
+      id: `search-filter-${filterKey}-${value}`,
+      value,
     })),
   );
 
@@ -519,17 +527,35 @@ const getCreateTodoFilters = (
   };
 };
 
+const hasRememberedCreateDraftFilters = (
+  listMenuTree: ListMenuNode[],
+  filters: TodoFilters,
+) => {
+  const normalized = normalizeTodoFilters(filters);
+  const knownListLabels = new Set(collectListNodeLabels(listMenuTree));
+
+  return (
+    normalized.date.length > 0 ||
+    normalized.reminder.length > 0 ||
+    normalized.priority.some((label) => (
+      label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
+    )) ||
+    normalized.list.some((label) => knownListLabels.has(label))
+  );
+};
+
 const getRememberedCreateDraftFilters = (
   listMenuTree: ListMenuNode[],
   filters: TodoFilters,
 ): SelectedFilters => {
   const fallback = getDefaultCreateDraftFilters(listMenuTree);
   const normalized = getCreateTodoFilters(listMenuTree, filters);
+  const hasRememberedFilters = hasRememberedCreateDraftFilters(listMenuTree, filters);
 
   return {
     ...normalized,
-    date: normalized.date[0] ? normalized.date : fallback.date,
-    reminder: [],
+    date: normalized.date[0] || hasRememberedFilters ? normalized.date : fallback.date,
+    reminder: [...normalized.reminder],
   };
 };
 
@@ -734,6 +760,10 @@ const todoMatchesFilters = (
       return todoMatchesSelectedListFilters(values, todo.filters.list, listMenuTree);
     }
 
+    if (filterKey === 'date') {
+      return todoMatchesSelectedDateFilters(todo.filters.date, values);
+    }
+
     return values.some((value) => todo.filters[filterKey].includes(value));
   });
 
@@ -800,8 +830,8 @@ export default function App() {
     [windowWidth],
   );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
-  const todoDetailCardMaxHeight = Math.round(windowHeight * 0.72);
-  const todoDetailContentInputMaxHeight = Math.max(160, Math.round(windowHeight * 0.38));
+  const todoDetailCardMaxHeight = Math.round(windowHeight * 0.79);
+  const todoDetailContentInputMaxHeight = Math.max(176, Math.round(windowHeight * 0.42));
   const [todos, setTodos] = useState<Todo[]>([]);
   const [createDrawerKeyboardInset, setCreateDrawerKeyboardInset] = useState(0);
   const [query, setQuery] = useState('');
@@ -896,6 +926,7 @@ export default function App() {
   const activeTodoMenuIdRef = useRef<string | null>(null);
   const listMenuOpenRef = useRef(false);
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
+  const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
@@ -978,6 +1009,7 @@ export default function App() {
         }
 
         setTodos(loadedTodos);
+        reconcileTodoAlarms(loadedTodos).catch(() => undefined);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -1228,15 +1260,36 @@ export default function App() {
     }
   }, [listMenuOpen, menuPullAnim]);
 
+  const restoreTodoMenuReturnOffset = useCallback(() => {
+    const returnOffset = todoMenuReturnOffsetRef.current;
+    todoMenuReturnOffsetRef.current = null;
+
+    if (returnOffset === null) {
+      return;
+    }
+
+    const nextOffset = Math.max(0, returnOffset);
+    scrollOffsetY.current = nextOffset;
+    actualScrollOffsetY.current = nextOffset;
+
+    requestAnimationFrame(() => {
+      todoListRef.current?.scrollToOffset({
+        animated: true,
+        offset: nextOffset,
+      });
+    });
+  }, []);
+
   const closeListMenuState = useCallback(() => {
     clearTodoMenuHighlightRequest();
     setMenuMode(null);
     setActiveTodoMenuId(null);
     setActiveTodoMenuHighlightId(null);
+    restoreTodoMenuReturnOffset();
     menuPullAnim.setValue(0);
     menuDismissPullRef.current = 0;
     menuDismissHapticRef.current = 0;
-  }, [clearTodoMenuHighlightRequest, menuPullAnim]);
+  }, [clearTodoMenuHighlightRequest, menuPullAnim, restoreTodoMenuReturnOffset]);
 
   const closeListMenu = useCallback(() => {
     closeListMenuState();
@@ -1768,6 +1821,7 @@ export default function App() {
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setTodos((current) => [todo, ...current]);
     localTodoStore.upsert(todo).catch(() => undefined);
+    syncTodoAlarm(todo).catch(() => undefined);
     Keyboard.dismiss();
     setCreateDrawerVisible(false);
     setCreateDrawerPicker(null);
@@ -1861,6 +1915,10 @@ export default function App() {
   const createDrawerListPickerOpen = createDrawerPicker === 'list';
   const createDrawerListPickerHalfSheet =
     createDrawerListPickerOpen && createDrawerKeyboardInset === 0;
+  const createDrawerListPickerSheetHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
+  const createDrawerListPickerTopSpace = Math.round(
+    createDrawerListPickerSheetHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO,
+  );
   const createDrawerPriorityHigh = createDraftFilters.priority[0] === 'High';
   const createDrawerDateActive = createDraftFilters.date.length > 0
     || hasTodoReminderTime(createDraftFilters.reminder)
@@ -1896,6 +1954,7 @@ export default function App() {
     };
 
     localTodoStore.delete(id).catch(() => undefined);
+    cancelTodoAlarm(id).catch(() => undefined);
     setTodos((current) => current.filter((todo) => todo.id !== id));
     setDeletedTodos((current) => [
       deletedTodo,
@@ -1935,6 +1994,7 @@ export default function App() {
       createSettingsSnapshot({ deletedTodos: nextDeletedTodos }),
     ).catch(() => undefined);
     localTodoStore.upsert(restoredTodo).catch(() => undefined);
+    syncTodoAlarm(restoredTodo).catch(() => undefined);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   }, [createSettingsSnapshot, deletedTodos, todos]);
 
@@ -1974,6 +2034,9 @@ export default function App() {
       return;
     }
 
+    const updatedTodo = todos.find((todo) => todo.id === id);
+    const nextTodo = updatedTodo ? { ...updatedTodo, done } : null;
+
     setTodos((current) =>
       current.map((todo) => (
         todo.id === id && todo.done !== done ? { ...todo, done } : todo
@@ -1984,7 +2047,12 @@ export default function App() {
       setActiveTodoDetailId((current) => (current === id ? null : current));
     }
     localTodoStore.updateDone(id, done).catch(() => undefined);
-  }, [hideDoneTodos, pendingDeleteIds]);
+    if (nextTodo) {
+      syncTodoAlarm(nextTodo).catch(() => undefined);
+    } else if (done) {
+      cancelTodoAlarm(id).catch(() => undefined);
+    }
+  }, [hideDoneTodos, pendingDeleteIds, todos]);
 
   const updateTodoFilters = useCallback((
     id: string,
@@ -1996,17 +2064,23 @@ export default function App() {
 
     setTodos((current) => {
       let nextFilters: TodoFilters | null = null;
+      let updatedTodo: Todo | null = null;
       const nextTodos = current.map((todo) => {
         if (todo.id !== id) {
           return todo;
         }
 
         nextFilters = updater(cloneTodoFilters(todo.filters));
-        return { ...todo, filters: nextFilters };
+        updatedTodo = { ...todo, filters: nextFilters };
+        return updatedTodo;
       });
 
       if (nextFilters) {
         localTodoStore.updateFilters(id, nextFilters).catch(() => undefined);
+      }
+
+      if (updatedTodo) {
+        syncTodoAlarm(updatedTodo).catch(() => undefined);
       }
 
       return nextTodos;
@@ -2142,7 +2216,7 @@ export default function App() {
       return;
     }
 
-    if (label === SOMEDAY_DATE_LABEL) {
+    if (label === CUSTOM_DATE_LABEL) {
       openDatePicker('create', createDraftFilters.date);
       return;
     }
@@ -2492,6 +2566,7 @@ export default function App() {
       )),
     );
     localTodoStore.upsert(updatedTodo).catch(() => undefined);
+    syncTodoAlarm(updatedTodo).catch(() => undefined);
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
@@ -2799,7 +2874,7 @@ export default function App() {
   }, [activeTodoMenuId, updateTodoFilters]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
-    if (label === SOMEDAY_DATE_LABEL) {
+    if (label === CUSTOM_DATE_LABEL) {
       openDatePicker('filters', menuFilters.date);
       return;
     }
@@ -3358,8 +3433,7 @@ export default function App() {
 
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
-    setMenuMode(null);
-    setActiveTodoMenuId(null);
+    closeListMenuState();
     setSettingsBackupExpanded(false);
     setSettingsColorsExpanded(false);
     setSettingsDeletedExpanded(false);
@@ -3367,7 +3441,7 @@ export default function App() {
     setSettingsListsExpanded(false);
     setSettingsModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+  }, [closeListMenuState]);
 
   const appHeaderTitle = useMemo(() => {
     const activeListTitle =
@@ -3387,13 +3461,12 @@ export default function App() {
 
   const focusHeaderSearch = useCallback(() => {
     setNavTab('search');
-    setMenuMode(null);
-    setActiveTodoMenuId(null);
+    closeListMenuState();
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
     Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+  }, [closeListMenuState]);
 
   const closeHeaderSearch = useCallback(() => {
     Keyboard.dismiss();
@@ -3695,6 +3768,7 @@ export default function App() {
     await localTodoStore.replaceAll(backup.payload.todos);
     await localTodoStore.markInitialSeeded();
     setTodos(backup.payload.todos);
+    reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
     setDeletedTodos(backup.payload.settings.deletedTodos);
     setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
     setFilterColors(backup.payload.settings.filterColors);
@@ -3971,6 +4045,7 @@ export default function App() {
       return;
     }
 
+    todoMenuReturnOffsetRef.current = actualScrollOffsetY.current;
     setActiveTodoMenuId(id);
     setActiveTodoMenuHighlightId(null);
     Keyboard.dismiss();
@@ -4229,7 +4304,7 @@ export default function App() {
                       const colorTheme = getFilterColorTheme(
                         filterColors,
                         item.filterKey,
-                        item.label,
+                        item.value,
                       );
 
                       return (
@@ -4243,7 +4318,7 @@ export default function App() {
                             ]}
                           />
                           <View style={styles.searchFilterRowText}>
-                            <Text style={styles.searchFilterLabel}>{item.label}</Text>
+                            <Text style={styles.searchFilterLabel}>{item.displayLabel}</Text>
                             <Text style={styles.filterTypeText}>
                               {FILTER_KIND_LABELS[item.filterKey]}
                             </Text>
@@ -4551,6 +4626,9 @@ export default function App() {
 
                             if (item.type === 'filter') {
                               const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
+                              const displayLabel = item.filterKey === 'date'
+                                ? formatDateFilterLabel(item.label)
+                                : item.label;
 
                               return (
                                 <View style={styles.listMenuRow}>
@@ -4571,7 +4649,7 @@ export default function App() {
                                             : styles.listMenuColorDotNoColor,
                                         ]}
                                       />
-                                      <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                      <Text style={styles.listMenuRowTitle}>{displayLabel}</Text>
                                     </View>
                                   </Pressable>
                                   <View style={styles.listMenuSubmenuZone}>
@@ -4585,7 +4663,7 @@ export default function App() {
                                     </Text>
                                     <Pressable
                                       accessibilityRole="button"
-                                      accessibilityLabel={`Remove ${item.label}`}
+                                      accessibilityLabel={`Remove ${displayLabel}`}
                                       hitSlop={LIST_MENU_ICON_HIT_SLOP}
                                       onPress={() => removeFilter(item.filterKey, item.label)}
                                       style={({ pressed }) => [
@@ -5190,7 +5268,7 @@ export default function App() {
                 styles.createDrawerLayer,
                 { bottom: createDrawerKeyboardInset },
                 createDrawerListPickerHalfSheet
-                  ? { height: Math.round(windowHeight * 0.5) }
+                  ? { height: createDrawerListPickerSheetHeight }
                   : null,
               ]}
             >
@@ -5207,7 +5285,10 @@ export default function App() {
                   <ScrollView
                     contentContainerStyle={
                       createDrawerListPickerHalfSheet
-                        ? styles.createDrawerListPickerContent
+                        ? [
+                          styles.createDrawerListPickerContent,
+                          { paddingTop: createDrawerListPickerTopSpace },
+                        ]
                         : undefined
                     }
                     keyboardShouldPersistTaps="handled"
@@ -5242,8 +5323,8 @@ export default function App() {
                           getDateMenuItemDisplayLabel,
                         )
                         : label;
-                      const showSomedayClear = (
-                        label === SOMEDAY_DATE_LABEL &&
+                      const showCustomDateClear = (
+                        label === CUSTOM_DATE_LABEL &&
                         getSelectedCustomDateLabel(createDraftFilters.date) !== null
                       );
                       const showReminderClear = (
@@ -5254,10 +5335,10 @@ export default function App() {
                         label === REPEAT_PICKER_LABEL &&
                         hasTodoRepeat(createDraftFilters.reminder)
                       );
-                      const showRowClear = showSomedayClear || showReminderClear || showRepeatClear;
+                      const showRowClear = showCustomDateClear || showReminderClear || showRepeatClear;
                       const useSplitDatePickerRow = (
                         createDrawerPicker === 'date' &&
-                        (isReminderPickerMenuLabel(label) || showSomedayClear)
+                        (isReminderPickerMenuLabel(label) || showCustomDateClear)
                       );
 
                       if (useSplitDatePickerRow) {
@@ -5291,7 +5372,7 @@ export default function App() {
                               <Pressable
                                 accessibilityRole="button"
                                 accessibilityLabel={
-                                  label === SOMEDAY_DATE_LABEL
+                                  label === CUSTOM_DATE_LABEL
                                     ? 'Clear date'
                                     : label === REMINDER_PICKER_LABEL
                                       ? 'Clear reminder time'
@@ -5299,7 +5380,7 @@ export default function App() {
                                 }
                                 hitSlop={8}
                                 onPress={() => {
-                                  if (label === SOMEDAY_DATE_LABEL) {
+                                  if (label === CUSTOM_DATE_LABEL) {
                                     clearCreateDraftDate();
                                     return;
                                   }
@@ -6370,7 +6451,7 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     letterSpacing: 0,
     lineHeight: 25,
-    minHeight: 150,
+    minHeight: 165,
     paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 0,

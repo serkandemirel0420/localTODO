@@ -1997,8 +1997,7 @@ export default function App() {
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
-      const { screenY } = event.endCoordinates;
-      setKeyboardOverlayInset(Math.max(0, windowHeight - screenY));
+      setKeyboardOverlayInset(Math.max(0, event.endCoordinates.height));
     });
     const hideSubscription = Keyboard.addListener(hideEvent, () => {
       setKeyboardOverlayInset(0);
@@ -5749,14 +5748,11 @@ export default function App() {
           </View>
         ) : null}
 
-        <Modal
-          animationType="fade"
-          onRequestClose={closeTodoDetailModal}
-          statusBarTranslucent={Platform.OS === 'android'}
-          transparent
-          visible={activeTodoDetail !== null}
-        >
-          <View style={styles.todoDetailModalRoot}>
+        {activeTodoDetail ? (
+          <View
+            accessibilityViewIsModal
+            style={styles.todoDetailOverlay}
+          >
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close todo details"
@@ -5775,7 +5771,6 @@ export default function App() {
               ]}
             >
             <View
-              accessibilityViewIsModal
               style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
             >
               <View style={styles.todoDetailHeader}>
@@ -5849,7 +5844,7 @@ export default function App() {
             </View>
             </View>
           </View>
-        </Modal>
+        ) : null}
 
         <Modal
           animationType="fade"
@@ -7135,6 +7130,15 @@ const styles = StyleSheet.create({
   todoDetailModalRoot: {
     flex: 1,
   },
+  todoDetailOverlay: {
+    bottom: 0,
+    elevation: 10,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 21,
+  },
   todoDetailLayer: {
     flex: 1,
     justifyContent: 'center',
@@ -7148,8 +7152,6 @@ const styles = StyleSheet.create({
     paddingTop: TOP_SAFE_GAP + 24,
     position: 'absolute',
     right: 0,
-    zIndex: 24,
-    elevation: 8,
   },
   todoDetailBackdrop: {
     ...StyleSheet.absoluteFillObject,

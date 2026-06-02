@@ -60,8 +60,10 @@ import { TodoRow } from './src/components/TodoRow';
 
 import {
   CUSTOM_DATE_LABEL,
+  formatDateDisplayLabel,
   formatDateFilterLabel,
   formatDateFilterValue,
+  formatRemainingDaysLabel,
   getDateMenuClearValue,
   getDateMenuColorLookupValue,
   getDateMenuItemDisplayLabel,
@@ -72,6 +74,7 @@ import {
   startOfDay,
   toISODateString,
   todoMatchesSelectedDateFilters,
+  type DateLabelDisplayMode,
 } from './src/dates';
 import { localTodoStore } from './src/storage/todoStore';
 import {
@@ -505,10 +508,19 @@ type SearchFilterItem = {
   value: string;
 };
 
-const buildActiveFilterItems = (filters: SelectedFilters): SearchFilterItem[] =>
+const buildActiveFilterItems = (
+  filters: SelectedFilters,
+  dateLabelDisplayMode: DateLabelDisplayMode,
+): SearchFilterItem[] =>
   FILTER_KEYS.flatMap((filterKey) =>
     filters[filterKey].map((value) => ({
-      displayLabel: filterKey === 'date' ? formatDateFilterLabel(value) : value,
+      displayLabel: filterKey === 'date'
+        ? (
+          dateLabelDisplayMode === 'remaining'
+            ? formatDateDisplayLabel(value, 'remaining')
+            : formatDateFilterLabel(value)
+        )
+        : value,
       filterKey,
       id: `search-filter-${filterKey}-${value}`,
       value,
@@ -583,11 +595,23 @@ const getRememberedCreateDraftFilters = (
 const shouldHighlightCreatePriorityPicker = (filters: SelectedFilters) =>
   filters.priority.some((label) => label !== 'High');
 
-const formatCreateDrawerDateLabel = (dateLabels: string[]) => {
+const formatCreateDrawerDateLabel = (
+  dateLabels: string[],
+  dateLabelDisplayMode: DateLabelDisplayMode,
+) => {
   const primary = dateLabels[0];
 
   if (!primary) {
     return 'No date';
+  }
+
+  if (dateLabelDisplayMode === 'remaining') {
+    const remainingLabel = formatRemainingDaysLabel(primary);
+    if (remainingLabel) {
+      return remainingLabel;
+    }
+
+    return formatDateFilterLabel(primary);
   }
 
   const today = new Date();
@@ -903,6 +927,7 @@ export default function App() {
     () => cloneFilterColors(),
   );
   const [hideDoneTodos, setHideDoneTodos] = useState(false);
+  const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
   const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
@@ -1084,6 +1109,7 @@ export default function App() {
         setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
         setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
         setHideDoneTodos(settings.hideDoneTodos);
+        setDateLabelDisplayMode(settings.dateLabelDisplayMode);
         setListMenuTree(settings.listMenuTree);
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
@@ -1122,6 +1148,7 @@ export default function App() {
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    dateLabelDisplayMode,
     hideDoneTodos,
     lastCreateTodoFilters,
     listMenuTree,
@@ -1134,6 +1161,7 @@ export default function App() {
     ...overrides,
   }), [
     collapsedTodoGroupIds,
+    dateLabelDisplayMode,
     deletedTodos,
     filterColors,
     googleDriveBackupEnabled,
@@ -2068,8 +2096,8 @@ export default function App() {
   }, [createDrawerPicker, listMenuTree, listOrderMode]);
 
   const createDrawerDateLabel = useMemo(
-    () => formatCreateDrawerDateLabel(createDraftFilters.date),
-    [createDraftFilters.date],
+    () => formatCreateDrawerDateLabel(createDraftFilters.date, dateLabelDisplayMode),
+    [createDraftFilters.date, dateLabelDisplayMode],
   );
 
   const createDrawerListLabel = createDraftFilters.list[0] ?? 'Inbox';
@@ -2769,8 +2797,10 @@ export default function App() {
       listMenuTree,
       selectedFilters.list,
       useSubsectionLayout,
+      dateLabelDisplayMode,
     ),
     [
+      dateLabelDisplayMode,
       effectiveGroupMode,
       listMenuTree,
       orderedListLabels,
@@ -2925,8 +2955,8 @@ export default function App() {
   const includeActiveTodoReminderRows = Boolean(activeTodoMenuId);
   const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
   const searchFilterItems = useMemo(
-    () => buildActiveFilterItems(selectedFilters),
-    [selectedFilters],
+    () => buildActiveFilterItems(selectedFilters, dateLabelDisplayMode),
+    [dateLabelDisplayMode, selectedFilters],
   );
   const showSearchFiltersPanel = navTab === 'search' && !query.trim();
   const searchContextSummary = useMemo(
@@ -3450,6 +3480,19 @@ export default function App() {
     setHideDoneTodos((current) => !current);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, []);
+
+  const toggleDateLabelDisplayMode = useCallback(() => {
+    setDateLabelDisplayMode((current) => (
+      current === 'remaining' ? 'exact' : 'remaining'
+    ));
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const getDateMenuDisplayLabel = useCallback(
+    (menuLabel: string, dateLabels: string[]) =>
+      getDateMenuItemDisplayLabel(menuLabel, dateLabels, dateLabelDisplayMode),
+    [dateLabelDisplayMode],
+  );
 
   const selectTodoGroupMode = useCallback((groupMode: TodoGroupMode) => {
     const display = resolveListDisplaySettings(
@@ -4120,6 +4163,7 @@ export default function App() {
     const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
     const payload = createBackupPayload(backupTodos, {
       collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+      dateLabelDisplayMode,
       deletedTodos,
       filterColors,
       googleDriveBackupEnabled,
@@ -4143,6 +4187,7 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
   }, [
     collapsedTodoGroupIds,
+    dateLabelDisplayMode,
     deletedTodos,
     filterColors,
     googleDriveBackupEnabled,
@@ -4184,6 +4229,9 @@ export default function App() {
     setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
     setHideDoneTodos(backup.payload.settings.hideDoneTodos);
+    setDateLabelDisplayMode(
+      backup.payload.settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
+    );
     const restoredListMenuTree =
       backup.payload.settings.listMenuTree.length > 0
         ? backup.payload.settings.listMenuTree
@@ -4546,6 +4594,7 @@ export default function App() {
             >
               {!item.isFirstInSection ? <View style={styles.todoRowDivider} /> : null}
               <TodoRow
+                dateLabelDisplayMode={dateLabelDisplayMode}
                 filterColors={filterColors}
                 hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
                 isSelected={isSelected}
@@ -4587,6 +4636,7 @@ export default function App() {
         <View>
           {renderVisibleTodoRowGap(item.gapBefore)}
           <TodoRow
+            dateLabelDisplayMode={dateLabelDisplayMode}
             filterColors={filterColors}
             isSelected={isSelected}
             item={item.todo}
@@ -4608,6 +4658,7 @@ export default function App() {
     [
       activeTodoMenuId,
       activeTodoMenuHighlightId,
+      dateLabelDisplayMode,
       deleteTodo,
       enterTodoSelectMode,
       filterColors,
@@ -5108,7 +5159,11 @@ export default function App() {
                             if (item.type === 'filter') {
                               const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
                               const displayLabel = item.filterKey === 'date'
-                                ? formatDateFilterLabel(item.label)
+                                ? (
+                                  dateLabelDisplayMode === 'remaining'
+                                    ? formatDateDisplayLabel(item.label, 'remaining')
+                                    : formatDateFilterLabel(item.label)
+                                )
                                 : item.label;
 
                               return (
@@ -5365,7 +5420,7 @@ export default function App() {
                                 item.label,
                                 menuFilters.date,
                                 menuFilters.reminder,
-                                getDateMenuItemDisplayLabel,
+                                getDateMenuDisplayLabel,
                               )
                               : item.label;
                             const colorLookupValue = isDateValue && !isReminderValue
@@ -5832,7 +5887,7 @@ export default function App() {
                           label,
                           createDraftFilters.date,
                           createDraftFilters.reminder,
-                          getDateMenuItemDisplayLabel,
+                          getDateMenuDisplayLabel,
                         )
                         : label;
                       const showCustomDateClear = (
@@ -6357,6 +6412,51 @@ export default function App() {
                     </Pressable>
                   </View>
                 ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Date labels</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {dateLabelDisplayMode === 'remaining' ? 'Days remaining' : 'Exact day'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.settingsCard}>
+                  <Pressable
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
+                    onPress={toggleDateLabelDisplayMode}
+                    style={({ pressed }) => [
+                      styles.settingsRow,
+                      pressed && styles.settingsOptionRowPressed,
+                    ]}
+                  >
+                    <View style={styles.settingsRowTextWrap}>
+                      <Text style={styles.settingsRowTitle}>Show days remaining</Text>
+                      <Text style={styles.settingsRowSubtitle}>
+                        0 days, 1 day, 3 days… instead of Today, Tomorrow, Jun 5.
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.settingsStatusPill,
+                        dateLabelDisplayMode === 'remaining' && styles.settingsStatusPillEnabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.settingsStatusText,
+                          dateLabelDisplayMode === 'remaining' && styles.settingsStatusTextEnabled,
+                        ]}
+                      >
+                        {dateLabelDisplayMode === 'remaining' ? 'Remaining' : 'Exact'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
               </View>
 
               <View style={styles.settingsSection}>

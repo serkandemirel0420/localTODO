@@ -6,6 +6,9 @@ import {
   type FilterColorSettings,
 } from '../filterColors';
 import {
+  type DateLabelDisplayMode,
+} from '../dates';
+import {
   cloneMetaTagVisibility,
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
@@ -74,8 +77,11 @@ export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
   { label: 'Archive' },
 ];
 
+export type { DateLabelDisplayMode };
+
 export type AppSettings = {
   collapsedTodoGroupIds: string[];
+  dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
@@ -115,6 +121,7 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   collapsedTodoGroupIds: [],
+  dateLabelDisplayMode: 'exact',
   deletedTodos: [],
   filterColors: cloneFilterColors(),
   googleDriveBackupEnabled: false,
@@ -154,6 +161,9 @@ const normalizeCollapsedTodoGroupIds = (value: unknown): string[] => {
 
   return value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
 };
+
+const normalizeDateLabelDisplayMode = (value: unknown): DateLabelDisplayMode =>
+  value === 'remaining' ? 'remaining' : 'exact';
 
 const normalizeTodoSortMode = (value: unknown): TodoSortMode => {
   if (
@@ -505,6 +515,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
+    dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
     filterColors: normalizeFilterColors(value.filterColors),
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,

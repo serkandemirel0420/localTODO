@@ -15,6 +15,9 @@ import {
   type FilterColorSettings,
 } from '../filterColors';
 import {
+  type DateLabelDisplayMode,
+} from '../dates';
+import {
   cloneMetaTagVisibility,
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
@@ -52,6 +55,7 @@ export type BackupMenuPreset = {
 
 export type BackupSettings = {
   collapsedTodoGroupIds: string[];
+  dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
@@ -338,6 +342,7 @@ export const createBackupPayload = (
     schemaVersion: 1,
     settings: {
       collapsedTodoGroupIds: [...settings.collapsedTodoGroupIds],
+      dateLabelDisplayMode: settings.dateLabelDisplayMode,
       deletedTodos: cloneDeletedTodos(settings.deletedTodos),
       filterColors: cloneFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
@@ -371,6 +376,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
     schemaVersion: 1,
     settings: {
       collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
+      dateLabelDisplayMode: settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
       deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
       filterColors: normalizeFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,

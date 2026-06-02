@@ -1,8 +1,9 @@
 import { StyleSheet } from 'react-native';
 
 import {
-  formatCompactDateFilterLabel,
+  formatDateDisplayLabel,
   getDateFilterSortRank,
+  type DateLabelDisplayMode,
 } from './dates';
 import {
   DATE_MENU_ITEMS,
@@ -305,6 +306,7 @@ const getTodoGroups = (
   groupMode: Exclude<TodoGroupMode, 'none'>,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
+  dateLabelDisplayMode: DateLabelDisplayMode,
 ): TodoGroup[] => {
   if (groupMode === 'status') {
     const label = todo.done ? 'Done' : 'Active';
@@ -332,7 +334,7 @@ const getTodoGroups = (
 
   const now = new Date();
   const rawLabel = getBestDateFilterLabel(todo.filters.date, 'No date', now);
-  const displayLabel = formatCompactDateFilterLabel(rawLabel);
+  const displayLabel = formatDateDisplayLabel(rawLabel, dateLabelDisplayMode, now);
 
   return [{
     key: getDateGroupKey(rawLabel, displayLabel),
@@ -408,11 +410,18 @@ const buildGroupedSectionRows = (
   groupMode: Exclude<TodoGroupMode, 'none'>,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
+  dateLabelDisplayMode: DateLabelDisplayMode,
 ): TodoListRow[] => {
   const groups = new Map<string, { key: string; label: string; rank: number; todos: Todo[] }>();
 
   todos.forEach((todo) => {
-    getTodoGroups(todo, groupMode, orderedListLabels, listMenuTree).forEach((group) => {
+    getTodoGroups(
+      todo,
+      groupMode,
+      orderedListLabels,
+      listMenuTree,
+      dateLabelDisplayMode,
+    ).forEach((group) => {
       const existingGroup = groups.get(group.key);
 
       if (existingGroup) {
@@ -448,6 +457,7 @@ export const buildTodoListRows = (
   listMenuTree: StoredListMenuNode[],
   selectedListFilters: string[],
   useSubsectionLayout: boolean,
+  dateLabelDisplayMode: DateLabelDisplayMode = 'exact',
 ): TodoListRow[] => {
   const subsectionContext = useSubsectionLayout
     ? getListSubsectionContext(listMenuTree, selectedListFilters)
@@ -470,6 +480,7 @@ export const buildTodoListRows = (
     groupMode,
     orderedListLabels,
     listMenuTree,
+    dateLabelDisplayMode,
   );
 };
 

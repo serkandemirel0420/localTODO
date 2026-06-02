@@ -24,7 +24,6 @@ import {
   type HiddenMetaTagKind,
   type MetaTagVisibility,
 } from '../metaTags';
-import { formatTodoReminderMetaLabel } from '../reminders';
 import {
   DATE_MENU_ITEMS,
   getBestOrderedFilterLabel,
@@ -55,8 +54,8 @@ const RIGHT_SWIPE_OPEN_DISTANCE = 38;
 const TODO_ROW_TITLE_PREVIEW_MAX_LENGTH = 60;
 const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = 60;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
-const TODO_ROW_TEXT_RIGHT_INSET = 16;
-const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 40;
+const TODO_ROW_TEXT_RIGHT_INSET = 36;
+const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
 
@@ -127,7 +126,6 @@ function TodoRowComponent({
     PRIORITY_MENU_ITEMS,
     '',
   );
-  const reminderStatusLabel = formatTodoReminderMetaLabel(item.filters.reminder);
   const effectiveMetaTagVisibility = applyHiddenMetaTagKinds(
     metaTagVisibility,
     hiddenMetaTagKinds,
@@ -581,12 +579,14 @@ function TodoRowComponent({
         disabled={isPendingDelete}
         onLongPress={openRowActions}
         onPress={handleTodoPress}
-        style={[
-          styles.textPressable,
-          isGroupedLayout && styles.textPressableGrouped,
-        ]}
+        style={styles.textPressable}
       >
-        <View style={styles.contentColumn}>
+        <View
+          style={[
+            styles.contentColumn,
+            isGroupedLayout && styles.contentColumnGrouped,
+          ]}
+        >
           <Text
             ellipsizeMode="tail"
             numberOfLines={2}
@@ -625,7 +625,7 @@ function TodoRowComponent({
                   ? priorityStatusLabel
                   : undefined
               }
-              reminderLabel={reminderStatusLabel ?? undefined}
+              reminderValues={item.filters.reminder}
               visibility={effectiveMetaTagVisibility}
             />
           )}
@@ -885,16 +885,17 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
-    paddingRight: TODO_ROW_TEXT_RIGHT_INSET,
-  },
-  textPressableGrouped: {
-    paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
   },
   contentColumn: {
     alignItems: 'flex-start',
     alignSelf: 'stretch',
     flex: 1,
-    width: '100%',
+    flexShrink: 1,
+    minWidth: 0,
+    paddingRight: TODO_ROW_TEXT_RIGHT_INSET,
+  },
+  contentColumnGrouped: {
+    paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
   },
   text: {
     alignSelf: 'stretch',

@@ -103,10 +103,7 @@ export const formatReminderClockLabel = (time: ReminderTime | null): string => {
     return 'None';
   }
 
-  return reminderTimeToDate(time).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return `${pad2(time.hours)}:${pad2(time.minutes)}`;
 };
 
 export const formatRepeatLabel = (repeat: RepeatPreset): string => {

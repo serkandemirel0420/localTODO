@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -16,20 +17,29 @@ import {
   getCreatedAtMetaLookupValue,
   type MetaTagVisibility,
 } from '../metaTags';
+import {
+  decodeTodoReminder,
+  formatReminderClockLabel,
+  formatRepeatLabel,
+} from '../reminders';
 import { formatListLabel } from '../todos';
 
 const FONT_MEDIUM = '500' as const;
-const REMINDER_META_THEME = {
-  border: '#D8E0FF',
-  text: '#4C78FF',
-  tint: '#F2F5FF',
-};
+const REMINDER_STATUS_COLOR = '#4C78FF';
+const REPEAT_STATUS_COLOR = '#2F6F62';
 
 type MetaTagDescriptor = {
   displayLabel: string;
-  filterKey: FilterColorKey | 'reminder';
+  filterKey: FilterColorKey;
   isOverdue?: boolean;
   lookupValue: string;
+};
+
+type StatusIconDescriptor = {
+  accessibilityLabel: string;
+  color: string;
+  iconName: React.ComponentProps<typeof Ionicons>['name'];
+  id: 'reminder' | 'repeat';
 };
 
 type TodoMetaTagsProps = {
@@ -39,7 +49,7 @@ type TodoMetaTagsProps = {
   filterColors: FilterColorSettings;
   listLabel?: string;
   priorityLabel?: string;
-  reminderLabel?: string;
+  reminderValues?: string[];
   visibility: MetaTagVisibility;
 };
 
@@ -54,13 +64,11 @@ function MetaTag({
   done?: boolean;
   filterColors: FilterColorSettings;
 }) {
-  const theme = descriptor.filterKey === 'reminder'
-    ? REMINDER_META_THEME
-    : getFilterColorTheme(
-      filterColors,
-      descriptor.filterKey,
-      descriptor.lookupValue,
-    );
+  const theme = getFilterColorTheme(
+    filterColors,
+    descriptor.filterKey,
+    descriptor.lookupValue,
+  );
   const useOverdueStyle = descriptor.isOverdue === true;
 
   return (
@@ -88,12 +96,36 @@ function MetaTag({
   );
 }
 
+function StatusIcon({
+  descriptor,
+  done,
+}: {
+  descriptor: StatusIconDescriptor;
+  done?: boolean;
+}) {
+  return (
+    <View
+      accessibilityLabel={descriptor.accessibilityLabel}
+      accessible
+      style={[
+        styles.statusIcon,
+        done && styles.statusIconDone,
+      ]}
+    >
+      <Ionicons
+        color={descriptor.color}
+        name={descriptor.iconName}
+        size={12}
+      />
+    </View>
+  );
+}
+
 function buildMetaTags(
   visibility: MetaTagVisibility,
   dateLabel: string | undefined,
   listLabel: string | undefined,
   priorityLabel: string | undefined,
-  reminderLabel: string | undefined,
   createdAt: number | undefined,
 ): MetaTagDescriptor[] {
   const tags: MetaTagDescriptor[] = [];
@@ -126,14 +158,6 @@ function buildMetaTags(
     });
   }
 
-  if (visibility.date && reminderLabel) {
-    tags.push({
-      displayLabel: reminderLabel,
-      filterKey: 'reminder',
-      lookupValue: reminderLabel,
-    });
-  }
-
   if (visibility.createdAt && typeof createdAt === 'number') {
     tags.push({
       displayLabel: formatCreatedMetaLabel(createdAt),
@@ -145,6 +169,33 @@ function buildMetaTags(
   return tags;
 }
 
+function buildStatusIcons(
+  reminderValues: string[] | undefined,
+): StatusIconDescriptor[] {
+  const { time, repeat } = decodeTodoReminder(reminderValues ?? []);
+  const icons: StatusIconDescriptor[] = [];
+
+  if (time) {
+    icons.push({
+      accessibilityLabel: `Reminder ${formatReminderClockLabel(time)}`,
+      color: REMINDER_STATUS_COLOR,
+      iconName: 'notifications-outline',
+      id: 'reminder',
+    });
+  }
+
+  if (repeat !== 'none') {
+    icons.push({
+      accessibilityLabel: `Repeating ${formatRepeatLabel(repeat)}`,
+      color: REPEAT_STATUS_COLOR,
+      iconName: 'repeat-outline',
+      id: 'repeat',
+    });
+  }
+
+  return icons;
+}
+
 function TodoMetaTagsComponent({
   createdAt,
   dateLabel,
@@ -152,7 +203,7 @@ function TodoMetaTagsComponent({
   filterColors,
   listLabel,
   priorityLabel,
-  reminderLabel,
+  reminderValues,
   visibility,
 }: TodoMetaTagsProps) {
   const tags = buildMetaTags(
@@ -160,11 +211,11 @@ function TodoMetaTagsComponent({
     dateLabel,
     listLabel,
     priorityLabel,
-    reminderLabel,
     createdAt,
   );
+  const statusIcons = buildStatusIcons(reminderValues);
 
-  if (tags.length === 0) {
+  if (tags.length === 0 && statusIcons.length === 0) {
     return null;
   }
 
@@ -176,6 +227,13 @@ function TodoMetaTagsComponent({
           descriptor={descriptor}
           done={done}
           filterColors={filterColors}
+        />
+      ))}
+      {statusIcons.map((descriptor) => (
+        <StatusIcon
+          key={descriptor.id}
+          descriptor={descriptor}
+          done={done}
         />
       ))}
     </View>
@@ -217,5 +275,19 @@ const styles = StyleSheet.create({
   },
   tagTextDone: {
     opacity: 0.9,
+  },
+  statusIcon: {
+    alignItems: 'center',
+    backgroundColor: '#F7F8FA',
+    borderColor: '#E1E5EA',
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    height: 16,
+    justifyContent: 'center',
+    width: 16,
+  },
+  statusIconDone: {
+    opacity: 0.55,
   },
 });

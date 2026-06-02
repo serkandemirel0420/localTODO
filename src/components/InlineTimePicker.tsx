@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
+  FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -18,32 +18,24 @@ const ITEM_HEIGHT = 44;
 const VISIBLE_ROWS = 5;
 const PICKER_HEIGHT = ITEM_HEIGHT * VISIBLE_ROWS;
 const PAD_ROWS = Math.floor(VISIBLE_ROWS / 2);
+const LOOP_CYCLES = 101;
+const CENTER_CYCLE = Math.floor(LOOP_CYCLES / 2);
+const RECENTER_EDGE_CYCLES = 8;
+const SNAP_OFFSET_EPSILON = 0.5;
 
-const HOURS = Array.from({ length: 12 }, (_, index) => index + 1);
+const HOURS = Array.from({ length: 24 }, (_, index) => index);
 const MINUTES = Array.from({ length: 60 }, (_, index) => index);
-const MERIDIEMS = ['AM', 'PM'] as const;
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-const to12Hour = (time: ReminderTime) => {
-  const hours24 = time.hours;
-  const meridiem: (typeof MERIDIEMS)[number] = hours24 >= 12 ? 'PM' : 'AM';
-  const hours12 = hours24 % 12 || 12;
+const positiveModulo = (value: number, size: number) => ((value % size) + size) % size;
 
-  return { hours12, minutes: time.minutes, meridiem };
-};
+const getCenteredLoopIndex = (itemIndex: number, itemCount: number) => (
+  CENTER_CYCLE * itemCount + itemIndex
+);
 
-const to24Hour = (
-  hours12: number,
-  minutes: number,
-  meridiem: (typeof MERIDIEMS)[number],
-): ReminderTime => {
-  let hours24 = hours12 % 12;
-  if (meridiem === 'PM') {
-    hours24 += 12;
-  }
-
-  return { hours: hours24, minutes };
+const timeToParts = (time: ReminderTime) => {
+  return { hours: time.hours, minutes: time.minutes };
 };
 
 type WheelColumnProps = {
@@ -54,19 +46,30 @@ type WheelColumnProps = {
 };
 
 function WheelColumn({ labels, selectedIndex, onSelect, width }: WheelColumnProps) {
-  const scrollRef = useRef<ScrollView>(null);
-  const mountedRef = useRef(false);
+  const listRef = useRef<FlatList<number>>(null);
+  const draggingRef = useRef(false);
+  const latestOffsetRef = useRef(0);
+  const momentumActiveRef = useRef(false);
   const selectedIndexRef = useRef(selectedIndex);
   const emittedIndexRef = useRef<number | null>(null);
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+  const itemCount = labels.length;
+  const loopedItemCount = itemCount * LOOP_CYCLES;
+  const loopItems = useMemo(
+    () => Array.from({ length: loopedItemCount }, (_, index) => index),
+    [loopedItemCount],
+  );
 
-  const scrollToIndex = useCallback((index: number, animated: boolean) => {
-    scrollRef.current?.scrollTo({
+  const scrollToLoopIndex = useCallback((index: number, animated: boolean) => {
+    listRef.current?.scrollToOffset({
       animated,
-      y: index * ITEM_HEIGHT,
+      offset: index * ITEM_HEIGHT,
     });
   }, []);
+
+  const scrollToCenteredIndex = useCallback((index: number, animated: boolean) => {
+    scrollToLoopIndex(getCenteredLoopIndex(index, itemCount), animated);
+  }, [itemCount, scrollToLoopIndex]);
 
   const clearSettleTimer = useCallback(() => {
     if (settleTimerRef.current) {
@@ -76,86 +79,136 @@ function WheelColumn({ labels, selectedIndex, onSelect, width }: WheelColumnProp
   }, []);
 
   const settleToOffset = useCallback((offsetY: number) => {
-    const index = Math.max(0, Math.min(labels.length - 1, Math.round(offsetY / ITEM_HEIGHT)));
+    const rawLoopIndex = Math.round(offsetY / ITEM_HEIGHT);
+    const loopIndex = Math.max(0, Math.min(loopedItemCount - 1, rawLoopIndex));
+    const index = positiveModulo(loopIndex, itemCount);
+    const currentCycle = Math.floor(loopIndex / itemCount);
+    const shouldRecenter = (
+      currentCycle < RECENTER_EDGE_CYCLES ||
+      currentCycle >= LOOP_CYCLES - RECENTER_EDGE_CYCLES
+    );
+    const targetLoopIndex = shouldRecenter
+      ? getCenteredLoopIndex(index, itemCount)
+      : loopIndex;
+    const targetOffset = targetLoopIndex * ITEM_HEIGHT;
 
-    setActiveIndex(index);
-    scrollToIndex(index, false);
+    if (Math.abs(targetOffset - offsetY) > SNAP_OFFSET_EPSILON) {
+      scrollToLoopIndex(targetLoopIndex, !shouldRecenter);
+    }
 
     if (index !== selectedIndexRef.current) {
       emittedIndexRef.current = index;
       selectedIndexRef.current = index;
       onSelect(index);
     }
-  }, [labels.length, onSelect, scrollToIndex]);
+  }, [itemCount, loopedItemCount, onSelect, scrollToLoopIndex]);
 
   useEffect(() => {
     selectedIndexRef.current = selectedIndex;
     const emittedFromThisColumn = emittedIndexRef.current === selectedIndex;
     emittedIndexRef.current = null;
 
-    setActiveIndex(selectedIndex);
     if (emittedFromThisColumn) {
       return undefined;
     }
 
     const frame = requestAnimationFrame(() => {
-      scrollToIndex(selectedIndex, mountedRef.current);
-      mountedRef.current = true;
+      scrollToCenteredIndex(selectedIndex, false);
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [scrollToIndex, selectedIndex]);
+  }, [scrollToCenteredIndex, selectedIndex]);
 
   useEffect(() => clearSettleTimer, [clearSettleTimer]);
 
-  const handleScrollEndDrag = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const offsetY = event.nativeEvent.contentOffset.y;
-
+  const scheduleSettle = useCallback((delay: number) => {
     clearSettleTimer();
     settleTimerRef.current = setTimeout(() => {
       settleTimerRef.current = null;
-      settleToOffset(offsetY);
-    }, 80);
+      if (draggingRef.current || momentumActiveRef.current) {
+        return;
+      }
+
+      settleToOffset(latestOffsetRef.current);
+    }, delay);
+  }, [clearSettleTimer, settleToOffset]);
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    latestOffsetRef.current = event.nativeEvent.contentOffset.y;
+    if (!draggingRef.current && !momentumActiveRef.current) {
+      scheduleSettle(90);
+    }
+  };
+
+  const handleScrollEndDrag = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    draggingRef.current = false;
+    latestOffsetRef.current = event.nativeEvent.contentOffset.y;
+    scheduleSettle(90);
+  };
+
+  const handleMomentumScrollBegin = () => {
+    draggingRef.current = false;
+    momentumActiveRef.current = true;
+    clearSettleTimer();
+  };
+
+  const handleScrollBeginDrag = () => {
+    draggingRef.current = true;
+    momentumActiveRef.current = false;
+    clearSettleTimer();
   };
 
   const handleMomentumScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    momentumActiveRef.current = false;
     clearSettleTimer();
+    latestOffsetRef.current = event.nativeEvent.contentOffset.y;
     settleToOffset(event.nativeEvent.contentOffset.y);
   };
 
+  const renderItem = useCallback(({ item: loopIndex }: { item: number }) => {
+    const itemIndex = positiveModulo(loopIndex, itemCount);
+    const label = labels[itemIndex] ?? '';
+
+    return (
+      <View style={styles.itemRow}>
+        <Text style={styles.itemText}>{label}</Text>
+      </View>
+    );
+  }, [itemCount, labels]);
+
   return (
     <View style={[styles.column, width ? { width } : null]}>
-      <ScrollView
-        ref={scrollRef}
+      <FlatList
+        ref={listRef}
         bounces={false}
-        decelerationRate="fast"
-        nestedScrollEnabled
-        onMomentumScrollBegin={clearSettleTimer}
-        onMomentumScrollEnd={handleMomentumScrollEnd}
-        onScrollBeginDrag={clearSettleTimer}
-        onScrollEndDrag={handleScrollEndDrag}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={ITEM_HEIGHT}
-        style={styles.scroll}
-      >
-        {Array.from({ length: PAD_ROWS }, (_, index) => (
-          <View key={`pad-top-${index}`} style={styles.padRow} />
-        ))}
-        {labels.map((label, index) => {
-          const selected = index === activeIndex;
-
-          return (
-            <View key={`${label}-${index}`} style={styles.itemRow}>
-              <Text style={[styles.itemText, selected && styles.itemTextSelected]}>
-                {label}
-              </Text>
-            </View>
-          );
+        contentContainerStyle={styles.scrollContent}
+        data={loopItems}
+        decelerationRate="normal"
+        getItemLayout={(_, index) => ({
+          index,
+          length: ITEM_HEIGHT,
+          offset: ITEM_HEIGHT * index,
         })}
-        {Array.from({ length: PAD_ROWS }, (_, index) => (
-          <View key={`pad-bottom-${index}`} style={styles.padRow} />
-        ))}
-      </ScrollView>
+        initialNumToRender={VISIBLE_ROWS + 4}
+        initialScrollIndex={getCenteredLoopIndex(selectedIndex, itemCount)}
+        keyExtractor={(item) => String(item)}
+        maxToRenderPerBatch={VISIBLE_ROWS + 4}
+        nestedScrollEnabled
+        onMomentumScrollBegin={handleMomentumScrollBegin}
+        onMomentumScrollEnd={handleMomentumScrollEnd}
+        onScroll={handleScroll}
+        onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
+        onScrollToIndexFailed={({ index }) => {
+          requestAnimationFrame(() => scrollToLoopIndex(index, false));
+        }}
+        removeClippedSubviews
+        renderItem={renderItem}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        style={styles.scroll}
+        windowSize={5}
+      />
     </View>
   );
 }
@@ -167,12 +220,15 @@ type InlineTimePickerProps = {
 
 export function InlineTimePicker({ value, onChange }: InlineTimePickerProps) {
   const time = value ?? DEFAULT_REMINDER_TIME;
-  const parts = useMemo(() => to12Hour(time), [time]);
+  const parts = useMemo(() => timeToParts(time), [time]);
 
-  const hourIndex = parts.hours12 - 1;
+  const hourIndex = parts.hours;
   const minuteIndex = parts.minutes;
-  const meridiemIndex = parts.meridiem === 'PM' ? 1 : 0;
 
+  const hourLabels = useMemo(
+    () => HOURS.map((hour) => pad2(hour)),
+    [],
+  );
   const minuteLabels = useMemo(
     () => MINUTES.map((minute) => pad2(minute)),
     [],
@@ -181,35 +237,29 @@ export function InlineTimePicker({ value, onChange }: InlineTimePickerProps) {
   const emitChange = useCallback((
     nextHourIndex: number,
     nextMinuteIndex: number,
-    nextMeridiemIndex: number,
   ) => {
-    onChange(to24Hour(
-      HOURS[nextHourIndex] ?? 12,
-      MINUTES[nextMinuteIndex] ?? 0,
-      MERIDIEMS[nextMeridiemIndex] ?? 'AM',
-    ));
+    onChange({
+      hours: HOURS[nextHourIndex] ?? DEFAULT_REMINDER_TIME.hours,
+      minutes: MINUTES[nextMinuteIndex] ?? DEFAULT_REMINDER_TIME.minutes,
+    });
   }, [onChange]);
 
   return (
     <View style={styles.root}>
+      <View pointerEvents="none" style={styles.selectionBand} />
       <View style={styles.columns}>
         <WheelColumn
-          labels={HOURS.map(String)}
-          onSelect={(index) => emitChange(index, minuteIndex, meridiemIndex)}
+          labels={hourLabels}
+          onSelect={(index) => emitChange(index, minuteIndex)}
           selectedIndex={hourIndex}
+          width={56}
         />
         <Text style={styles.separator}>:</Text>
         <WheelColumn
           labels={minuteLabels}
-          onSelect={(index) => emitChange(hourIndex, index, meridiemIndex)}
+          onSelect={(index) => emitChange(hourIndex, index)}
           selectedIndex={minuteIndex}
           width={56}
-        />
-        <WheelColumn
-          labels={[...MERIDIEMS]}
-          onSelect={(index) => emitChange(hourIndex, minuteIndex, index)}
-          selectedIndex={meridiemIndex}
-          width={52}
         />
       </View>
     </View>
@@ -224,6 +274,15 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginTop: 4,
     overflow: 'hidden',
+  },
+  selectionBand: {
+    backgroundColor: '#EAF0FF',
+    borderRadius: 12,
+    height: ITEM_HEIGHT,
+    left: 34,
+    position: 'absolute',
+    right: 34,
+    top: ITEM_HEIGHT * PAD_ROWS,
   },
   columns: {
     alignItems: 'center',
@@ -240,8 +299,8 @@ const styles = StyleSheet.create({
   scroll: {
     height: PICKER_HEIGHT,
   },
-  padRow: {
-    height: ITEM_HEIGHT,
+  scrollContent: {
+    paddingVertical: ITEM_HEIGHT * PAD_ROWS,
   },
   itemRow: {
     alignItems: 'center',
@@ -249,17 +308,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   itemText: {
-    color: '#B5ADA5',
-    fontSize: 18,
-    fontWeight: '400',
-  },
-  itemTextSelected: {
-    color: ACCENT,
-    fontSize: 22,
-    fontWeight: '700',
+    color: '#2A2520',
+    fontSize: 20,
+    fontWeight: '600',
   },
   separator: {
-    color: '#1F1B17',
+    color: ACCENT,
     fontSize: 22,
     fontWeight: '700',
     marginHorizontal: 2,

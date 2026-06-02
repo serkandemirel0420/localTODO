@@ -48,7 +48,11 @@ import {
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
-import { ReminderTimeModal } from './src/components/ReminderTimeModal';
+import {
+  ReminderTimeModal,
+  type ReminderTimeModalHandle,
+  type ReminderTimeModalSource,
+} from './src/components/ReminderTimeModal';
 import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
 import { TodoRow } from './src/components/TodoRow';
@@ -141,8 +145,11 @@ import {
   TODO_ROW_DIVIDER_HEIGHT,
   type VisibleTodoListRow,
 } from './src/todoListRows';
+import { advanceRepeatingTodoAfterDone } from './src/todoRecurrence';
 import {
+  addTodoAlarmResponseListener,
   cancelTodoAlarm,
+  consumeLastTodoAlarmNotificationResponse,
   reconcileTodoAlarms,
   syncTodoAlarm,
 } from './src/todoAlarms';
@@ -330,6 +337,14 @@ const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
   priority: 'priority',
 };
 
+const countDateMenuSelections = (
+  filters: TodoFilters,
+  includeReminderRows: boolean,
+) =>
+  filters.date.length +
+  (includeReminderRows && hasTodoReminderTime(filters.reminder) ? 1 : 0) +
+  (includeReminderRows && hasTodoRepeat(filters.reminder) ? 1 : 0);
+
 const menuSectionCanClear = (
   menuMode: MenuMode,
   filters: TodoFilters,
@@ -342,10 +357,15 @@ const menuSectionCanClear = (
     listLabel: string | null;
     isSubsectionView: boolean;
   },
+  includeReminderRows: boolean,
   activeMenuPreset: MenuPreset | null,
 ): boolean => {
   const filterKey = MENU_SECTION_FILTER_KEYS[menuMode];
   if (filterKey) {
+    if (filterKey === 'date') {
+      return countDateMenuSelections(filters, includeReminderRows) > 0;
+    }
+
     return filters[filterKey].length > 0;
   }
 
@@ -699,8 +719,10 @@ const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
       children: node.children ? sortListMenuTree(node.children) : undefined,
     }));
 
-const countFilters = (filters: SelectedFilters) =>
-  filters.date.length + filters.list.length + filters.priority.length;
+const countFilters = (filters: SelectedFilters, includeReminderRows = false) =>
+  countDateMenuSelections(filters, includeReminderRows) +
+  filters.list.length +
+  filters.priority.length;
 
 const normalizeFilterValues = (filters: TodoFilters) => ({
   date: [...filters.date].sort(),
@@ -853,8 +875,9 @@ export default function App() {
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [datePickerValue, setDatePickerValue] = useState(() => startOfDay(new Date()));
   const datePickerApplyRef = useRef<'create' | 'filters'>('filters');
-  const [reminderModalVisible, setReminderModalVisible] = useState(false);
+  const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
   const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
+  const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
   const [repeatDraft, setRepeatDraft] = useState<RepeatPreset>('none');
   const [loaded, setLoaded] = useState(false);
   const [navTab, setNavTab] = useState<NavTab | null>(null);
@@ -928,6 +951,13 @@ export default function App() {
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const todosRef = useRef<Todo[]>(todos);
+  const loadedRef = useRef(loaded);
+  const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
+  const pendingTodoAlarmOpenIdRef = useRef<string | null>(null);
+  todosRef.current = todos;
+  loadedRef.current = loaded;
+  pendingDeleteIdsRef.current = pendingDeleteIds;
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
   const didApplyTodoListInitialOffsetRef = useRef(false);
@@ -1560,7 +1590,7 @@ export default function App() {
   const backToCreateDrawerInput = useCallback(() => {
     Keyboard.dismiss();
     setDatePickerVisible(false);
-    setReminderModalVisible(false);
+    reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(null);
   }, []);
@@ -1572,10 +1602,81 @@ export default function App() {
     setCreateDraftText('');
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
-    setReminderModalVisible(false);
+    reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
+
+  const openTodoAlarmDetail = useCallback((id: string) => {
+    if (!loadedRef.current) {
+      pendingTodoAlarmOpenIdRef.current = id;
+      return;
+    }
+
+    const todo = todosRef.current.find((item) => item.id === id);
+    if (!todo || pendingDeleteIdsRef.current.has(id)) {
+      if (pendingTodoAlarmOpenIdRef.current === id) {
+        pendingTodoAlarmOpenIdRef.current = null;
+      }
+      return;
+    }
+
+    pendingTodoAlarmOpenIdRef.current = null;
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    closeListMenuState();
+    resetCreateDrawerState();
+    setActiveDeletedTodoDetailId(null);
+    setCreateDrawerPicker(null);
+    setCreateDrawerVisible(false);
+    setDatePickerVisible(false);
+    setPresetSaveModalVisible(false);
+    setPresetSaveName('');
+    setQuery('');
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setSettingsModalVisible(false);
+    setNavTab(null);
+    setActiveTodoDetailDraftContent(todo.content);
+    setActiveTodoDetailDraftText(todo.text);
+    todoDetailDraftTodoIdRef.current = id;
+    setActiveTodoDetailId(id);
+  }, [closeListMenuState, resetCreateDrawerState]);
+
+  useEffect(() => {
+    if (!loaded) {
+      return;
+    }
+
+    const todoId = pendingTodoAlarmOpenIdRef.current;
+    if (todoId) {
+      openTodoAlarmDetail(todoId);
+    }
+  }, [loaded, openTodoAlarmDetail, todos]);
+
+  useEffect(() => {
+    let alive = true;
+    const openTodo = (todoId: string) => {
+      if (alive) {
+        openTodoAlarmDetail(todoId);
+      }
+    };
+
+    consumeLastTodoAlarmNotificationResponse()
+      .then((todoId) => {
+        if (todoId) {
+          openTodo(todoId);
+        }
+      })
+      .catch(() => undefined);
+
+    const subscription = addTodoAlarmResponseListener(openTodo);
+
+    return () => {
+      alive = false;
+      subscription.remove();
+    };
+  }, [openTodoAlarmDetail]);
 
   const goBackInMenu = useCallback(() => {
     if (activeTodoDetailId) {
@@ -1585,11 +1686,6 @@ export default function App() {
 
     if (datePickerVisible) {
       setDatePickerVisible(false);
-      return true;
-    }
-
-    if (reminderModalVisible) {
-      setReminderModalVisible(false);
       return true;
     }
 
@@ -1649,7 +1745,6 @@ export default function App() {
     createDrawerVisible,
     datePickerVisible,
     menuMode,
-    reminderModalVisible,
     repeatReminderModalVisible,
     presetSaveModalVisible,
     resetCreateDrawerState,
@@ -1882,7 +1977,7 @@ export default function App() {
   const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
     Keyboard.dismiss();
     setDatePickerVisible(false);
-    setReminderModalVisible(false);
+    reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(picker);
     Haptics.selectionAsync().catch(() => undefined);
@@ -2035,19 +2130,26 @@ export default function App() {
     }
 
     const updatedTodo = todos.find((todo) => todo.id === id);
-    const nextTodo = updatedTodo ? { ...updatedTodo, done } : null;
+    const repeatedNextTodo = done && updatedTodo
+      ? advanceRepeatingTodoAfterDone(updatedTodo)
+      : null;
+    const nextTodo = repeatedNextTodo ?? (updatedTodo ? { ...updatedTodo, done } : null);
 
     setTodos((current) =>
       current.map((todo) => (
-        todo.id === id && todo.done !== done ? { ...todo, done } : todo
+        todo.id === id && nextTodo ? nextTodo : todo
       )),
     );
-    if (done && hideDoneTodos) {
+    if (done && nextTodo?.done && hideDoneTodos) {
       setActiveTodoMenuId((current) => (current === id ? null : current));
       setActiveTodoDetailId((current) => (current === id ? null : current));
     }
-    localTodoStore.updateDone(id, done).catch(() => undefined);
     if (nextTodo) {
+      if (repeatedNextTodo) {
+        localTodoStore.upsert(repeatedNextTodo).catch(() => undefined);
+      } else {
+        localTodoStore.updateDone(id, done).catch(() => undefined);
+      }
       syncTodoAlarm(nextTodo).catch(() => undefined);
     } else if (done) {
       cancelTodoAlarm(id).catch(() => undefined);
@@ -2146,25 +2248,46 @@ export default function App() {
   }, []);
 
   const openCreateReminderModal = useCallback(() => {
-    setReminderModalVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
-  }, []);
-
-  const closeCreateReminderModal = useCallback(() => {
-    setReminderModalVisible(false);
-  }, []);
-
-  const confirmCreateReminderTime = useCallback((time: ReminderTime) => {
-    const current = decodeTodoReminder(createDraftFilters.reminder);
-    setCreateDraftFilters((draft) => ({
-      ...draft,
-      reminder: encodeTodoReminder({ time, repeat: current.repeat }),
-    }));
-    setReminderModalVisible(false);
-    Haptics.selectionAsync().catch(() => undefined);
+    reminderTimeModalRef.current?.open({
+      source: 'create',
+      value: decodeTodoReminder(createDraftFilters.reminder).time,
+    });
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, [createDraftFilters.reminder]);
 
+  const confirmReminderTime = useCallback((
+    source: ReminderTimeModalSource,
+    time: ReminderTime,
+  ) => {
+    if (source === 'create') {
+      setCreateDraftFilters((draft) => {
+        const current = decodeTodoReminder(draft.reminder);
+
+        return {
+          ...draft,
+          reminder: encodeTodoReminder({ time, repeat: current.repeat }),
+        };
+      });
+    } else {
+      const activeTodoId = activeTodoMenuIdRef.current;
+
+      if (activeTodoId) {
+        updateTodoFilters(activeTodoId, (filters) => {
+          const current = decodeTodoReminder(filters.reminder);
+
+          return {
+            ...filters,
+            reminder: encodeTodoReminder({ time, repeat: current.repeat }),
+          };
+        });
+      }
+    }
+
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [updateTodoFilters]);
+
   const openCreateRepeatModal = useCallback(() => {
+    repeatReminderApplyRef.current = 'create';
     setRepeatDraft(decodeTodoReminder(createDraftFilters.reminder).repeat);
     setRepeatReminderModalVisible(true);
     Haptics.selectionAsync().catch(() => undefined);
@@ -2175,35 +2298,120 @@ export default function App() {
   }, []);
 
   const confirmCreateRepeat = useCallback((repeat: RepeatPreset) => {
-    const current = decodeTodoReminder(createDraftFilters.reminder);
-    const nextTime = repeat === 'none'
-      ? current.time
-      : current.time ?? { ...DEFAULT_REMINDER_TIME };
-    setCreateDraftFilters((draft) => ({
-      ...draft,
-      reminder: encodeTodoReminder({ time: nextTime, repeat }),
-    }));
+    if (repeatReminderApplyRef.current === 'create') {
+      setCreateDraftFilters((draft) => {
+        const current = decodeTodoReminder(draft.reminder);
+        const nextTime = repeat === 'none'
+          ? current.time
+          : current.time ?? { ...DEFAULT_REMINDER_TIME };
+
+        return {
+          ...draft,
+          reminder: encodeTodoReminder({ time: nextTime, repeat }),
+        };
+      });
+    } else {
+      const activeTodoId = activeTodoMenuIdRef.current;
+
+      if (activeTodoId) {
+        updateTodoFilters(activeTodoId, (filters) => {
+          const current = decodeTodoReminder(filters.reminder);
+          const nextTime = repeat === 'none'
+            ? current.time
+            : current.time ?? { ...DEFAULT_REMINDER_TIME };
+
+          return {
+            ...filters,
+            reminder: encodeTodoReminder({ time: nextTime, repeat }),
+          };
+        });
+      }
+    }
+
     setRepeatReminderModalVisible(false);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [createDraftFilters.reminder]);
+  }, [updateTodoFilters]);
 
   const clearCreateReminderTime = useCallback(() => {
     setCreateDraftFilters((draft) => ({
       ...draft,
       reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
     }));
-    setReminderModalVisible(false);
+    reminderTimeModalRef.current?.close();
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
   const clearCreateRepeat = useCallback(() => {
-    const current = decodeTodoReminder(createDraftFilters.reminder);
-    setCreateDraftFilters((draft) => ({
-      ...draft,
-      reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
-    }));
+    setCreateDraftFilters((draft) => {
+      const current = decodeTodoReminder(draft.reminder);
+
+      return {
+        ...draft,
+        reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
+      };
+    });
     Haptics.selectionAsync().catch(() => undefined);
-  }, [createDraftFilters.reminder]);
+  }, []);
+
+  const openActiveTodoReminderModal = useCallback(() => {
+    if (!activeTodoMenuId) {
+      return;
+    }
+
+    const reminderValues = todos.find((todo) => todo.id === activeTodoMenuId)?.filters.reminder ?? [];
+
+    reminderTimeModalRef.current?.open({
+      source: 'activeTodo',
+      value: decodeTodoReminder(reminderValues).time,
+    });
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, [activeTodoMenuId, todos]);
+
+  const openActiveTodoRepeatModal = useCallback(() => {
+    if (!activeTodoMenuId) {
+      return;
+    }
+
+    const reminderValues = todos.find((todo) => todo.id === activeTodoMenuId)?.filters.reminder ?? [];
+
+    repeatReminderApplyRef.current = 'activeTodo';
+    setRepeatDraft(decodeTodoReminder(reminderValues).repeat);
+    setRepeatReminderModalVisible(true);
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [activeTodoMenuId, todos]);
+
+  const clearActiveTodoReminderTime = useCallback(() => {
+    const activeTodoId = activeTodoMenuIdRef.current;
+
+    if (!activeTodoId) {
+      return;
+    }
+
+    updateTodoFilters(activeTodoId, (filters) => ({
+      ...filters,
+      reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
+    }));
+    reminderTimeModalRef.current?.close();
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [updateTodoFilters]);
+
+  const clearActiveTodoRepeat = useCallback(() => {
+    const activeTodoId = activeTodoMenuIdRef.current;
+
+    if (!activeTodoId) {
+      return;
+    }
+
+    updateTodoFilters(activeTodoId, (filters) => {
+      const current = decodeTodoReminder(filters.reminder);
+
+      return {
+        ...filters,
+        reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
+      };
+    });
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [updateTodoFilters]);
 
   const handleCreateDrawerDatePress = useCallback((label: string) => {
     if (label === REMINDER_PICKER_LABEL) {
@@ -2582,7 +2790,8 @@ export default function App() {
     activeTodoDetailDraftTextForSave,
   ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
-  const activeFilterCount = countFilters(menuFilters);
+  const includeActiveTodoReminderRows = Boolean(activeTodoMenuId);
+  const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
   const searchFilterItems = useMemo(
     () => buildActiveFilterItems(selectedFilters),
     [selectedFilters],
@@ -2619,7 +2828,11 @@ export default function App() {
     }
 
     if (menuMode === 'date') {
-      return DATE_MENU_ITEMS.map((label) => ({
+      const dateMenuItems = includeActiveTodoReminderRows
+        ? DATE_PICKER_MENU_ITEMS
+        : DATE_MENU_ITEMS;
+
+      return dateMenuItems.map((label) => ({
         filterKey: 'date',
         id: `date-${label}`,
         label,
@@ -2742,7 +2955,10 @@ export default function App() {
         type: 'menu',
       },
       {
-        count: menuFilters.date.length || undefined,
+        count: countDateMenuSelections(
+          menuFilters,
+          includeActiveTodoReminderRows,
+        ) || undefined,
         id: 'main-date',
         label: 'Date',
         menuMode: 'date',
@@ -2794,6 +3010,7 @@ export default function App() {
     activeFilterCount,
     activeMenuPreset,
     currentPresetSummary,
+    includeActiveTodoReminderRows,
     latestMenuPreset,
     listOrderMode,
     menuFilters,
@@ -2874,13 +3091,29 @@ export default function App() {
   }, [activeTodoMenuId, updateTodoFilters]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
+    if (label === REMINDER_PICKER_LABEL) {
+      openActiveTodoReminderModal();
+      return;
+    }
+
+    if (label === REPEAT_PICKER_LABEL) {
+      openActiveTodoRepeatModal();
+      return;
+    }
+
     if (label === CUSTOM_DATE_LABEL) {
       openDatePicker('filters', menuFilters.date);
       return;
     }
 
     toggleFilterValue('date', label);
-  }, [menuFilters.date, openDatePicker, toggleFilterValue]);
+  }, [
+    menuFilters.date,
+    openActiveTodoReminderModal,
+    openActiveTodoRepeatModal,
+    openDatePicker,
+    toggleFilterValue,
+  ]);
 
   const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
     const toggleValue = (current: SelectedFilters): SelectedFilters => {
@@ -3098,10 +3331,18 @@ export default function App() {
     const filterKey = MENU_SECTION_FILTER_KEYS[section];
 
     if (filterKey) {
-      const clearKey = (current: SelectedFilters) => ({
-        ...current,
-        [filterKey]: [],
-      });
+      const clearKey = (current: SelectedFilters) => {
+        const nextFilters: SelectedFilters = {
+          ...current,
+          [filterKey]: [],
+        };
+
+        if (filterKey === 'date' && activeTodoMenuId) {
+          nextFilters.reminder = [];
+        }
+
+        return nextFilters;
+      };
 
       if (activeTodoMenuId) {
         updateTodoFilters(activeTodoMenuId, clearKey);
@@ -4807,6 +5048,7 @@ export default function App() {
   	                              metaTagVisibility,
   	                              listMenuTree,
   	                              activeListDisplay,
+                              includeActiveTodoReminderRows,
   	                              activeMenuPreset,
   	                            );
 
@@ -4867,23 +5109,43 @@ export default function App() {
                               return null;
                             }
 
-                            const isSelected = item.filterKey === 'date'
-                              ? isDateMenuItemSelected(item.label, menuFilters.date)
+                            const isDateValue = item.filterKey === 'date';
+                            const isReminderValue =
+                              isDateValue && isReminderPickerMenuLabel(item.label);
+                            const isSelected = isDateValue
+                              ? isDatePickerMenuItemSelected(
+                                item.label,
+                                menuFilters.date,
+                                menuFilters.reminder,
+                                isDateMenuItemSelected,
+                              )
                               : menuFilters[item.filterKey].includes(item.label);
-                            const displayLabel = item.filterKey === 'date'
-                              ? getDateMenuItemDisplayLabel(item.label, menuFilters.date)
+                            const displayLabel = isDateValue
+                              ? getDatePickerMenuDisplayLabel(
+                                item.label,
+                                menuFilters.date,
+                                menuFilters.reminder,
+                                getDateMenuItemDisplayLabel,
+                              )
                               : item.label;
-                            const colorLookupValue = item.filterKey === 'date'
+                            const colorLookupValue = isDateValue && !isReminderValue
                               ? getDateMenuColorLookupValue(item.label, menuFilters.date)
                               : item.label;
-                            const colorTheme = getFilterColorTheme(
-                              filterColors,
-                              item.filterKey,
-                              colorLookupValue,
-                            );
-                            const clearValue = item.filterKey === 'date'
+                            const colorTheme = isReminderValue
+                              ? null
+                              : getFilterColorTheme(
+                                filterColors,
+                                item.filterKey,
+                                colorLookupValue,
+                              );
+                            const clearValue = isDateValue && !isReminderValue
                               ? getDateMenuClearValue(item.label, menuFilters.date)
                               : item.label;
+                            const clearAccessibilityLabel = item.label === REMINDER_PICKER_LABEL
+                              ? 'Clear reminder time'
+                              : item.label === REPEAT_PICKER_LABEL
+                                ? 'Clear repeating'
+                                : `Clear ${displayLabel}`;
 
                             return (
                               <View style={styles.listMenuSelectableRow}>
@@ -4917,10 +5179,20 @@ export default function App() {
                                 </Pressable>
                                 <Pressable
                                   accessibilityRole="button"
-                                  accessibilityLabel={`Clear ${displayLabel}`}
+                                  accessibilityLabel={clearAccessibilityLabel}
                                   disabled={!isSelected}
                                   hitSlop={LIST_MENU_ICON_HIT_SLOP}
                                   onPress={() => {
+                                    if (item.label === REMINDER_PICKER_LABEL) {
+                                      clearActiveTodoReminderTime();
+                                      return;
+                                    }
+
+                                    if (item.label === REPEAT_PICKER_LABEL) {
+                                      clearActiveTodoRepeat();
+                                      return;
+                                    }
+
                                     if (clearValue) {
                                       removeFilter(item.filterKey, clearValue);
                                     }
@@ -5583,10 +5855,8 @@ export default function App() {
         />
 
         <ReminderTimeModal
-          onClose={closeCreateReminderModal}
-          onConfirm={confirmCreateReminderTime}
-          value={decodeTodoReminder(createDraftFilters.reminder).time}
-          visible={reminderModalVisible}
+          ref={reminderTimeModalRef}
+          onConfirm={confirmReminderTime}
         />
 
         <RepeatReminderModal

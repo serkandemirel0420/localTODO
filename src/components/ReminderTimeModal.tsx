@@ -1,4 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, {
+  forwardRef,
+  memo,
+  useCallback,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
 import {
   Modal,
   Pressable,
@@ -15,33 +22,59 @@ import { InlineTimePicker } from './InlineTimePicker';
 
 const ACCENT = '#4C78FF';
 
-type ReminderTimeModalProps = {
-  visible: boolean;
-  value: ReminderTime | null;
-  onClose: () => void;
-  onConfirm: (time: ReminderTime) => void;
+export type ReminderTimeModalSource = 'create' | 'activeTodo';
+
+export type ReminderTimeModalHandle = {
+  close: () => void;
+  open: (params: {
+    source: ReminderTimeModalSource;
+    value: ReminderTime | null;
+  }) => void;
 };
 
-export function ReminderTimeModal({
-  visible,
-  value,
-  onClose,
+type ReminderTimeModalProps = {
+  onConfirm: (source: ReminderTimeModalSource, time: ReminderTime) => void;
+};
+
+function ReminderTimeModalHost({
   onConfirm,
-}: ReminderTimeModalProps) {
-  const [draft, setDraft] = useState<ReminderTime>(value ?? DEFAULT_REMINDER_TIME);
+}: ReminderTimeModalProps, ref: React.ForwardedRef<ReminderTimeModalHandle>) {
+  const sourceRef = useRef<ReminderTimeModalSource>('create');
+  const [visible, setVisible] = useState(false);
+  const [draft, setDraft] = useState<ReminderTime>(DEFAULT_REMINDER_TIME);
 
-  useEffect(() => {
-    if (!visible) {
-      return;
-    }
+  const close = useCallback(() => {
+    setVisible(false);
+  }, []);
 
-    setDraft(value ?? DEFAULT_REMINDER_TIME);
-  }, [value, visible]);
+  const open = useCallback((params: {
+    source: ReminderTimeModalSource;
+    value: ReminderTime | null;
+  }) => {
+    sourceRef.current = params.source;
+    setDraft(params.value ?? DEFAULT_REMINDER_TIME);
+    setVisible(true);
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    close,
+    open,
+  }), [close, open]);
+
+  const handleConfirm = useCallback(() => {
+    onConfirm(sourceRef.current, draft);
+    close();
+  }, [close, draft, onConfirm]);
+
+  if (!visible) {
+    return null;
+  }
 
   return (
     <Modal
-      animationType="fade"
-      onRequestClose={onClose}
+      animationType="none"
+      hardwareAccelerated
+      onRequestClose={close}
       transparent
       visible={visible}
     >
@@ -49,27 +82,26 @@ export function ReminderTimeModal({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Dismiss reminder"
-          onPress={onClose}
+          onPress={close}
           style={styles.backdrop}
         />
         <View style={styles.card}>
           <Text style={styles.title}>Reminder</Text>
           <InlineTimePicker
-            key={visible ? 'open' : 'closed'}
             onChange={setDraft}
             value={draft}
           />
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
-              onPress={onClose}
+              onPress={close}
               style={({ pressed }) => [styles.actionButton, pressed && styles.pressed]}
             >
               <Text style={styles.actionText}>CANCEL</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              onPress={() => onConfirm(draft)}
+              onPress={handleConfirm}
               style={({ pressed }) => [styles.actionButton, pressed && styles.pressed]}
             >
               <Text style={styles.actionText}>OK</Text>
@@ -80,6 +112,8 @@ export function ReminderTimeModal({
     </Modal>
   );
 }
+
+export const ReminderTimeModal = memo(forwardRef(ReminderTimeModalHost));
 
 const styles = StyleSheet.create({
   root: {

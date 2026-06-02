@@ -52,6 +52,23 @@ const getTodoIdFromAlarmIdentifier = (identifier: string) => (
     : null
 );
 
+const getTodoAlarmResponseTodoId = (
+  response: Notifications.NotificationResponse | null | undefined,
+) => {
+  const request = response?.notification.request;
+  if (!request) {
+    return null;
+  }
+
+  const { data } = request.content;
+  const todoId = typeof data.todoId === 'string' ? data.todoId.trim() : '';
+  if (data.type === 'todo-reminder' && todoId) {
+    return todoId;
+  }
+
+  return getTodoIdFromAlarmIdentifier(request.identifier);
+};
+
 const allowsNotifications = (
   status: Notifications.NotificationPermissionsStatus,
 ) => (
@@ -263,10 +280,12 @@ const createTodoAlarmRequest = (
   const repeatLabel = reminder.repeat === 'none'
     ? ''
     : ` (${formatRepeatLabel(reminder.repeat)})`;
+  const title = todo.text.trim() ? `Reminder: ${todo.text}` : 'Reminder';
+  const body = todo.content.trim() || null;
 
   return {
     content: {
-      body: todo.content || todo.text,
+      body,
       data: {
         todoId: todo.id,
         type: 'todo-reminder',
@@ -274,11 +293,42 @@ const createTodoAlarmRequest = (
       priority: Notifications.AndroidNotificationPriority.HIGH,
       sound: 'default',
       subtitle: `${formatReminderClockLabel(reminder.time)}${repeatLabel}`,
-      title: 'Todo reminder',
+      title,
     },
     identifier: getTodoAlarmIdentifier(todo.id),
     trigger,
   };
+};
+
+export const consumeLastTodoAlarmNotificationResponse = async () => {
+  if (!canScheduleNotifications()) {
+    return null;
+  }
+
+  const todoId = getTodoAlarmResponseTodoId(
+    await Notifications.getLastNotificationResponseAsync(),
+  );
+
+  if (todoId) {
+    await Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
+  }
+
+  return todoId;
+};
+
+export const addTodoAlarmResponseListener = (
+  openTodo: (todoId: string) => void,
+) => {
+  if (!canScheduleNotifications()) {
+    return { remove: () => undefined };
+  }
+
+  return Notifications.addNotificationResponseReceivedListener((response) => {
+    const todoId = getTodoAlarmResponseTodoId(response);
+    if (todoId) {
+      openTodo(todoId);
+    }
+  });
 };
 
 export const cancelTodoAlarm = async (todoId: string) => {

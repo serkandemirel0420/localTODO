@@ -194,6 +194,12 @@ const getBestDateFilterLabel = (values: string[], fallbackLabel: string, now = n
 const getTodoDateSortRank = (todo: Todo, now = new Date()) =>
   getDateFilterSortRank(getBestDateFilterLabel(todo.filters.date, 'No date', now), now);
 
+const EXACT_RELATIVE_DATE_GROUP_LABELS = new Set(['Today', 'Tomorrow']);
+
+const getDateGroupKey = (rawLabel: string, displayLabel: string) => (
+  EXACT_RELATIVE_DATE_GROUP_LABELS.has(displayLabel) ? displayLabel : rawLabel
+);
+
 const compareTodosByFallback = (first: Todo, second: Todo) =>
   second.createdAt - first.createdAt ||
   first.text.localeCompare(second.text) ||
@@ -326,10 +332,11 @@ const getTodoGroups = (
 
   const now = new Date();
   const rawLabel = getBestDateFilterLabel(todo.filters.date, 'No date', now);
+  const displayLabel = formatCompactDateFilterLabel(rawLabel);
 
   return [{
-    key: rawLabel,
-    label: formatCompactDateFilterLabel(rawLabel),
+    key: getDateGroupKey(rawLabel, displayLabel),
+    label: displayLabel,
     rank: getDateFilterSortRank(rawLabel, now),
   }];
 };

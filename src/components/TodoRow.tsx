@@ -278,11 +278,17 @@ function TodoRowComponent({
   ]);
 
   const enterSelectMode = useCallback(() => {
-    if (isPendingDelete || selectMode) {
+    if (isPendingDelete) {
       return;
     }
 
     closeOtherOpenSwipeable();
+
+    if (selectMode) {
+      toggleSelection();
+      return;
+    }
+
     onEnterSelectMode?.(item.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
   }, [
@@ -291,6 +297,7 @@ function TodoRowComponent({
     item.id,
     onEnterSelectMode,
     selectMode,
+    toggleSelection,
   ]);
 
   const handleSwipeableWillOpen = useCallback(

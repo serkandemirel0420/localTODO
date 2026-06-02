@@ -852,10 +852,28 @@ export default function App() {
     [windowWidth],
   );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
-  const todoDetailCardMaxHeight = Math.round(windowHeight * 0.79);
-  const todoDetailContentInputMaxHeight = Math.max(176, Math.round(windowHeight * 0.42));
+  const [keyboardOverlayInset, setKeyboardOverlayInset] = useState(0);
+  const todoDetailCardMaxHeight = useMemo(() => {
+    const baseMaxHeight = Math.round(windowHeight * 0.79);
+
+    if (keyboardOverlayInset > 0) {
+      const topReserve = TOP_SAFE_GAP + 24;
+      return Math.max(220, windowHeight - keyboardOverlayInset - topReserve);
+    }
+
+    return baseMaxHeight;
+  }, [keyboardOverlayInset, windowHeight]);
+  const todoDetailContentInputMaxHeight = useMemo(() => {
+    const baseMaxHeight = Math.max(176, Math.round(windowHeight * 0.42));
+
+    if (keyboardOverlayInset > 0) {
+      const chromeReserve = TOP_SAFE_GAP + 24 + 120;
+      return Math.max(96, windowHeight - keyboardOverlayInset - chromeReserve);
+    }
+
+    return baseMaxHeight;
+  }, [keyboardOverlayInset, windowHeight]);
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [createDrawerKeyboardInset, setCreateDrawerKeyboardInset] = useState(0);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [searchResultIds, setSearchResultIds] = useState<string[] | null>(null);
@@ -1848,10 +1866,10 @@ export default function App() {
 
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
       const { screenY } = event.endCoordinates;
-      setCreateDrawerKeyboardInset(Math.max(0, windowHeight - screenY));
+      setKeyboardOverlayInset(Math.max(0, windowHeight - screenY));
     });
     const hideSubscription = Keyboard.addListener(hideEvent, () => {
-      setCreateDrawerKeyboardInset(0);
+      setKeyboardOverlayInset(0);
     });
 
     return () => {
@@ -1861,16 +1879,16 @@ export default function App() {
   }, [windowHeight]);
 
   useEffect(() => {
-    if (!createDrawerVisible) {
-      setCreateDrawerKeyboardInset(0);
+    if (!createDrawerVisible && !activeTodoDetailId) {
+      setKeyboardOverlayInset(0);
     }
-  }, [createDrawerVisible]);
+  }, [activeTodoDetailId, createDrawerVisible]);
 
   const createDrawerPickerMaxHeight = useMemo(() => {
     const toolbarReserve = 168;
 
-    if (createDrawerKeyboardInset > 0) {
-      return Math.max(120, windowHeight - createDrawerKeyboardInset - toolbarReserve);
+    if (keyboardOverlayInset > 0) {
+      return Math.max(120, windowHeight - keyboardOverlayInset - toolbarReserve);
     }
 
     if (createDrawerPicker === 'list') {
@@ -1878,7 +1896,7 @@ export default function App() {
     }
 
     return Math.max(120, windowHeight * 0.42);
-  }, [createDrawerKeyboardInset, createDrawerPicker, windowHeight]);
+  }, [keyboardOverlayInset, createDrawerPicker, windowHeight]);
 
   const submitCreateTodo = useCallback(() => {
     const text = truncateTodoText(
@@ -2009,7 +2027,7 @@ export default function App() {
   const createDrawerListLabel = createDraftFilters.list[0] ?? 'Inbox';
   const createDrawerListPickerOpen = createDrawerPicker === 'list';
   const createDrawerListPickerHalfSheet =
-    createDrawerListPickerOpen && createDrawerKeyboardInset === 0;
+    createDrawerListPickerOpen && keyboardOverlayInset === 0;
   const createDrawerListPickerSheetHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const createDrawerListPickerTopSpace = Math.round(
     createDrawerListPickerSheetHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO,
@@ -5353,16 +5371,24 @@ export default function App() {
           transparent
           visible={activeTodoDetail !== null}
         >
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.todoDetailModalRoot}
-          >
+          <View style={styles.todoDetailModalRoot}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close todo details"
               onPress={closeTodoDetailModal}
               style={styles.todoDetailBackdrop}
             />
+            <View
+              pointerEvents="box-none"
+              style={[
+                keyboardOverlayInset > 0
+                  ? styles.todoDetailLayerKeyboard
+                  : styles.todoDetailLayer,
+                keyboardOverlayInset > 0
+                  ? { bottom: keyboardOverlayInset }
+                  : null,
+              ]}
+            >
             <View
               accessibilityViewIsModal
               style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
@@ -5436,7 +5462,8 @@ export default function App() {
                 />
               </View>
             </View>
-          </KeyboardAvoidingView>
+            </View>
+          </View>
         </Modal>
 
         <Modal
@@ -5538,7 +5565,7 @@ export default function App() {
               pointerEvents="box-none"
               style={[
                 styles.createDrawerLayer,
-                { bottom: createDrawerKeyboardInset },
+                { bottom: keyboardOverlayInset },
                 createDrawerListPickerHalfSheet
                   ? { height: createDrawerListPickerSheetHeight }
                   : null,
@@ -6643,9 +6670,22 @@ const styles = StyleSheet.create({
   },
   todoDetailModalRoot: {
     flex: 1,
+  },
+  todoDetailLayer: {
+    flex: 1,
     justifyContent: 'center',
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingVertical: TOP_SAFE_GAP + 24,
+  },
+  todoDetailLayerKeyboard: {
+    left: 0,
+    paddingBottom: 24,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: TOP_SAFE_GAP + 24,
+    position: 'absolute',
+    right: 0,
+    zIndex: 24,
+    elevation: 8,
   },
   todoDetailBackdrop: {
     ...StyleSheet.absoluteFillObject,

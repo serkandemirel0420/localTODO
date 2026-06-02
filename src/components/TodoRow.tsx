@@ -82,6 +82,7 @@ export type TodoRowProps = {
   item: Todo;
   isMenuTarget: boolean;
   isMenuTargetHighlighted?: boolean;
+  isNewlyCreated?: boolean;
   isPendingDelete?: boolean;
   layout?: 'standalone' | 'grouped';
   metaTagVisibility: MetaTagVisibility;
@@ -99,6 +100,7 @@ function TodoRowComponent({
   item,
   isMenuTarget,
   isMenuTargetHighlighted = false,
+  isNewlyCreated = false,
   isPendingDelete = false,
   layout = 'standalone',
   metaTagVisibility,
@@ -134,6 +136,8 @@ function TodoRowComponent({
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
   const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_PREVIEW_MAX_LENGTH);
   const isHighlightedForMenu = isMenuTargetHighlighted;
+  const isHighlightedForCreate = isNewlyCreated && !isMenuTargetHighlighted;
+  const showRowHighlight = isHighlightedForMenu || isHighlightedForCreate;
   const swipeEnabled = !deferSwipeable && !isPendingDelete && !isMenuTarget;
 
   useEffect(() => {
@@ -535,8 +539,11 @@ function TodoRowComponent({
           shadowColor: todoColorTheme.accent,
         },
         isPendingDelete && styles.rowPendingDelete,
-        isHighlightedForMenu && (
+        showRowHighlight && (
           isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
+        ),
+        isHighlightedForCreate && (
+          isGroupedLayout ? styles.rowNewlyCreatedGrouped : styles.rowNewlyCreated
         ),
       ]}
     >
@@ -639,8 +646,8 @@ function TodoRowComponent({
       style={[
         styles.shell,
         isGroupedLayout && styles.shellGrouped,
-        isHighlightedForMenu && styles.shellMenuTarget,
-        isHighlightedForMenu && isGroupedLayout && styles.shellMenuTargetGrouped,
+        showRowHighlight && styles.shellMenuTarget,
+        showRowHighlight && isGroupedLayout && styles.shellMenuTargetGrouped,
       ]}
     >
       {deferSwipeable ? (
@@ -692,12 +699,13 @@ function TodoRowComponent({
           {rowContent}
         </Swipeable>
       )}
-      {isHighlightedForMenu ? (
+      {showRowHighlight ? (
         <View
           pointerEvents="none"
           style={[
             styles.selectionFrame,
             isGroupedLayout && styles.selectionFrameGrouped,
+            isHighlightedForCreate && styles.selectionFrameNewlyCreated,
           ]}
         />
       ) : null}
@@ -851,6 +859,15 @@ const styles = StyleSheet.create({
   },
   rowMenuTargetGrouped: {
     backgroundColor: 'transparent',
+  },
+  rowNewlyCreated: {
+    backgroundColor: 'rgba(76, 120, 255, 0.1)',
+  },
+  rowNewlyCreatedGrouped: {
+    backgroundColor: 'rgba(76, 120, 255, 0.08)',
+  },
+  selectionFrameNewlyCreated: {
+    borderColor: 'rgba(76, 120, 255, 0.5)',
   },
   colorRail: {
     alignSelf: 'stretch',

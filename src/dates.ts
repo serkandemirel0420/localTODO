@@ -2,6 +2,8 @@ export const CUSTOM_DATE_LABEL = 'Custom date';
 export const LATER_DATE_LABEL = 'Later';
 export const SOMEDAY_DATE_LABEL = 'Someday';
 
+export type DateLabelDisplayMode = 'exact' | 'remaining';
+
 export const DATE_FILTER_PRESETS = [
   'Today',
   'Tomorrow',
@@ -150,6 +152,77 @@ export const getDateFilterSortRank = (label: string, now = new Date()): number =
   }
 
   return DATE_SORT_NO_DATE_RANK;
+};
+
+const getDateLabelDayOffset = (label: string, now = new Date()): number | null => {
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (
+    formattedLabel === LATER_DATE_LABEL
+    || formattedLabel === CUSTOM_DATE_LABEL
+  ) {
+    return null;
+  }
+
+  const customDate = parseISODateLabel(formattedLabel);
+  if (customDate) {
+    return Math.round(
+      (startOfDay(customDate).getTime() - startOfDay(now).getTime()) / DAY_MS,
+    );
+  }
+
+  const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[formattedLabel.toLocaleLowerCase()];
+  return dayOffset !== undefined ? dayOffset : null;
+};
+
+export const formatRemainingDaysLabel = (label: string, now = new Date()): string | null => {
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (formattedLabel === LATER_DATE_LABEL) {
+    return LATER_DATE_LABEL;
+  }
+
+  if (formattedLabel === CUSTOM_DATE_LABEL) {
+    return null;
+  }
+
+  const dayOffset = getDateLabelDayOffset(label, now);
+  if (dayOffset === null) {
+    return null;
+  }
+
+  if (dayOffset === 0) {
+    return '0 days';
+  }
+
+  if (dayOffset === 1) {
+    return '1 day';
+  }
+
+  if (dayOffset === -1) {
+    return '1 day ago';
+  }
+
+  if (dayOffset > 1) {
+    return `${dayOffset} days`;
+  }
+
+  return `${Math.abs(dayOffset)} days ago`;
+};
+
+export const formatDateDisplayLabel = (
+  label: string,
+  mode: DateLabelDisplayMode = 'exact',
+  now = new Date(),
+): string => {
+  if (mode === 'remaining') {
+    const remainingLabel = formatRemainingDaysLabel(label, now);
+    if (remainingLabel) {
+      return remainingLabel;
+    }
+  }
+
+  return formatCompactDateFilterLabel(label);
 };
 
 /** Short labels for list meta and group headers (Today, Yesterday, May 30). */
@@ -314,11 +387,30 @@ export const isDateMenuItemSelected = (menuLabel: string, dateLabels: string[]):
   return formattedMenuLabel === CUSTOM_DATE_LABEL && dateLabels.some(isCustomDateLabel);
 };
 
-export const getDateMenuItemDisplayLabel = (menuLabel: string, dateLabels: string[]): string => {
+export const getDateMenuItemDisplayLabel = (
+  menuLabel: string,
+  dateLabels: string[],
+  mode: DateLabelDisplayMode = 'exact',
+  now = new Date(),
+): string => {
   if (formatDateFilterValue(menuLabel) === CUSTOM_DATE_LABEL) {
     const customDate = getSelectedCustomDateLabel(dateLabels);
     if (customDate) {
+      if (mode === 'remaining') {
+        const remainingLabel = formatRemainingDaysLabel(customDate, now);
+        if (remainingLabel) {
+          return remainingLabel;
+        }
+      }
+
       return formatDateFilterLabel(customDate);
+    }
+  }
+
+  if (mode === 'remaining') {
+    const remainingLabel = formatRemainingDaysLabel(menuLabel, now);
+    if (remainingLabel) {
+      return remainingLabel;
     }
   }
 

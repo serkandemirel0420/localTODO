@@ -15,6 +15,7 @@ import {
 } from 'react-native-gesture-handler';
 
 import { TodoMetaTags } from './TodoMetaTags';
+import { type DateLabelDisplayMode } from '../dates';
 import {
   getTodoPrimaryColorTheme,
   type FilterColorSettings,
@@ -76,6 +77,7 @@ const getTodoRowTextPreview = (text: string, maxLength: number) => {
 };
 
 export type TodoRowProps = {
+  dateLabelDisplayMode?: DateLabelDisplayMode;
   deferSwipeable?: boolean;
   filterColors: FilterColorSettings;
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
@@ -93,6 +95,7 @@ export type TodoRowProps = {
 };
 
 function TodoRowComponent({
+  dateLabelDisplayMode = 'exact',
   deferSwipeable = false,
   filterColors,
   hiddenMetaTagKinds = [],
@@ -617,6 +620,7 @@ function TodoRowComponent({
             <TodoMetaTags
               createdAt={item.createdAt}
               dateLabel={rawDateStatusLabel || undefined}
+              dateLabelDisplayMode={dateLabelDisplayMode}
               done={item.done}
               filterColors={filterColors}
               listLabel={listStatusLabel || undefined}

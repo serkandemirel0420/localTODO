@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   type LayoutChangeEvent,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -33,7 +34,11 @@ import {
   getBestOrderedFilterLabel,
   PRIORITY_MENU_ITEMS,
 } from '../todoOptions';
-import { type Todo } from '../todos';
+import {
+  getTodoRowTitleAreaWidth,
+  TODO_ROW_TITLE_MAX_CHARS,
+  type Todo,
+} from '../todos';
 
 const THEME_CARD = '#FFFFFF';
 const THEME_BORDER = '#E5E5EA';
@@ -55,8 +60,7 @@ const LEFT_SWIPE_ACTION_WIDTH =
 const RIGHT_SWIPE_ACTION_WIDTH = SWIPE_ACTION_BUTTON_WIDTH + (SWIPE_ACTION_EDGE_PADDING * 2);
 const LEFT_SWIPE_OPEN_DISTANCE = 66;
 const RIGHT_SWIPE_OPEN_DISTANCE = 38;
-const TODO_ROW_TITLE_PREVIEW_MAX_LENGTH = 60;
-const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = 60;
+const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
@@ -286,6 +290,7 @@ function TodoRowComponent({
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const changeHighlightPulse = useRef(new Animated.Value(0)).current;
+  const { width: windowWidth } = useWindowDimensions();
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -311,7 +316,15 @@ function TodoRowComponent({
   );
   const content = item.content.trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
-  const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_PREVIEW_MAX_LENGTH);
+  const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_MAX_CHARS);
+  const titleAreaWidth = useMemo(
+    () => getTodoRowTitleAreaWidth(windowWidth, {
+      grouped: isGroupedLayout,
+      hasPriorityRail: Boolean(priorityRailTheme),
+      pinned: item.pinned,
+    }),
+    [isGroupedLayout, item.pinned, priorityRailTheme, windowWidth],
+  );
   const searchHighlightTerms = useMemo(
     () => getSearchHighlightTerms(searchHighlightQuery),
     [searchHighlightQuery],
@@ -906,7 +919,7 @@ function TodoRowComponent({
           ]}
         >
           <View style={styles.titleRow}>
-            <View style={styles.titleTextWrap}>
+            <View style={[styles.titleTextWrap, { width: titleAreaWidth }]}>
               <Text
                 ellipsizeMode="tail"
                 numberOfLines={2}
@@ -1208,7 +1221,6 @@ const styles = StyleSheet.create({
     borderRadius: ROW_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     elevation: 1,
-    flex: 1,
     flexDirection: 'row',
     minHeight: 56,
     paddingHorizontal: 14,
@@ -1352,16 +1364,19 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     flexDirection: 'row',
     minWidth: 0,
+    width: '100%',
+  },
+  titleTextWrap: {
+    flexShrink: 1,
+    minWidth: 0,
   },
   text: {
-    alignSelf: 'stretch',
     color: THEME_TEXT,
-    flex: 1,
     flexShrink: 1,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
     lineHeight: 21,
-    minWidth: 0,
+    width: '100%',
   },
   textDone: {
     color: THEME_TEXT_SECONDARY,
@@ -1382,6 +1397,7 @@ const styles = StyleSheet.create({
     textDecorationLine: 'line-through',
   },
   pinnedIcon: {
+    flexShrink: 0,
     marginLeft: 8,
     marginTop: 3,
   },

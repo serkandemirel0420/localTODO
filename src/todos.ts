@@ -82,21 +82,52 @@ export const normalizeTodoFilters = (
 /** Matches `styles.todoText` and list row layout in App.tsx */
 export const TODO_TEXT_FONT_SIZE = 16;
 export const TODO_TEXT_LINE_COUNT = 2;
+export const TODO_ROW_TITLE_MAX_CHARS = 60;
 const TODO_TEXT_AVERAGE_CHAR_WIDTH_RATIO = 0.53;
 const TODO_LIST_HORIZONTAL_PADDING = 16;
-const TODO_ROW_HORIZONTAL_PADDING = 16;
+const TODO_ROW_HORIZONTAL_PADDING = 14;
+const TODO_ROW_GROUPED_SHELL_PADDING = 16;
+const TODO_ROW_CHECKBOX_SIZE = 22;
+const TODO_ROW_CHECKBOX_MARGIN = 12;
+const TODO_ROW_TEXT_RIGHT_INSET = 36;
+const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
 const TODO_COLOR_RAIL_WIDTH = 5;
 const TODO_COLOR_RAIL_MARGIN = 12;
+const TODO_ROW_PINNED_ICON_SIZE = 14;
+const TODO_ROW_PINNED_ICON_MARGIN = 8;
+
+export const getTodoRowTitleAreaWidth = (
+  windowWidth: number,
+  options: {
+    grouped?: boolean;
+    hasPriorityRail?: boolean;
+    pinned?: boolean;
+  } = {},
+) => {
+  const { grouped = false, hasPriorityRail = false, pinned = false } = options;
+  let width = windowWidth - (TODO_LIST_HORIZONTAL_PADDING * 2);
+
+  if (grouped) {
+    width -= TODO_ROW_GROUPED_SHELL_PADDING * 2;
+  }
+
+  width -= TODO_ROW_HORIZONTAL_PADDING * 2;
+  width -= TODO_ROW_CHECKBOX_SIZE + TODO_ROW_CHECKBOX_MARGIN;
+  width -= grouped ? TODO_ROW_GROUPED_TEXT_RIGHT_INSET : TODO_ROW_TEXT_RIGHT_INSET;
+
+  if (hasPriorityRail) {
+    width -= TODO_COLOR_RAIL_WIDTH + TODO_COLOR_RAIL_MARGIN;
+  }
+
+  if (pinned) {
+    width -= TODO_ROW_PINNED_ICON_SIZE + TODO_ROW_PINNED_ICON_MARGIN;
+  }
+
+  return Math.max(120, Math.floor(width));
+};
 
 export const getTodoTextCharsPerLine = (windowWidth: number) => {
-  const textWidth = Math.max(
-    120,
-    windowWidth
-      - TODO_LIST_HORIZONTAL_PADDING * 2
-      - TODO_ROW_HORIZONTAL_PADDING * 2
-      - TODO_COLOR_RAIL_WIDTH
-      - TODO_COLOR_RAIL_MARGIN,
-  );
+  const textWidth = getTodoRowTitleAreaWidth(windowWidth, { hasPriorityRail: true });
   const averageCharWidth = TODO_TEXT_FONT_SIZE * TODO_TEXT_AVERAGE_CHAR_WIDTH_RATIO;
 
   return Math.max(12, Math.floor(textWidth / averageCharWidth));

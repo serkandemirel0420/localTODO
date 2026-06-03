@@ -8,7 +8,6 @@ import {
   StyleSheet,
   Text,
   type LayoutChangeEvent,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -34,11 +33,7 @@ import {
   getBestOrderedFilterLabel,
   PRIORITY_MENU_ITEMS,
 } from '../todoOptions';
-import {
-  getTodoRowTitleAreaWidth,
-  TODO_ROW_TITLE_MAX_CHARS,
-  type Todo,
-} from '../todos';
+import { TODO_ROW_TITLE_MAX_CHARS, type Todo } from '../todos';
 
 const THEME_CARD = '#FFFFFF';
 const THEME_BORDER = '#E5E5EA';
@@ -290,7 +285,6 @@ function TodoRowComponent({
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const changeHighlightPulse = useRef(new Animated.Value(0)).current;
-  const { width: windowWidth } = useWindowDimensions();
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -316,22 +310,17 @@ function TodoRowComponent({
   );
   const content = item.content.trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
-  const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_MAX_CHARS);
-  const titleAreaWidth = useMemo(
-    () => getTodoRowTitleAreaWidth(windowWidth, {
-      grouped: isGroupedLayout,
-      hasPriorityRail: Boolean(priorityRailTheme),
-      pinned: item.pinned,
-    }),
-    [isGroupedLayout, item.pinned, priorityRailTheme, windowWidth],
+  const displayTitle = useMemo(
+    () => item.text.trim().replace(/\s+/g, ' '),
+    [item.text],
   );
   const searchHighlightTerms = useMemo(
     () => getSearchHighlightTerms(searchHighlightQuery),
     [searchHighlightQuery],
   );
   const highlightedTitlePreview = useMemo(
-    () => renderHighlightedPreview(titlePreview, searchHighlightTerms),
-    [searchHighlightTerms, titlePreview],
+    () => renderHighlightedPreview(displayTitle, searchHighlightTerms),
+    [displayTitle, searchHighlightTerms],
   );
   const highlightedContentPreview = useMemo(
     () => renderHighlightedPreview(contentPreview, searchHighlightTerms),
@@ -918,20 +907,23 @@ function TodoRowComponent({
             isGroupedLayout && styles.contentColumnGrouped,
           ]}
         >
-          <View style={styles.titleRow}>
-            <View style={[styles.titleTextWrap, { width: titleAreaWidth }]}>
-              <Text
-                ellipsizeMode="tail"
-                numberOfLines={2}
-                style={[
-                  styles.text,
-                  item.done && styles.textDone,
-                  isPendingDelete && styles.textPendingDelete,
-                ]}
-              >
-                {highlightedTitlePreview}
-              </Text>
-            </View>
+          <View
+            style={[
+              styles.titleBlock,
+              item.pinned && styles.titleBlockPinned,
+            ]}
+          >
+            <Text
+              ellipsizeMode="tail"
+              numberOfLines={2}
+              style={[
+                styles.text,
+                item.done && styles.textDone,
+                isPendingDelete && styles.textPendingDelete,
+              ]}
+            >
+              {highlightedTitlePreview}
+            </Text>
             {item.pinned ? (
               <Ionicons
                 color={item.done || isPendingDelete ? THEME_TEXT_SECONDARY : THEME_ACCENT}
@@ -1169,14 +1161,18 @@ const styles = StyleSheet.create({
   swipeableChildren: {
     alignSelf: 'stretch',
     borderRadius: ROW_BORDER_RADIUS,
+    flex: 1,
     flexGrow: 1,
+    minWidth: 0,
     overflow: 'hidden',
     width: '100%',
   },
   swipeableChildrenGrouped: {
     backgroundColor: THEME_CARD,
     borderRadius: 0,
+    flex: 1,
     flexGrow: 1,
+    minWidth: 0,
     overflow: 'visible',
     width: '100%',
   },
@@ -1347,6 +1343,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
+    width: '100%',
   },
   contentColumn: {
     alignItems: 'flex-start',
@@ -1355,28 +1352,25 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
     paddingRight: TODO_ROW_TEXT_RIGHT_INSET,
+    width: '100%',
   },
   contentColumnGrouped: {
     paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
   },
-  titleRow: {
-    alignItems: 'flex-start',
+  titleBlock: {
     alignSelf: 'stretch',
-    flexDirection: 'row',
     minWidth: 0,
+    position: 'relative',
     width: '100%',
   },
-  titleTextWrap: {
-    flexShrink: 1,
-    minWidth: 0,
+  titleBlockPinned: {
+    paddingRight: 22,
   },
   text: {
     color: THEME_TEXT,
-    flexShrink: 1,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
     lineHeight: 21,
-    width: '100%',
   },
   textDone: {
     color: THEME_TEXT_SECONDARY,
@@ -1397,9 +1391,9 @@ const styles = StyleSheet.create({
     textDecorationLine: 'line-through',
   },
   pinnedIcon: {
-    flexShrink: 0,
-    marginLeft: 8,
-    marginTop: 3,
+    position: 'absolute',
+    right: 0,
+    top: 3,
   },
   searchHighlight: {
     backgroundColor: 'rgba(255, 211, 87, 0.55)',

@@ -105,7 +105,10 @@ export const getTodoRowTitleAreaWidth = (
   } = {},
 ) => {
   const { grouped = false, hasPriorityRail = false, pinned = false } = options;
-  let width = windowWidth - (TODO_LIST_HORIZONTAL_PADDING * 2);
+  const safeWindowWidth = Number.isFinite(windowWidth) && windowWidth > 0
+    ? windowWidth
+    : 390;
+  let width = safeWindowWidth - (TODO_LIST_HORIZONTAL_PADDING * 2);
 
   if (grouped) {
     width -= TODO_ROW_GROUPED_SHELL_PADDING * 2;
@@ -134,7 +137,10 @@ export const getTodoTextCharsPerLine = (windowWidth: number) => {
 };
 
 export const getTodoTextMaxLength = (windowWidth: number) =>
-  getTodoTextCharsPerLine(windowWidth) * TODO_TEXT_LINE_COUNT;
+  Math.max(
+    TODO_ROW_TITLE_MAX_CHARS,
+    getTodoTextCharsPerLine(windowWidth) * TODO_TEXT_LINE_COUNT,
+  );
 
 export const truncateTodoText = (text: string, maxLength: number) => {
   if (text.length <= maxLength) {

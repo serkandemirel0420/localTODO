@@ -9439,11 +9439,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
   todoSectionGroupedShell: {
+    alignSelf: 'stretch',
     backgroundColor: THEME_CARD,
     borderColor: THEME_BORDER,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     paddingHorizontal: 16,
+    width: '100%',
   },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,

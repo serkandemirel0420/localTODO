@@ -906,17 +906,19 @@ function TodoRowComponent({
           ]}
         >
           <View style={styles.titleRow}>
-            <Text
-              ellipsizeMode="tail"
-              numberOfLines={2}
-              style={[
-                styles.text,
-                item.done && styles.textDone,
-                isPendingDelete && styles.textPendingDelete,
-              ]}
-            >
-              {highlightedTitlePreview}
-            </Text>
+            <View style={styles.titleTextWrap}>
+              <Text
+                ellipsizeMode="tail"
+                numberOfLines={2}
+                style={[
+                  styles.text,
+                  item.done && styles.textDone,
+                  isPendingDelete && styles.textPendingDelete,
+                ]}
+              >
+                {highlightedTitlePreview}
+              </Text>
+            </View>
             {item.pinned ? (
               <Ionicons
                 color={item.done || isPendingDelete ? THEME_TEXT_SECONDARY : THEME_ACCENT}

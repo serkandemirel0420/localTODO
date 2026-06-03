@@ -470,7 +470,7 @@ const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
-const EDITED_TODO_HIGHLIGHT_DURATION_MS = 500;
+const EDITED_TODO_HIGHLIGHT_DURATION_MS = 1200;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = 3200;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
@@ -1211,6 +1211,8 @@ export default function App() {
   const deferredSelectedFilters = useDeferredValue(selectedFilters);
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
+  const suppressHeaderSearchFocusRef = useRef(false);
+  const suppressHeaderSearchFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const createContentInputRef = useRef<TextInput>(null);
   const createInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
@@ -1602,6 +1604,10 @@ export default function App() {
     () => () => {
       editedTodoHighlightTimersRef.current.forEach(clearTimeout);
       editedTodoHighlightTimersRef.current.clear();
+      if (suppressHeaderSearchFocusTimerRef.current) {
+        clearTimeout(suppressHeaderSearchFocusTimerRef.current);
+        suppressHeaderSearchFocusTimerRef.current = null;
+      }
     },
     [],
   );
@@ -1770,6 +1776,19 @@ export default function App() {
     setSelectedTodoIds(new Set());
   }, []);
 
+  const suppressNextHeaderSearchFocus = useCallback(() => {
+    suppressHeaderSearchFocusRef.current = true;
+
+    if (suppressHeaderSearchFocusTimerRef.current) {
+      clearTimeout(suppressHeaderSearchFocusTimerRef.current);
+    }
+
+    suppressHeaderSearchFocusTimerRef.current = setTimeout(() => {
+      suppressHeaderSearchFocusRef.current = false;
+      suppressHeaderSearchFocusTimerRef.current = null;
+    }, 900);
+  }, []);
+
   const enterTodoSelectMode = useCallback((id: string) => {
     closeListMenuState();
     setSettingsModalVisible(false);
@@ -1795,13 +1814,14 @@ export default function App() {
   }, []);
 
   const closeTodoDetailModal = useCallback(() => {
+    suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
     todoDetailDraftTodoIdRef.current = null;
     Haptics.selectionAsync().catch(() => undefined);
-  }, []);
+  }, [suppressNextHeaderSearchFocus]);
 
   const closeDeletedTodoDetailModal = useCallback(() => {
     setActiveDeletedTodoDetailId(null);
@@ -1833,7 +1853,13 @@ export default function App() {
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
     Haptics.selectionAsync().catch(() => undefined);
-  }, [closeListMenu, exitTodoSelectMode, listMenuOpen, pendingDeleteIds, todos]);
+  }, [
+    closeListMenu,
+    exitTodoSelectMode,
+    listMenuOpen,
+    pendingDeleteIds,
+    todos,
+  ]);
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
     if (translationY <= 0) {
@@ -3263,12 +3289,12 @@ export default function App() {
       {
         id: 'priority-color',
         items: PRIORITY_MENU_ITEMS.map((value) => ({
-          displayLabel: `${value} color`,
+          displayLabel: `${value} text`,
           filterKey: 'priority' as const,
-          sourceLabel: 'Priority color',
+          sourceLabel: 'Priority text',
           value,
         })),
-        title: 'Priority color',
+        title: 'Priority text',
       },
       {
         id: 'priority-border',
@@ -3381,6 +3407,10 @@ export default function App() {
     () => [...selectedTodoIds].sort().join('|'),
     [selectedTodoIds],
   );
+  const recentlyEditedTodoKey = useMemo(
+    () => [...recentlyEditedTodoIds].sort().join('|'),
+    [recentlyEditedTodoIds],
+  );
   const todoListExtraData = useMemo(
     () => ({
       activeTodoMenuHighlightId,
@@ -3388,6 +3418,7 @@ export default function App() {
       menuMode,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
+      recentlyEditedTodoKey,
       selectedTodoKey,
     }),
     [
@@ -3396,6 +3427,7 @@ export default function App() {
       menuMode,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
+      recentlyEditedTodoKey,
       selectedTodoKey,
     ],
   );
@@ -3544,6 +3576,7 @@ export default function App() {
     localTodoStore.upsert(updatedTodo).catch(() => undefined);
     syncTodoAlarm(updatedTodo).catch(() => undefined);
     highlightEditedTodos([todoId]);
+    suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
@@ -3559,6 +3592,7 @@ export default function App() {
     activeTodoDetailDraftContentForSave,
     activeTodoDetailDraftTextForSave,
     highlightEditedTodos,
+    suppressNextHeaderSearchFocus,
   ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
@@ -5462,6 +5496,7 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
+                isRecentlyEditedTodo && styles.todoSectionGroupedShellRecentlyEdited,
                 item.isLastInSection && styles.todoSectionGroupedShellLast,
               ]}
             >
@@ -5661,6 +5696,22 @@ export default function App() {
               }}
               onChangeText={setQuery}
               onFocus={() => {
+                if (suppressHeaderSearchFocusRef.current) {
+                  suppressHeaderSearchFocusRef.current = false;
+
+                  if (suppressHeaderSearchFocusTimerRef.current) {
+                    clearTimeout(suppressHeaderSearchFocusTimerRef.current);
+                    suppressHeaderSearchFocusTimerRef.current = null;
+                  }
+
+                  setNavTab((current) => (current === 'search' ? null : current));
+                  requestAnimationFrame(() => {
+                    searchInputRef.current?.blur();
+                    Keyboard.dismiss();
+                  });
+                  return;
+                }
+
                 setNavTab('search');
                 alignTodoListForSearchFocus();
               }}
@@ -9448,6 +9499,9 @@ const styles = StyleSheet.create({
     borderLeftWidth: 1,
     borderRightWidth: 1,
     paddingHorizontal: 16,
+  },
+  todoSectionGroupedShellRecentlyEdited: {
+    backgroundColor: 'rgba(76, 120, 255, 0.055)',
   },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,

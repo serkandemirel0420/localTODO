@@ -59,7 +59,6 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
-const EDITED_TODO_HIGHLIGHT_PULSE_MS = 500;
 const NEW_TODO_HIGHLIGHT_PULSE_MS = 520;
 const NEW_TODO_HIGHLIGHT_PULSE_COUNT = 3;
 const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
@@ -330,33 +329,20 @@ function TodoRowComponent({
   const isHighlightedForCreate = isNewlyCreated && !isMenuTargetHighlighted;
   const isHighlightedForEdit = isRecentlyEdited && !isHighlightedForCreate;
   const isHighlightedForSelection = selectMode && isSelected;
-  const showChangePulse = isHighlightedForCreate || isHighlightedForEdit;
-  const changePulseBackgroundColors = isHighlightedForEdit
-    ? [
-      'rgba(76, 120, 255, 0)',
-      'rgba(76, 120, 255, 0.08)',
-      'rgba(76, 120, 255, 0.16)',
-    ]
-    : [
-      'rgba(76, 120, 255, 0)',
-      'rgba(76, 120, 255, 0.2)',
-      'rgba(76, 120, 255, 0.38)',
-    ];
-  const changePulseBorderColors = isHighlightedForEdit
-    ? [
-      'rgba(76, 120, 255, 0)',
-      'rgba(76, 120, 255, 0.22)',
-      'rgba(76, 120, 255, 0.34)',
-    ]
-    : [
-      'rgba(76, 120, 255, 0)',
-      'rgba(76, 120, 255, 0.55)',
-      'rgba(76, 120, 255, 0.9)',
-    ];
+  const showChangePulse = isHighlightedForCreate;
+  const changePulseBackgroundColors = [
+    'rgba(76, 120, 255, 0)',
+    'rgba(76, 120, 255, 0.2)',
+    'rgba(76, 120, 255, 0.38)',
+  ];
+  const changePulseBorderColors = [
+    'rgba(76, 120, 255, 0)',
+    'rgba(76, 120, 255, 0.55)',
+    'rgba(76, 120, 255, 0.9)',
+  ];
   const showRowHighlight =
     isHighlightedForMenu ||
     isHighlightedForCreate ||
-    isHighlightedForEdit ||
     isHighlightedForSelection;
   const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
@@ -399,29 +385,11 @@ function TodoRowComponent({
       };
     }
 
-    if (isHighlightedForEdit) {
-      changeHighlightPulse.setValue(1);
-      const pulse = Animated.timing(changeHighlightPulse, {
-        toValue: 0,
-        duration: EDITED_TODO_HIGHLIGHT_PULSE_MS,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: false,
-      });
-
-      pulse.start();
-
-      return () => {
-        pulse.stop();
-        changeHighlightPulse.setValue(0);
-      };
-    }
-
     changeHighlightPulse.setValue(0);
     return undefined;
   }, [
     changeHighlightPulse,
     isHighlightedForCreate,
-    isHighlightedForEdit,
     item.id,
   ]);
 
@@ -993,6 +961,9 @@ function TodoRowComponent({
             style={[
               styles.swipeableChildren,
               isGroupedLayout && styles.swipeableChildrenGrouped,
+              isHighlightedForEdit &&
+                isGroupedLayout &&
+                styles.swipeableChildrenGroupedRecentlyEdited,
             ]}
           >
             {rowContent}
@@ -1006,6 +977,9 @@ function TodoRowComponent({
           childrenContainerStyle={[
             styles.swipeableChildren,
             isGroupedLayout && styles.swipeableChildrenGrouped,
+            isHighlightedForEdit &&
+              isGroupedLayout &&
+              styles.swipeableChildrenGroupedRecentlyEdited,
           ]}
           containerStyle={[
             styles.swipeableContainer,
@@ -1039,7 +1013,6 @@ function TodoRowComponent({
             isHighlightedForSelection && styles.selectionFrameSelected,
             isHighlightedForSelection && isGroupedLayout && styles.selectionFrameSelectedGrouped,
             isHighlightedForCreate && styles.selectionFrameNewlyCreated,
-            isHighlightedForEdit && styles.selectionFrameRecentlyEdited,
           ]}
         />
       ) : null}
@@ -1049,7 +1022,6 @@ function TodoRowComponent({
           style={[
             styles.todoChangeOverlay,
             isGroupedLayout && styles.todoChangeOverlayGrouped,
-            isHighlightedForEdit && styles.todoChangeOverlayRecentlyEdited,
             {
               backgroundColor: changeHighlightPulse.interpolate({
                 inputRange: [0, 0.45, 1],
@@ -1176,6 +1148,9 @@ const styles = StyleSheet.create({
     overflow: 'visible',
     width: '100%',
   },
+  swipeableChildrenGroupedRecentlyEdited: {
+    backgroundColor: 'transparent',
+  },
   swipeActionsRoot: {
     alignSelf: 'stretch',
   },
@@ -1272,15 +1247,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(76, 120, 255, 0.07)',
   },
   rowRecentlyEditedGrouped: {
-    backgroundColor: 'rgba(76, 120, 255, 0.055)',
+    backgroundColor: 'transparent',
   },
   selectionFrameNewlyCreated: {
     borderColor: 'rgba(76, 120, 255, 0.72)',
     borderWidth: 2,
-  },
-  selectionFrameRecentlyEdited: {
-    borderColor: 'rgba(76, 120, 255, 0.3)',
-    borderWidth: 1,
   },
   todoChangeOverlay: {
     borderRadius: ROW_BORDER_RADIUS,
@@ -1298,9 +1269,6 @@ const styles = StyleSheet.create({
     left: -6,
     right: -6,
     top: 0,
-  },
-  todoChangeOverlayRecentlyEdited: {
-    borderWidth: 1,
   },
   colorRail: {
     alignSelf: 'stretch',
@@ -1340,13 +1308,14 @@ const styles = StyleSheet.create({
   textPressable: {
     alignSelf: 'stretch',
     flex: 1,
+    flexBasis: 0,
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
     width: '100%',
   },
   contentColumn: {
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
     alignSelf: 'stretch',
     flex: 1,
     flexShrink: 1,

@@ -5510,7 +5510,7 @@ export default function App() {
       const isRecentlyEditedTodo = recentlyEditedTodoIds.has(item.todo.id);
 
       return (
-        <View>
+        <View style={styles.todoListItem}>
           {renderVisibleTodoRowGap(item.gapBefore)}
           <TodoRow
             dateLabelDisplayMode={dateLabelDisplayMode}
@@ -9439,13 +9439,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
   todoSectionGroupedShell: {
-    alignSelf: 'stretch',
     backgroundColor: THEME_CARD,
     borderColor: THEME_BORDER,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     paddingHorizontal: 16,
-    width: '100%',
   },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,

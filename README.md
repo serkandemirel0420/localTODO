@@ -166,8 +166,8 @@ credentials for this project.
 
 ## Search
 
-Search uses SQLite full-text search over todo titles and notes, with prefix
-matching and `AND` term combination.
+Search uses normalized substring matching over todo titles and notes, with
+`AND` term combination.
 
 ## Storage
 

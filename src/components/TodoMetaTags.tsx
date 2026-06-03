@@ -3,6 +3,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import {
+  type DateLabelAnchor,
   formatDateDisplayLabel,
   formatDateFilterValue,
   isDateFilterOverdue,
@@ -45,6 +46,7 @@ type StatusIconDescriptor = {
 
 type TodoMetaTagsProps = {
   createdAt?: number;
+  dateLabelAnchor?: DateLabelAnchor;
   dateLabel?: string;
   dateLabelDisplayMode?: DateLabelDisplayMode;
   done?: boolean;
@@ -126,6 +128,7 @@ function StatusIcon({
 function buildMetaTags(
   visibility: MetaTagVisibility,
   dateLabel: string | undefined,
+  dateLabelAnchor: DateLabelAnchor,
   dateLabelDisplayMode: DateLabelDisplayMode,
   listLabel: string | undefined,
   priorityLabel: string | undefined,
@@ -135,12 +138,18 @@ function buildMetaTags(
   const hasVisibleDateTag = Boolean(visibility.date && dateLabel);
 
   if (hasVisibleDateTag && dateLabel) {
+    const now = new Date();
     const lookupValue = formatDateFilterValue(dateLabel);
     tags.push({
-      displayLabel: formatDateDisplayLabel(dateLabel, dateLabelDisplayMode),
+      displayLabel: formatDateDisplayLabel(
+        dateLabel,
+        dateLabelDisplayMode,
+        now,
+        dateLabelAnchor,
+      ),
       filterKey: 'date',
       isOverdue: isOverdueStatusLabel(dateLabel)
-        || isDateFilterOverdue(dateLabel),
+        || isDateFilterOverdue(dateLabel, now, dateLabelAnchor),
       lookupValue: lookupValue || dateLabel,
     });
   }
@@ -203,6 +212,7 @@ function buildStatusIcons(
 function TodoMetaTagsComponent({
   createdAt,
   dateLabel,
+  dateLabelAnchor,
   dateLabelDisplayMode = 'exact',
   done,
   filterColors,
@@ -214,6 +224,7 @@ function TodoMetaTagsComponent({
   const tags = buildMetaTags(
     visibility,
     dateLabel,
+    dateLabelAnchor,
     dateLabelDisplayMode,
     listLabel,
     priorityLabel,

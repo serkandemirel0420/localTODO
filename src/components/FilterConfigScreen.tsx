@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   SafeAreaView,
@@ -34,6 +36,8 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
+  type FilterConfigExpandedSections,
+  type FilterConfigUiState,
   type TodoGroupMode,
   type TodoSortMode,
 } from '../storage/appSettingsStore';
@@ -81,6 +85,7 @@ type FilterConfigScreenProps = {
   resultCount: number;
   dateLabelDisplayMode: DateLabelDisplayMode;
   isListItemSelected: (item: FilterConfigListItem) => boolean;
+  onUiStateChange: (updater: (current: FilterConfigUiState) => FilterConfigUiState) => void;
   onClose: () => void;
   onShowResults: () => void;
   onToggleFilter: (filterKey: FilterKey, value: string) => void;
@@ -96,6 +101,7 @@ type FilterConfigScreenProps = {
     section: 'lists' | 'priority' | 'date' | 'sort' | 'group' | 'metaTags',
   ) => void;
   onToggleDateLabelDisplayMode: () => void;
+  uiState: FilterConfigUiState;
 };
 
 const formatSelectionSummary = (values: string[], emptyLabel: string) => {
@@ -184,6 +190,7 @@ export const FilterConfigScreen = ({
   resultCount,
   dateLabelDisplayMode,
   isListItemSelected,
+  onUiStateChange,
   onClose,
   onShowResults,
   onToggleFilter,
@@ -197,8 +204,11 @@ export const FilterConfigScreen = ({
   onClearFilters,
   onClearSection,
   onToggleDateLabelDisplayMode,
+  uiState,
 }: FilterConfigScreenProps) => {
   const scrollViewRef = useRef<ScrollView>(null);
+  const wasVisibleRef = useRef(false);
+  const scrollOffsetYRef = useRef(0);
   const { height: windowHeight } = useWindowDimensions();
   const formatActiveDateLabel = (value: string) => (
     dateLabelDisplayMode === 'remaining'
@@ -207,12 +217,6 @@ export const FilterConfigScreen = ({
   );
   const getDateMenuDisplayLabel = (menuLabel: string) =>
     getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
-  const [listsExpanded, setListsExpanded] = useState(true);
-  const [priorityExpanded, setPriorityExpanded] = useState(false);
-  const [dateExpanded, setDateExpanded] = useState(true);
-  const [sortExpanded, setSortExpanded] = useState(false);
-  const [groupExpanded, setGroupExpanded] = useState(false);
-  const [metaTagsExpanded, setMetaTagsExpanded] = useState(false);
   const oneHandedScrollOffset = useMemo(
     () => Math.max(
       OPTION_ROW_HEIGHT,
@@ -223,29 +227,78 @@ export const FilterConfigScreen = ({
     ),
     [windowHeight],
   );
+  const initialScrollOffsetY = uiState.scrollOffsetY ?? oneHandedScrollOffset;
   const scrollContentOffset = useMemo(
-    () => ({ x: 0, y: oneHandedScrollOffset }),
-    [oneHandedScrollOffset],
+    () => ({ x: 0, y: initialScrollOffsetY }),
+    [initialScrollOffsetY],
   );
   const scrollSpacerStyle = useMemo(
     () => ({ height: oneHandedScrollOffset }),
     [oneHandedScrollOffset],
   );
+  const expandedSections = uiState.expandedSections;
 
   useEffect(() => {
     if (!visible) {
+      wasVisibleRef.current = false;
       return undefined;
     }
+
+    if (wasVisibleRef.current) {
+      return undefined;
+    }
+
+    wasVisibleRef.current = true;
+    const offsetY = uiState.scrollOffsetY ?? oneHandedScrollOffset;
+    scrollOffsetYRef.current = offsetY;
 
     const frame = requestAnimationFrame(() => {
       scrollViewRef.current?.scrollTo({
         animated: false,
-        y: oneHandedScrollOffset,
+        y: offsetY,
       });
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [oneHandedScrollOffset, visible]);
+  }, [oneHandedScrollOffset, uiState.scrollOffsetY, visible]);
+
+  const toggleSection = useCallback((section: keyof FilterConfigExpandedSections) => {
+    onUiStateChange((current) => ({
+      ...current,
+      expandedSections: {
+        ...current.expandedSections,
+        [section]: !current.expandedSections[section],
+      },
+    }));
+  }, [onUiStateChange]);
+
+  const commitScrollOffset = useCallback((offsetY = scrollOffsetYRef.current) => {
+    const nextOffsetY = Math.max(0, offsetY);
+
+    onUiStateChange((current) => (
+      current.scrollOffsetY !== null && Math.abs(current.scrollOffsetY - nextOffsetY) < 1
+        ? current
+        : { ...current, scrollOffsetY: nextOffsetY }
+    ));
+  }, [onUiStateChange]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollOffsetYRef.current = Math.max(0, event.nativeEvent.contentOffset.y);
+  }, []);
+
+  const handleScrollEnd = useCallback(() => {
+    commitScrollOffset();
+  }, [commitScrollOffset]);
+
+  const handleClose = useCallback(() => {
+    commitScrollOffset();
+    onClose();
+  }, [commitScrollOffset, onClose]);
+
+  const handleShowResults = useCallback(() => {
+    commitScrollOffset();
+    onShowResults();
+  }, [commitScrollOffset, onShowResults]);
 
   const renderOptionRow = useCallback(
     (
@@ -309,7 +362,7 @@ export const FilterConfigScreen = ({
   return (
     <Modal
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
       presentationStyle="fullScreen"
       visible={visible}
     >
@@ -324,7 +377,7 @@ export const FilterConfigScreen = ({
             <Pressable
               accessibilityLabel="Close filters"
               accessibilityRole="button"
-              onPress={onClose}
+              onPress={handleClose}
               style={({ pressed }) => [
                 styles.closeButton,
                 pressed && styles.closeButtonPressed,
@@ -339,16 +392,20 @@ export const FilterConfigScreen = ({
             contentOffset={scrollContentOffset}
             contentContainerStyle={styles.bodyContent}
             keyboardShouldPersistTaps="handled"
+            onMomentumScrollEnd={handleScrollEnd}
+            onScroll={handleScroll}
+            onScrollEndDrag={handleScrollEnd}
             overScrollMode="never"
+            scrollEventThrottle={16}
             showsVerticalScrollIndicator={false}
             style={styles.body}
           >
           <View pointerEvents="none" style={scrollSpacerStyle} />
           <AccordionSection
             canClear={filters.list.length > 0}
-            expanded={listsExpanded}
+            expanded={expandedSections.lists}
             onClear={() => onClearSection('lists')}
-            onToggle={() => setListsExpanded((current) => !current)}
+            onToggle={() => toggleSection('lists')}
             subtitle={formatSelectionSummary(filters.list, 'All lists')}
             title="Lists"
           >
@@ -393,9 +450,9 @@ export const FilterConfigScreen = ({
 
           <AccordionSection
             canClear={filters.priority.length > 0}
-            expanded={priorityExpanded}
+            expanded={expandedSections.priority}
             onClear={() => onClearSection('priority')}
-            onToggle={() => setPriorityExpanded((current) => !current)}
+            onToggle={() => toggleSection('priority')}
             subtitle={formatSelectionSummary(filters.priority, 'Any priority')}
             title="Priority"
           >
@@ -415,9 +472,9 @@ export const FilterConfigScreen = ({
 
           <AccordionSection
             canClear={filters.date.length > 0}
-            expanded={dateExpanded}
+            expanded={expandedSections.date}
             onClear={() => onClearSection('date')}
-            onToggle={() => setDateExpanded((current) => !current)}
+            onToggle={() => toggleSection('date')}
             subtitle={formatSelectionSummary(
               filters.date.map((value) => formatActiveDateLabel(value)),
               'Any date',
@@ -489,9 +546,9 @@ export const FilterConfigScreen = ({
 
           <AccordionSection
             canClear={sortMode !== 'newest'}
-            expanded={sortExpanded}
+            expanded={expandedSections.sort}
             onClear={() => onClearSection('sort')}
-            onToggle={() => setSortExpanded((current) => !current)}
+            onToggle={() => toggleSection('sort')}
             subtitle={TODO_SORT_LABELS[sortMode]}
             title="Sort"
           >
@@ -505,9 +562,9 @@ export const FilterConfigScreen = ({
 
           <AccordionSection
             canClear={groupMode !== 'none'}
-            expanded={groupExpanded}
+            expanded={expandedSections.group}
             onClear={() => onClearSection('group')}
-            onToggle={() => setGroupExpanded((current) => !current)}
+            onToggle={() => toggleSection('group')}
             subtitle={TODO_GROUP_LABELS[groupMode]}
             title="Group"
           >
@@ -520,8 +577,8 @@ export const FilterConfigScreen = ({
           </AccordionSection>
 
           <AccordionSection
-            expanded={metaTagsExpanded}
-            onToggle={() => setMetaTagsExpanded((current) => !current)}
+            expanded={expandedSections.metaTags}
+            onToggle={() => toggleSection('metaTags')}
             subtitle={formatMetaTagVisibilitySummary(metaTagVisibility)}
             title="Meta tags"
           >
@@ -547,7 +604,7 @@ export const FilterConfigScreen = ({
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              onPress={onClose}
+              onPress={handleClose}
               style={({ pressed }) => [
                 styles.filterActionLink,
                 pressed && styles.sectionHeaderPressed,
@@ -562,7 +619,7 @@ export const FilterConfigScreen = ({
         <View style={styles.footer}>
           <Pressable
             accessibilityRole="button"
-            onPress={onShowResults}
+            onPress={handleShowResults}
             style={({ pressed }) => [
               styles.showResultsButton,
               pressed && styles.showResultsButtonPressed,

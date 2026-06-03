@@ -2,11 +2,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import {
-  CUSTOM_DATE_LABEL,
-  formatDateFilterValue,
-  LATER_DATE_LABEL,
-  parseISODateLabel,
-  startOfDay,
+  resolveDateFilterValueDate,
 } from './dates';
 import {
   decodeTodoReminder,
@@ -20,13 +16,6 @@ import { type Todo } from './todos';
 const TODO_ALARM_CHANNEL_ID = 'todo-alarms';
 const TODO_ALARM_IDENTIFIER_PREFIX = 'local-todo:todo-alarm:';
 const MINIMUM_ONE_TIME_DELAY_MS = 1000;
-
-const RELATIVE_DATE_OFFSETS: Record<string, number> = {
-  today: 0,
-  tomorrow: 1,
-  'this week': 2,
-  'next week': 7,
-};
 
 let channelPromise: Promise<void> | null = null;
 let permissionPromise: Promise<boolean> | null = null;
@@ -125,37 +114,13 @@ const ensureNotificationChannel = async () => {
   return channelPromise;
 };
 
-const addDays = (date: Date, days: number): Date => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-
 const resolveTodoAlarmDate = (
   dateLabels: string[],
   now = new Date(),
+  anchor?: number,
 ): Date | null => {
   const label = dateLabels[0]?.trim();
-  const normalizedLabel = label ? formatDateFilterValue(label) : '';
-  if (
-    !normalizedLabel
-    || normalizedLabel === LATER_DATE_LABEL
-    || normalizedLabel === CUSTOM_DATE_LABEL
-  ) {
-    return null;
-  }
-
-  const customDate = parseISODateLabel(normalizedLabel);
-  if (customDate) {
-    return startOfDay(customDate);
-  }
-
-  const dayOffset = RELATIVE_DATE_OFFSETS[normalizedLabel.toLocaleLowerCase()];
-  if (dayOffset === undefined) {
-    return null;
-  }
-
-  return addDays(startOfDay(now), dayOffset);
+  return label ? resolveDateFilterValueDate(label, now, anchor) : null;
 };
 
 const getOneTimeAlarmDate = (
@@ -241,7 +206,7 @@ const createTodoAlarmTrigger = (
     return null;
   }
 
-  const date = resolveTodoAlarmDate(todo.filters.date, now);
+  const date = resolveTodoAlarmDate(todo.filters.date, now, todo.createdAt);
 
   if (repeat !== 'none') {
     return createRepeatingTrigger(repeat, time, date, now);

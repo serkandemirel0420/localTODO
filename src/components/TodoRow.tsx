@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -16,7 +16,10 @@ import {
 } from 'react-native-gesture-handler';
 
 import { TodoMetaTags } from './TodoMetaTags';
-import { type DateLabelDisplayMode } from '../dates';
+import {
+  getDateFilterSortRank,
+  type DateLabelDisplayMode,
+} from '../dates';
 import {
   getTodoPrimaryColorTheme,
   type FilterColorSettings,
@@ -27,7 +30,6 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
-  DATE_MENU_ITEMS,
   getBestOrderedFilterLabel,
   PRIORITY_MENU_ITEMS,
 } from '../todoOptions';
@@ -58,8 +60,16 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = 60;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
+const EDITED_TODO_HIGHLIGHT_PULSE_MS = 500;
 const NEW_TODO_HIGHLIGHT_PULSE_MS = 520;
 const NEW_TODO_HIGHLIGHT_PULSE_COUNT = 3;
+const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
+const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
+
+type SearchHighlightRange = {
+  end: number;
+  start: number;
+};
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
 
@@ -79,6 +89,151 @@ const getTodoRowTextPreview = (text: string, maxLength: number) => {
     .trimEnd()}${TODO_ROW_PREVIEW_ELLIPSIS}`;
 };
 
+const getBestTodoDateLabel = (dateLabels: string[], createdAt: number): string => {
+  const now = new Date();
+  let bestLabel = '';
+  let bestRank = getDateFilterSortRank('', now, createdAt);
+
+  dateLabels.forEach((label, index) => {
+    const rank = getDateFilterSortRank(label, now, createdAt);
+
+    if (rank < bestRank || (rank === bestRank && !bestLabel && index === 0)) {
+      bestLabel = label;
+      bestRank = rank;
+    }
+  });
+
+  return bestLabel;
+};
+
+const normalizeSearchText = (text: string) =>
+  text
+    .normalize('NFD')
+    .replace(COMBINING_MARKS_PATTERN, '')
+    .toLocaleLowerCase();
+
+const getSearchHighlightTerms = (query: string) => {
+  const normalizedQuery = normalizeSearchText(query).trim();
+  const terms = normalizedQuery.match(SEARCH_TERM_PATTERN) ?? [];
+  const seenTerms = new Set<string>();
+
+  return terms.filter((term) => {
+    if (seenTerms.has(term)) {
+      return false;
+    }
+
+    seenTerms.add(term);
+    return true;
+  });
+};
+
+const getNormalizedTextMap = (text: string) => {
+  const chars = Array.from(text);
+  const originalIndexByNormalizedIndex: number[] = [];
+  let normalizedText = '';
+
+  chars.forEach((char, originalIndex) => {
+    const normalizedChar = normalizeSearchText(char);
+    normalizedText += normalizedChar;
+
+    for (let index = 0; index < normalizedChar.length; index += 1) {
+      originalIndexByNormalizedIndex.push(originalIndex);
+    }
+  });
+
+  return { chars, normalizedText, originalIndexByNormalizedIndex };
+};
+
+const getSearchHighlightRanges = (
+  text: string,
+  terms: string[],
+): { chars: string[]; ranges: SearchHighlightRange[] } => {
+  const {
+    chars,
+    normalizedText,
+    originalIndexByNormalizedIndex,
+  } = getNormalizedTextMap(text);
+
+  if (!normalizedText || terms.length === 0) {
+    return { chars, ranges: [] };
+  }
+
+  const ranges: SearchHighlightRange[] = [];
+
+  terms.forEach((term) => {
+    let searchIndex = 0;
+
+    while (searchIndex < normalizedText.length) {
+      const matchIndex = normalizedText.indexOf(term, searchIndex);
+
+      if (matchIndex < 0) {
+        break;
+      }
+
+      const matchEndIndex = matchIndex + term.length - 1;
+      const start = originalIndexByNormalizedIndex[matchIndex];
+      const end = originalIndexByNormalizedIndex[matchEndIndex] + 1;
+
+      if (Number.isFinite(start) && Number.isFinite(end)) {
+        ranges.push({ start, end });
+      }
+
+      searchIndex = matchIndex + Math.max(term.length, 1);
+    }
+  });
+
+  ranges.sort((first, second) => (
+    first.start - second.start || second.end - first.end
+  ));
+
+  const mergedRanges = ranges.reduce<SearchHighlightRange[]>((merged, range) => {
+    const previousRange = merged[merged.length - 1];
+
+    if (!previousRange || range.start > previousRange.end) {
+      merged.push({ ...range });
+      return merged;
+    }
+
+    previousRange.end = Math.max(previousRange.end, range.end);
+    return merged;
+  }, []);
+
+  return { chars, ranges: mergedRanges };
+};
+
+const renderHighlightedPreview = (
+  text: string,
+  searchTerms: string[],
+): React.ReactNode => {
+  const { chars, ranges } = getSearchHighlightRanges(text, searchTerms);
+
+  if (ranges.length === 0) {
+    return text;
+  }
+
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+
+  ranges.forEach((range, index) => {
+    if (range.start > cursor) {
+      parts.push(chars.slice(cursor, range.start).join(''));
+    }
+
+    parts.push(
+      <Text key={`search-highlight-${index}`} style={styles.searchHighlight}>
+        {chars.slice(range.start, range.end).join('')}
+      </Text>,
+    );
+    cursor = range.end;
+  });
+
+  if (cursor < chars.length) {
+    parts.push(chars.slice(cursor).join(''));
+  }
+
+  return parts;
+};
+
 export type TodoRowProps = {
   dateLabelDisplayMode?: DateLabelDisplayMode;
   filterColors: FilterColorSettings;
@@ -88,6 +243,7 @@ export type TodoRowProps = {
   isMenuTarget: boolean;
   isMenuTargetHighlighted?: boolean;
   isNewlyCreated?: boolean;
+  isRecentlyEdited?: boolean;
   isPendingDelete?: boolean;
   layout?: 'standalone' | 'grouped';
   metaTagVisibility: MetaTagVisibility;
@@ -98,6 +254,7 @@ export type TodoRowProps = {
   onSetDone: (id: string, done: boolean) => void;
   onTouchStart?: (event: GestureResponderEvent) => void;
   onToggleSelect?: (id: string) => void;
+  searchHighlightQuery?: string;
   sectionLabel?: string;
   selectMode?: boolean;
 };
@@ -111,6 +268,7 @@ function TodoRowComponent({
   isMenuTarget,
   isMenuTargetHighlighted = false,
   isNewlyCreated = false,
+  isRecentlyEdited = false,
   isPendingDelete = false,
   layout = 'standalone',
   metaTagVisibility,
@@ -121,10 +279,11 @@ function TodoRowComponent({
   onSetDone,
   onTouchStart,
   onToggleSelect,
+  searchHighlightQuery = '',
   selectMode = false,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
-  const createHighlightPulse = useRef(new Animated.Value(0)).current;
+  const changeHighlightPulse = useRef(new Animated.Value(0)).current;
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -132,11 +291,7 @@ function TodoRowComponent({
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
   const swipeActionInset = isGroupedLayout ? 2 : 0;
   const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
-  const rawDateStatusLabel = getBestOrderedFilterLabel(
-    item.filters.date,
-    DATE_MENU_ITEMS,
-    '',
-  );
+  const rawDateStatusLabel = getBestTodoDateLabel(item.filters.date, item.createdAt);
   const listStatusLabel = item.filters.list[0] ?? '';
   const priorityStatusLabel = getBestOrderedFilterLabel(
     item.filters.priority,
@@ -150,11 +305,50 @@ function TodoRowComponent({
   const content = item.content.trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
   const titlePreview = getTodoRowTextPreview(item.text, TODO_ROW_TITLE_PREVIEW_MAX_LENGTH);
+  const searchHighlightTerms = useMemo(
+    () => getSearchHighlightTerms(searchHighlightQuery),
+    [searchHighlightQuery],
+  );
+  const highlightedTitlePreview = useMemo(
+    () => renderHighlightedPreview(titlePreview, searchHighlightTerms),
+    [searchHighlightTerms, titlePreview],
+  );
+  const highlightedContentPreview = useMemo(
+    () => renderHighlightedPreview(contentPreview, searchHighlightTerms),
+    [contentPreview, searchHighlightTerms],
+  );
   const isHighlightedForMenu = isMenuTargetHighlighted;
   const isHighlightedForCreate = isNewlyCreated && !isMenuTargetHighlighted;
+  const isHighlightedForEdit = isRecentlyEdited && !isHighlightedForCreate;
   const isHighlightedForSelection = selectMode && isSelected;
+  const showChangePulse = isHighlightedForCreate || isHighlightedForEdit;
+  const changePulseBackgroundColors = isHighlightedForEdit
+    ? [
+      'rgba(76, 120, 255, 0)',
+      'rgba(76, 120, 255, 0.08)',
+      'rgba(76, 120, 255, 0.16)',
+    ]
+    : [
+      'rgba(76, 120, 255, 0)',
+      'rgba(76, 120, 255, 0.2)',
+      'rgba(76, 120, 255, 0.38)',
+    ];
+  const changePulseBorderColors = isHighlightedForEdit
+    ? [
+      'rgba(76, 120, 255, 0)',
+      'rgba(76, 120, 255, 0.22)',
+      'rgba(76, 120, 255, 0.34)',
+    ]
+    : [
+      'rgba(76, 120, 255, 0)',
+      'rgba(76, 120, 255, 0.55)',
+      'rgba(76, 120, 255, 0.9)',
+    ];
   const showRowHighlight =
-    isHighlightedForMenu || isHighlightedForCreate || isHighlightedForSelection;
+    isHighlightedForMenu ||
+    isHighlightedForCreate ||
+    isHighlightedForEdit ||
+    isHighlightedForSelection;
   const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
 
@@ -168,37 +362,59 @@ function TodoRowComponent({
   }, [isMenuTarget]);
 
   useEffect(() => {
-    if (!isNewlyCreated) {
-      createHighlightPulse.setValue(0);
-      return;
+    if (isHighlightedForCreate) {
+      changeHighlightPulse.setValue(1);
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(changeHighlightPulse, {
+            toValue: 0.45,
+            duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: false,
+          }),
+          Animated.timing(changeHighlightPulse, {
+            toValue: 1,
+            duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: false,
+          }),
+        ]),
+        { iterations: NEW_TODO_HIGHLIGHT_PULSE_COUNT },
+      );
+
+      pulse.start();
+
+      return () => {
+        pulse.stop();
+        changeHighlightPulse.setValue(0);
+      };
     }
 
-    createHighlightPulse.setValue(1);
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(createHighlightPulse, {
-          toValue: 0.45,
-          duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: false,
-        }),
-        Animated.timing(createHighlightPulse, {
-          toValue: 1,
-          duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: false,
-        }),
-      ]),
-      { iterations: NEW_TODO_HIGHLIGHT_PULSE_COUNT },
-    );
+    if (isHighlightedForEdit) {
+      changeHighlightPulse.setValue(1);
+      const pulse = Animated.timing(changeHighlightPulse, {
+        toValue: 0,
+        duration: EDITED_TODO_HIGHLIGHT_PULSE_MS,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: false,
+      });
 
-    pulse.start();
+      pulse.start();
 
-    return () => {
-      pulse.stop();
-      createHighlightPulse.setValue(0);
-    };
-  }, [createHighlightPulse, isNewlyCreated, item.id]);
+      return () => {
+        pulse.stop();
+        changeHighlightPulse.setValue(0);
+      };
+    }
+
+    changeHighlightPulse.setValue(0);
+    return undefined;
+  }, [
+    changeHighlightPulse,
+    isHighlightedForCreate,
+    isHighlightedForEdit,
+    item.id,
+  ]);
 
   const handleRowLayout = useCallback((event: LayoutChangeEvent) => {
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -598,7 +814,7 @@ function TodoRowComponent({
       style={[
         styles.row,
         isGroupedLayout && styles.rowGrouped,
-        !isGroupedLayout && todoColorTheme && !item.done && {
+        todoColorTheme && !item.done && {
           backgroundColor: todoColorTheme.tint,
           borderColor: todoColorTheme.border,
           shadowColor: todoColorTheme.accent,
@@ -610,12 +826,16 @@ function TodoRowComponent({
         isHighlightedForCreate && (
           isGroupedLayout ? styles.rowNewlyCreatedGrouped : styles.rowNewlyCreated
         ),
+        isHighlightedForEdit && (
+          isGroupedLayout ? styles.rowRecentlyEditedGrouped : styles.rowRecentlyEdited
+        ),
       ]}
     >
-      {!isGroupedLayout && todoColorTheme ? (
+      {todoColorTheme ? (
         <View
           style={[
             styles.colorRail,
+            isGroupedLayout && styles.colorRailGrouped,
             { backgroundColor: todoColorTheme.accent },
             item.done && styles.colorRailDone,
           ]}
@@ -684,7 +904,7 @@ function TodoRowComponent({
               isPendingDelete && styles.textPendingDelete,
             ]}
           >
-            {titlePreview}
+            {highlightedTitlePreview}
           </Text>
           {contentPreview ? (
             <Text
@@ -696,7 +916,7 @@ function TodoRowComponent({
                 isPendingDelete && styles.contentPendingDelete,
               ]}
             >
-              {contentPreview}
+              {highlightedContentPreview}
             </Text>
           ) : null}
           {isPendingDelete ? (
@@ -705,6 +925,7 @@ function TodoRowComponent({
             <TodoMetaTags
               createdAt={item.createdAt}
               dateLabel={rawDateStatusLabel || undefined}
+              dateLabelAnchor={item.createdAt}
               dateLabelDisplayMode={dateLabelDisplayMode}
               done={item.done}
               filterColors={filterColors}
@@ -791,23 +1012,25 @@ function TodoRowComponent({
             isHighlightedForSelection && styles.selectionFrameSelected,
             isHighlightedForSelection && isGroupedLayout && styles.selectionFrameSelectedGrouped,
             isHighlightedForCreate && styles.selectionFrameNewlyCreated,
+            isHighlightedForEdit && styles.selectionFrameRecentlyEdited,
           ]}
         />
       ) : null}
-      {isHighlightedForCreate ? (
+      {showChangePulse ? (
         <Animated.View
           pointerEvents="none"
           style={[
-            styles.newlyCreatedOverlay,
-            isGroupedLayout && styles.newlyCreatedOverlayGrouped,
+            styles.todoChangeOverlay,
+            isGroupedLayout && styles.todoChangeOverlayGrouped,
+            isHighlightedForEdit && styles.todoChangeOverlayRecentlyEdited,
             {
-              backgroundColor: createHighlightPulse.interpolate({
-                inputRange: [0.45, 1],
-                outputRange: ['rgba(76, 120, 255, 0.2)', 'rgba(76, 120, 255, 0.38)'],
+              backgroundColor: changeHighlightPulse.interpolate({
+                inputRange: [0, 0.45, 1],
+                outputRange: changePulseBackgroundColors,
               }),
-              borderColor: createHighlightPulse.interpolate({
-                inputRange: [0.45, 1],
-                outputRange: ['rgba(76, 120, 255, 0.55)', 'rgba(76, 120, 255, 0.9)'],
+              borderColor: changeHighlightPulse.interpolate({
+                inputRange: [0, 0.45, 1],
+                outputRange: changePulseBorderColors,
               }),
             },
           ]}
@@ -819,6 +1042,7 @@ function TodoRowComponent({
 
 const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.isNewlyCreated === next.isNewlyCreated &&
+  prev.isRecentlyEdited === next.isRecentlyEdited &&
   prev.isMenuTargetHighlighted === next.isMenuTargetHighlighted &&
   prev.isMenuTarget === next.isMenuTarget &&
   prev.isSelected === next.isSelected &&
@@ -835,6 +1059,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.onOpenDetail === next.onOpenDetail &&
   prev.onOpenMenu === next.onOpenMenu &&
   prev.onSetDone === next.onSetDone &&
+  prev.searchHighlightQuery === next.searchHighlightQuery &&
   prev.onEnterSelectMode === next.onEnterSelectMode &&
   prev.onTouchStart === next.onTouchStart &&
   prev.onToggleSelect === next.onToggleSelect
@@ -1006,11 +1231,21 @@ const styles = StyleSheet.create({
   rowNewlyCreatedGrouped: {
     backgroundColor: 'rgba(76, 120, 255, 0.14)',
   },
+  rowRecentlyEdited: {
+    backgroundColor: 'rgba(76, 120, 255, 0.07)',
+  },
+  rowRecentlyEditedGrouped: {
+    backgroundColor: 'rgba(76, 120, 255, 0.055)',
+  },
   selectionFrameNewlyCreated: {
     borderColor: 'rgba(76, 120, 255, 0.72)',
     borderWidth: 2,
   },
-  newlyCreatedOverlay: {
+  selectionFrameRecentlyEdited: {
+    borderColor: 'rgba(76, 120, 255, 0.3)',
+    borderWidth: 1,
+  },
+  todoChangeOverlay: {
     borderRadius: ROW_BORDER_RADIUS,
     borderWidth: 2,
     bottom: -2,
@@ -1020,12 +1255,15 @@ const styles = StyleSheet.create({
     top: -2,
     zIndex: 4,
   },
-  newlyCreatedOverlayGrouped: {
+  todoChangeOverlayGrouped: {
     borderRadius: 0,
     bottom: 0,
     left: -6,
     right: -6,
     top: 0,
+  },
+  todoChangeOverlayRecentlyEdited: {
+    borderWidth: 1,
   },
   colorRail: {
     alignSelf: 'stretch',
@@ -1033,6 +1271,11 @@ const styles = StyleSheet.create({
     marginRight: 12,
     marginVertical: 2,
     width: 5,
+  },
+  colorRailGrouped: {
+    marginRight: 10,
+    marginVertical: 0,
+    width: 4,
   },
   colorRailDone: {
     opacity: 0.45,
@@ -1101,6 +1344,9 @@ const styles = StyleSheet.create({
   contentDone: {
     color: THEME_TEXT_SECONDARY,
     textDecorationLine: 'line-through',
+  },
+  searchHighlight: {
+    backgroundColor: 'rgba(255, 211, 87, 0.55)',
   },
   textPendingDelete: {
     color: THEME_TEXT_SECONDARY,

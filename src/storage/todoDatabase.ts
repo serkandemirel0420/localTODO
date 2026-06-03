@@ -6,6 +6,8 @@ import { normalizeTodo, type Todo } from '../todos';
 const LEGACY_STORAGE_KEY = 'local-todo.items.v1';
 const INITIAL_SEED_STORAGE_KEY = 'local-todo.initial-seed.v1';
 const DATABASE_NAME = 'local-todo.db';
+const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
+const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -19,7 +21,9 @@ const getDatabase = () => {
         CREATE TABLE IF NOT EXISTS todos (
           id TEXT PRIMARY KEY NOT NULL,
           content TEXT NOT NULL DEFAULT '',
+          content_search TEXT NOT NULL DEFAULT '',
           text TEXT NOT NULL,
+          text_search TEXT NOT NULL DEFAULT '',
           done INTEGER NOT NULL,
           created_at INTEGER NOT NULL,
           filters_json TEXT NOT NULL
@@ -29,12 +33,7 @@ const getDatabase = () => {
         CREATE INDEX IF NOT EXISTS idx_todos_done ON todos(done);
       `);
 
-      const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(todos)');
-      const hasContentColumn = columns.some((column) => column.name === 'content');
-
-      if (!hasContentColumn) {
-        await database.execAsync("ALTER TABLE todos ADD COLUMN content TEXT NOT NULL DEFAULT '';");
-      }
+      await ensureTodoSearchColumns(database);
 
       await ensureTodoSearchTable(database);
       await rebuildTodoSearchIndexIfNeeded(database);
@@ -44,6 +43,78 @@ const getDatabase = () => {
   }
 
   return databasePromise;
+};
+
+const normalizeSearchText = (text: string) =>
+  text
+    .normalize('NFD')
+    .replace(COMBINING_MARKS_PATTERN, '')
+    .toLocaleLowerCase();
+
+const getSearchTerms = (query: string) => {
+  const normalizedQuery = normalizeSearchText(query).trim();
+  const terms = normalizedQuery.match(SEARCH_TERM_PATTERN) ?? [];
+  const seenTerms = new Set<string>();
+
+  return terms.filter((term) => {
+    if (seenTerms.has(term)) {
+      return false;
+    }
+
+    seenTerms.add(term);
+    return true;
+  });
+};
+
+const escapeLikePattern = (term: string) => term.replace(/[\\%_]/g, (char) => `\\${char}`);
+
+const ensureTodoSearchColumns = async (database: SQLite.SQLiteDatabase) => {
+  const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(todos)');
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (!columnNames.has('content')) {
+    await database.execAsync("ALTER TABLE todos ADD COLUMN content TEXT NOT NULL DEFAULT '';");
+  }
+
+  if (!columnNames.has('content_search')) {
+    await database.execAsync("ALTER TABLE todos ADD COLUMN content_search TEXT NOT NULL DEFAULT '';");
+  }
+
+  if (!columnNames.has('text_search')) {
+    await database.execAsync("ALTER TABLE todos ADD COLUMN text_search TEXT NOT NULL DEFAULT '';");
+  }
+
+  const rows = await database.getAllAsync<{
+    content: string;
+    content_search: string;
+    id: string;
+    text: string;
+    text_search: string;
+  }>('SELECT id, content, content_search, text, text_search FROM todos');
+
+  const staleRows = rows
+    .map((row) => ({
+      contentSearch: normalizeSearchText(row.content),
+      id: row.id,
+      textSearch: normalizeSearchText(row.text),
+      row,
+    }))
+    .filter(({ contentSearch, row, textSearch }) => (
+      row.content_search !== contentSearch || row.text_search !== textSearch
+    ));
+
+  if (staleRows.length === 0) {
+    return;
+  }
+
+  await database.withTransactionAsync(async () => {
+    for (const { contentSearch, id, textSearch } of staleRows) {
+      await database.runAsync(
+        'UPDATE todos SET content_search = ?, text_search = ? WHERE id = ?',
+        [contentSearch, textSearch, id],
+      );
+    }
+  });
 };
 
 const rowToTodo = (row: {
@@ -164,21 +235,6 @@ const replaceTodoSearchRow = async (
   );
 };
 
-const createFtsQuery = (query: string) => {
-  const normalizedQuery = query
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase()
-    .trim();
-  const terms = normalizedQuery.match(/[\p{L}\p{N}_]+/gu) ?? [];
-
-  if (terms.length === 0) {
-    return '';
-  }
-
-  return terms.map((term) => `${term}*`).join(' ');
-};
-
 export const loadTodosFromDatabase = async (): Promise<Todo[]> => {
   const database = await getDatabase();
   await migrateLegacyAsyncStorage(database);
@@ -203,11 +259,19 @@ export const searchTodosInDatabase = async (query: string): Promise<Todo[]> => {
   await migrateLegacyAsyncStorage(database);
   await rebuildTodoSearchIndexIfNeeded(database);
 
-  const ftsQuery = createFtsQuery(query);
+  const searchTerms = getSearchTerms(query);
 
-  if (!ftsQuery) {
+  if (searchTerms.length === 0) {
     return loadTodosFromDatabase();
   }
+
+  const whereClause = searchTerms
+    .map(() => "(text_search LIKE ? ESCAPE '\\' OR content_search LIKE ? ESCAPE '\\')")
+    .join(' AND ');
+  const params = searchTerms.flatMap((term) => {
+    const pattern = `%${escapeLikePattern(term)}%`;
+    return [pattern, pattern];
+  });
 
   const rows = await database.getAllAsync<{
     content: string;
@@ -218,11 +282,10 @@ export const searchTodosInDatabase = async (query: string): Promise<Todo[]> => {
     filters_json: string;
   }>(
     `SELECT todos.id, todos.content, todos.text, todos.done, todos.created_at, todos.filters_json
-     FROM todos_fts
-     JOIN todos ON todos.id = todos_fts.id
-     WHERE todos_fts MATCH ?
+     FROM todos
+     WHERE ${whereClause}
      ORDER BY todos.created_at DESC`,
-    [ftsQuery],
+    params,
   );
 
   return rows
@@ -239,13 +302,18 @@ const replaceAllTodos = async (
     await database.runAsync('DELETE FROM todos_fts');
 
     for (const todo of todos) {
+      const contentSearch = normalizeSearchText(todo.content);
+      const textSearch = normalizeSearchText(todo.text);
+
       await database.runAsync(
-        `INSERT INTO todos (id, content, text, done, created_at, filters_json)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO todos (id, content, content_search, text, text_search, done, created_at, filters_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           todo.id,
           todo.content,
+          contentSearch,
           todo.text,
+          textSearch,
           todo.done ? 1 : 0,
           todo.createdAt,
           JSON.stringify(todo.filters),
@@ -268,20 +336,27 @@ export const replaceAllTodosInDatabase = saveTodosToDatabase;
 
 export const upsertTodoInDatabase = async (todo: Todo) => {
   const database = await getDatabase();
+  const contentSearch = normalizeSearchText(todo.content);
+  const textSearch = normalizeSearchText(todo.text);
+
   await database.withTransactionAsync(async () => {
     await database.runAsync(
-      `INSERT INTO todos (id, content, text, done, created_at, filters_json)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO todos (id, content, content_search, text, text_search, done, created_at, filters_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          content = excluded.content,
+         content_search = excluded.content_search,
          text = excluded.text,
+         text_search = excluded.text_search,
          done = excluded.done,
          created_at = excluded.created_at,
          filters_json = excluded.filters_json`,
       [
         todo.id,
         todo.content,
+        contentSearch,
         todo.text,
+        textSearch,
         todo.done ? 1 : 0,
         todo.createdAt,
         JSON.stringify(todo.filters),
@@ -295,19 +370,26 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
   const database = await getDatabase();
   await database.withTransactionAsync(async () => {
     for (const todo of todos) {
+      const contentSearch = normalizeSearchText(todo.content);
+      const textSearch = normalizeSearchText(todo.text);
+
       await database.runAsync(
-        `INSERT INTO todos (id, content, text, done, created_at, filters_json)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO todos (id, content, content_search, text, text_search, done, created_at, filters_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            content = excluded.content,
+           content_search = excluded.content_search,
            text = excluded.text,
+           text_search = excluded.text_search,
            done = excluded.done,
            created_at = excluded.created_at,
            filters_json = excluded.filters_json`,
         [
           todo.id,
           todo.content,
+          contentSearch,
           todo.text,
+          textSearch,
           todo.done ? 1 : 0,
           todo.createdAt,
           JSON.stringify(todo.filters),

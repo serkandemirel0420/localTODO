@@ -22,6 +22,11 @@ import {
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
 } from '../metaTags';
+import {
+  cloneFilterConfigUiState,
+  normalizeFilterConfigUiState,
+  type FilterConfigUiState,
+} from '../storage/appSettingsStore';
 import { isDevAppVariant } from '../appVariant';
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
@@ -57,6 +62,7 @@ export type BackupSettings = {
   collapsedTodoGroupIds: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
+  filterConfigUiState: FilterConfigUiState;
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
@@ -344,6 +350,7 @@ export const createBackupPayload = (
       collapsedTodoGroupIds: [...settings.collapsedTodoGroupIds],
       dateLabelDisplayMode: settings.dateLabelDisplayMode,
       deletedTodos: cloneDeletedTodos(settings.deletedTodos),
+      filterConfigUiState: cloneFilterConfigUiState(settings.filterConfigUiState),
       filterColors: cloneFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
       googleDriveLastBackupAt: exportedAt,
@@ -378,6 +385,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
       dateLabelDisplayMode: settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
       deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
+      filterConfigUiState: normalizeFilterConfigUiState(settings.filterConfigUiState),
       filterColors: normalizeFilterColors(settings.filterColors),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,
       googleDriveLastBackupAt:

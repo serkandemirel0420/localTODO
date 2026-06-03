@@ -114,12 +114,8 @@ const EXACT_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
   today: 0,
   tomorrow: 1,
 };
-const LATER_DATE_FILTER_LABELS = new Set([
-  'tomorrow',
-  'this week',
-  'next week',
-  LATER_DATE_LABEL.toLocaleLowerCase(),
-]);
+
+export type DateLabelAnchor = Date | number | null | undefined;
 
 const addDays = (date: Date, days: number): Date => {
   const next = new Date(date);
@@ -128,16 +124,76 @@ const addDays = (date: Date, days: number): Date => {
   return next;
 };
 
-export const getDateFilterSortRank = (label: string, now = new Date()): number => {
+const getDateLabelAnchorDay = (
+  anchor: DateLabelAnchor,
+  now = new Date(),
+): Date => {
+  if (anchor instanceof Date && Number.isFinite(anchor.getTime())) {
+    return startOfDay(anchor);
+  }
+
+  if (typeof anchor === 'number' && Number.isFinite(anchor)) {
+    return startOfDay(new Date(anchor));
+  }
+
+  return startOfDay(now);
+};
+
+export const resolveDateFilterValueDate = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): Date | null => {
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (
+    !formattedLabel
+    || formattedLabel === LATER_DATE_LABEL
+    || formattedLabel === CUSTOM_DATE_LABEL
+  ) {
+    return null;
+  }
+
+  const customDate = parseISODateLabel(formattedLabel);
+  if (customDate) {
+    return startOfDay(customDate);
+  }
+
+  const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[formattedLabel.toLocaleLowerCase()];
+  if (dayOffset === undefined) {
+    return null;
+  }
+
+  return addDays(getDateLabelAnchorDay(anchor, now), dayOffset);
+};
+
+export const freezeDateFilterValue = (
+  label: string,
+  anchor: DateLabelAnchor = new Date(),
+): string => {
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (!formattedLabel) {
+    return '';
+  }
+
+  const resolvedDate = resolveDateFilterValueDate(formattedLabel, new Date(), anchor);
+  if (resolvedDate) {
+    return toISODateString(resolvedDate);
+  }
+
+  return formattedLabel;
+};
+
+export const getDateFilterSortRank = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): number => {
   const trimmed = label.trim();
 
   if (!trimmed) {
     return DATE_SORT_NO_DATE_RANK;
-  }
-
-  const customDate = parseISODateLabel(trimmed);
-  if (customDate) {
-    return startOfDay(customDate).getTime();
   }
 
   const normalizedLabel = formatDateFilterValue(trimmed).toLocaleLowerCase();
@@ -146,15 +202,19 @@ export const getDateFilterSortRank = (label: string, now = new Date()): number =
     return DATE_SORT_LATER_RANK;
   }
 
-  const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[normalizedLabel];
-  if (dayOffset !== undefined) {
-    return addDays(startOfDay(now), dayOffset).getTime();
+  const resolvedDate = resolveDateFilterValueDate(trimmed, now, anchor);
+  if (resolvedDate) {
+    return resolvedDate.getTime();
   }
 
   return DATE_SORT_NO_DATE_RANK;
 };
 
-const getDateLabelDayOffset = (label: string, now = new Date()): number | null => {
+const getDateLabelDayOffset = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): number | null => {
   const formattedLabel = formatDateFilterValue(label);
 
   if (
@@ -164,18 +224,21 @@ const getDateLabelDayOffset = (label: string, now = new Date()): number | null =
     return null;
   }
 
-  const customDate = parseISODateLabel(formattedLabel);
-  if (customDate) {
+  const resolvedDate = resolveDateFilterValueDate(formattedLabel, now, anchor);
+  if (resolvedDate) {
     return Math.round(
-      (startOfDay(customDate).getTime() - startOfDay(now).getTime()) / DAY_MS,
+      (resolvedDate.getTime() - startOfDay(now).getTime()) / DAY_MS,
     );
   }
 
-  const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[formattedLabel.toLocaleLowerCase()];
-  return dayOffset !== undefined ? dayOffset : null;
+  return null;
 };
 
-export const formatRemainingDaysLabel = (label: string, now = new Date()): string | null => {
+export const formatRemainingDaysLabel = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): string | null => {
   const formattedLabel = formatDateFilterValue(label);
 
   if (formattedLabel === LATER_DATE_LABEL) {
@@ -186,7 +249,7 @@ export const formatRemainingDaysLabel = (label: string, now = new Date()): strin
     return null;
   }
 
-  const dayOffset = getDateLabelDayOffset(label, now);
+  const dayOffset = getDateLabelDayOffset(label, now, anchor);
   if (dayOffset === null) {
     return null;
   }
@@ -214,19 +277,24 @@ export const formatDateDisplayLabel = (
   label: string,
   mode: DateLabelDisplayMode = 'exact',
   now = new Date(),
+  anchor?: DateLabelAnchor,
 ): string => {
   if (mode === 'remaining') {
-    const remainingLabel = formatRemainingDaysLabel(label, now);
+    const remainingLabel = formatRemainingDaysLabel(label, now, anchor);
     if (remainingLabel) {
       return remainingLabel;
     }
   }
 
-  return formatCompactDateFilterLabel(label);
+  return formatCompactDateFilterLabel(label, now, anchor);
 };
 
 /** Short labels for list meta and group headers (Today, Yesterday, May 30). */
-export const formatCompactDateFilterLabel = (label: string): string => {
+export const formatCompactDateFilterLabel = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): string => {
   const formattedLabel = formatDateFilterValue(label);
 
   if (formattedLabel === LATER_DATE_LABEL || formattedLabel === CUSTOM_DATE_LABEL) {
@@ -234,9 +302,16 @@ export const formatCompactDateFilterLabel = (label: string): string => {
   }
 
   const customDate = parseISODateLabel(formattedLabel);
-  if (customDate) {
+  const exactDayOffset = EXACT_DATE_FILTER_DAY_OFFSETS[formattedLabel.toLocaleLowerCase()];
+  const date = customDate
+    ? startOfDay(customDate)
+    : exactDayOffset !== undefined
+      ? addDays(getDateLabelAnchorDay(anchor, now), exactDayOffset)
+      : null;
+
+  if (date) {
     const dayOffset = Math.round(
-      (startOfDay(customDate).getTime() - startOfDay(new Date()).getTime()) / DAY_MS,
+      (date.getTime() - startOfDay(now).getTime()) / DAY_MS,
     );
 
     if (dayOffset === 0) {
@@ -251,7 +326,7 @@ export const formatCompactDateFilterLabel = (label: string): string => {
       return 'Yesterday';
     }
 
-    return customDate.toLocaleDateString(undefined, {
+    return date.toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
     });
@@ -280,13 +355,17 @@ export const formatCreatedMetaLabel = (createdAt: number): string => {
   });
 };
 
-export const isDateFilterOverdue = (label: string): boolean => {
-  const parsed = parseISODateLabel(label);
-  if (!parsed) {
+export const isDateFilterOverdue = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): boolean => {
+  const resolvedDate = resolveDateFilterValueDate(label, now, anchor);
+  if (!resolvedDate) {
     return false;
   }
 
-  return startOfDay(parsed).getTime() < startOfDay(new Date()).getTime();
+  return resolvedDate.getTime() < startOfDay(now).getTime();
 };
 
 export const getInitialDatePickerValue = (dateLabels: string[]): Date => {
@@ -307,7 +386,11 @@ export const isSameCalendarDay = (a: Date, b: Date): boolean =>
   && a.getMonth() === b.getMonth()
   && a.getDate() === b.getDate();
 
-const getExactDateFilterValueDate = (label: string, now = new Date()): Date | null => {
+const getExactDateFilterValueDate = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): Date | null => {
   const formattedLabel = formatDateFilterValue(label);
   const customDate = parseISODateLabel(formattedLabel);
   if (customDate) {
@@ -319,23 +402,33 @@ const getExactDateFilterValueDate = (label: string, now = new Date()): Date | nu
     return null;
   }
 
-  return addDays(startOfDay(now), dayOffset);
+  return addDays(getDateLabelAnchorDay(anchor, now), dayOffset);
 };
 
-export const isLaterDateFilterValue = (label: string, now = new Date()): boolean => {
+export const isLaterDateFilterValue = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): boolean => {
   const formattedLabel = formatDateFilterValue(label);
-  const customDate = parseISODateLabel(formattedLabel);
-  if (customDate) {
-    return startOfDay(customDate).getTime() > startOfDay(now).getTime();
+
+  if (formattedLabel === LATER_DATE_LABEL) {
+    return true;
   }
 
-  return LATER_DATE_FILTER_LABELS.has(formattedLabel.toLocaleLowerCase());
+  const resolvedDate = resolveDateFilterValueDate(formattedLabel, now, anchor);
+  if (resolvedDate) {
+    return resolvedDate.getTime() > startOfDay(now).getTime();
+  }
+
+  return false;
 };
 
 export const dateFilterValueMatches = (
   todoDateLabel: string,
   selectedDateLabel: string,
   now = new Date(),
+  todoDateAnchor?: DateLabelAnchor,
 ): boolean => {
   const todoDateValue = formatDateFilterValue(todoDateLabel);
   const selectedDateValue = formatDateFilterValue(selectedDateLabel);
@@ -345,27 +438,28 @@ export const dateFilterValueMatches = (
   }
 
   if (selectedDateValue === LATER_DATE_LABEL) {
-    return isLaterDateFilterValue(todoDateValue, now);
-  }
-
-  if (todoDateValue === selectedDateValue) {
-    return true;
+    return isLaterDateFilterValue(todoDateValue, now, todoDateAnchor);
   }
 
   const selectedExactDate = getExactDateFilterValueDate(selectedDateValue, now);
-  const todoExactDate = getExactDateFilterValueDate(todoDateValue, now);
+  const todoExactDate = getExactDateFilterValueDate(todoDateValue, now, todoDateAnchor);
 
-  return Boolean(
-    selectedExactDate
-    && todoExactDate
-    && isSameCalendarDay(todoExactDate, selectedExactDate),
-  );
+  if (selectedExactDate || todoExactDate) {
+    return Boolean(
+      selectedExactDate
+      && todoExactDate
+      && isSameCalendarDay(todoExactDate, selectedExactDate),
+    );
+  }
+
+  return todoDateValue === selectedDateValue;
 };
 
 export const todoMatchesSelectedDateFilters = (
   todoDateLabels: string[],
   selectedDateLabels: string[],
   now = new Date(),
+  todoDateAnchor?: DateLabelAnchor,
 ): boolean => {
   if (selectedDateLabels.length === 0) {
     return true;
@@ -373,7 +467,7 @@ export const todoMatchesSelectedDateFilters = (
 
   return selectedDateLabels.some((selectedLabel) =>
     todoDateLabels.some((todoLabel) =>
-      dateFilterValueMatches(todoLabel, selectedLabel, now),
+      dateFilterValueMatches(todoLabel, selectedLabel, now, todoDateAnchor),
     ),
   );
 };

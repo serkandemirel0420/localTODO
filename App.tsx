@@ -125,15 +125,18 @@ import {
 import {
   appSettingsStore,
   clearListNodeDisplaySettings,
+  cloneFilterConfigUiState,
   cloneListMenuTree,
   cloneMenuPresets,
   collectListNodeLabels,
+  DEFAULT_FILTER_CONFIG_UI_STATE,
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
   type AppSettings,
+  type FilterConfigUiState,
   type ListOrderMode,
   type StoredListMenuNode,
   type StoredMenuPreset,
@@ -460,6 +463,7 @@ const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
+const EDITED_TODO_HIGHLIGHT_DURATION_MS = 500;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = 3200;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
@@ -757,6 +761,17 @@ const normalizeFilterValues = (filters: TodoFilters) => ({
   reminder: [...filters.reminder].sort(),
 });
 
+const filterValueListsEqual = (first: string[], second: string[]) => {
+  if (first.length !== second.length) {
+    return false;
+  }
+
+  const firstValues = [...first].sort();
+  const secondValues = [...second].sort();
+
+  return firstValues.every((value, index) => value === secondValues[index]);
+};
+
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
 
@@ -850,7 +865,12 @@ const todoMatchesFilters = (
     }
 
     if (filterKey === 'date') {
-      return todoMatchesSelectedDateFilters(todo.filters.date, values);
+      return todoMatchesSelectedDateFilters(
+        todo.filters.date,
+        values,
+        new Date(),
+        todo.createdAt,
+      );
     }
 
     return values.some((value) => todo.filters[filterKey].includes(value));
@@ -972,6 +992,9 @@ export default function App() {
   const [newlyCreatedTodoHighlightId, setNewlyCreatedTodoHighlightId] = useState<string | null>(
     null,
   );
+  const [recentlyEditedTodoIds, setRecentlyEditedTodoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
@@ -988,6 +1011,9 @@ export default function App() {
   const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
+  );
+  const [filterConfigUiState, setFilterConfigUiState] = useState<FilterConfigUiState>(
+    () => cloneFilterConfigUiState(DEFAULT_FILTER_CONFIG_UI_STATE),
   );
   const [hideDoneTodos, setHideDoneTodos] = useState(false);
   const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
@@ -1045,6 +1071,9 @@ export default function App() {
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   const todosRef = useRef<Todo[]>(todos);
   const loadedRef = useRef(loaded);
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
@@ -1159,6 +1188,7 @@ export default function App() {
 
         setSelectedFilters(settings.selectedFilters);
         setDeletedTodos(settings.deletedTodos);
+        setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
         setFilterColors(settings.filterColors);
         setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
         setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
@@ -1199,6 +1229,7 @@ export default function App() {
   ): AppSettings => ({
     collapsedTodoGroupIds: [...collapsedTodoGroupIds],
     deletedTodos,
+    filterConfigUiState,
     filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
@@ -1218,6 +1249,7 @@ export default function App() {
     collapsedTodoGroupIds,
     dateLabelDisplayMode,
     deletedTodos,
+    filterConfigUiState,
     filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
@@ -1282,6 +1314,79 @@ export default function App() {
       ));
     }, NEW_TODO_HIGHLIGHT_DURATION_MS);
   }, []);
+
+  const clearEditedTodoHighlights = useCallback((ids: Iterable<string>) => {
+    const targetIds = [...ids];
+
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    targetIds.forEach((id) => {
+      const timer = editedTodoHighlightTimersRef.current.get(id);
+
+      if (timer) {
+        clearTimeout(timer);
+        editedTodoHighlightTimersRef.current.delete(id);
+      }
+    });
+
+    setRecentlyEditedTodoIds((current) => {
+      if (!targetIds.some((id) => current.has(id))) {
+        return current;
+      }
+
+      const next = new Set(current);
+      targetIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
+
+  const highlightEditedTodos = useCallback((ids: Iterable<string>) => {
+    const targetIds = [...new Set(ids)]
+      .filter((id) => !pendingDeleteIdsRef.current.has(id));
+
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    setRecentlyEditedTodoIds((current) => {
+      const next = new Set(current);
+      targetIds.forEach((id) => next.add(id));
+      return next;
+    });
+
+    targetIds.forEach((id) => {
+      const existingTimer = editedTodoHighlightTimersRef.current.get(id);
+
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+
+      const timer = setTimeout(() => {
+        editedTodoHighlightTimersRef.current.delete(id);
+        setRecentlyEditedTodoIds((current) => {
+          if (!current.has(id)) {
+            return current;
+          }
+
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }, EDITED_TODO_HIGHLIGHT_DURATION_MS);
+
+      editedTodoHighlightTimersRef.current.set(id, timer);
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      editedTodoHighlightTimersRef.current.forEach(clearTimeout);
+      editedTodoHighlightTimersRef.current.clear();
+    },
+    [],
+  );
 
   const revealTodoMenuHighlight = useCallback((id: string) => {
     if (activeTodoMenuIdRef.current !== id || !listMenuOpenRef.current) {
@@ -2227,6 +2332,7 @@ export default function App() {
 
     localTodoStore.delete(id).catch(() => undefined);
     cancelTodoAlarm(id).catch(() => undefined);
+    clearEditedTodoHighlights([id]);
     setTodos((current) => current.filter((todo) => todo.id !== id));
     setDeletedTodos((current) => [
       deletedTodo,
@@ -2244,7 +2350,7 @@ export default function App() {
       return next;
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-  }, [pendingDeleteIds, todos]);
+  }, [clearEditedTodoHighlights, pendingDeleteIds, todos]);
 
   const restoreDeletedTodo = useCallback((id: string) => {
     const deletedTodo = deletedTodos.find((todo) => todo.id === id);
@@ -2331,6 +2437,7 @@ export default function App() {
       setActiveTodoDetailId((current) => (current === id ? null : current));
     }
     if (nextTodo) {
+      highlightEditedTodos([id]);
       if (repeatedNextTodo) {
         localTodoStore.upsert(repeatedNextTodo).catch(() => undefined);
       } else {
@@ -2340,7 +2447,7 @@ export default function App() {
     } else if (done) {
       cancelTodoAlarm(id).catch(() => undefined);
     }
-  }, [hideDoneTodos, pendingDeleteIds, todos]);
+  }, [hideDoneTodos, highlightEditedTodos, pendingDeleteIds, todos]);
 
   const deleteSelectedTodos = useCallback(() => {
     const ids = [...selectedTodoIds];
@@ -2400,13 +2507,19 @@ export default function App() {
           return todo;
         }
 
-        const nextFilters = updater(cloneTodoFilters(todo.filters));
+        const rawNextFilters = updater(cloneTodoFilters(todo.filters));
+        const dateChanged = !filterValueListsEqual(rawNextFilters.date, todo.filters.date);
+        const nextFilters = normalizeTodoFilters(
+          rawNextFilters,
+          dateChanged ? Date.now() : undefined,
+        );
         const updatedTodo = { ...todo, filters: nextFilters };
         updatedTodos.push(updatedTodo);
         return updatedTodo;
       });
 
       if (updatedTodos.length > 0) {
+        highlightEditedTodos(updatedTodos.map((todo) => todo.id));
         localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
         updatedTodos.forEach((todo) => {
           syncTodoAlarm(todo).catch(() => undefined);
@@ -2415,7 +2528,7 @@ export default function App() {
 
       return nextTodos;
     });
-  }, [pendingDeleteIds]);
+  }, [highlightEditedTodos, pendingDeleteIds]);
 
   const getCurrentTodoEditTargetIds = useCallback(() => {
     if (activeTodoMenuIdRef.current) {
@@ -3113,6 +3226,7 @@ export default function App() {
     );
     localTodoStore.upsert(updatedTodo).catch(() => undefined);
     syncTodoAlarm(updatedTodo).catch(() => undefined);
+    highlightEditedTodos([todoId]);
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
@@ -3126,6 +3240,7 @@ export default function App() {
     activeTodoDetailCanSave,
     activeTodoDetailDraftContentForSave,
     activeTodoDetailDraftTextForSave,
+    highlightEditedTodos,
   ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
@@ -4397,6 +4512,7 @@ export default function App() {
       collapsedTodoGroupIds: [...collapsedTodoGroupIds],
       dateLabelDisplayMode,
       deletedTodos,
+      filterConfigUiState,
       filterColors,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
@@ -4421,6 +4537,7 @@ export default function App() {
     collapsedTodoGroupIds,
     dateLabelDisplayMode,
     deletedTodos,
+    filterConfigUiState,
     filterColors,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
@@ -4456,6 +4573,7 @@ export default function App() {
     reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
     setDeletedTodos(backup.payload.settings.deletedTodos);
     setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
+    setFilterConfigUiState(cloneFilterConfigUiState(backup.payload.settings.filterConfigUiState));
     setFilterColors(backup.payload.settings.filterColors);
     setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
     setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
@@ -4852,6 +4970,7 @@ export default function App() {
         const isSelected = selectedTodoIds.has(item.todo.id);
         const isNewlyCreatedTodo =
           newlyCreatedTodoHighlightId === item.todo.id;
+        const isRecentlyEditedTodo = recentlyEditedTodoIds.has(item.todo.id);
 
         return (
           <View>
@@ -4872,6 +4991,7 @@ export default function App() {
                 isMenuTarget={isTodoMenuTarget}
                 isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
                 isNewlyCreated={isNewlyCreatedTodo}
+                isRecentlyEdited={isRecentlyEditedTodo}
                 isPendingDelete={isPendingDelete}
                 layout="grouped"
                 metaTagVisibility={metaTagVisibility}
@@ -4882,6 +5002,7 @@ export default function App() {
                 onSetDone={setTodoDone}
                 onTouchStart={markTodoRowTouchStart}
                 onToggleSelect={toggleTodoSelection}
+                searchHighlightQuery={searchQuery}
                 selectMode={todoSelectMode}
                 sectionLabel={item.sectionLabel}
               />
@@ -4901,6 +5022,7 @@ export default function App() {
       const isSelected = selectedTodoIds.has(item.todo.id);
       const isNewlyCreatedTodo =
         newlyCreatedTodoHighlightId === item.todo.id;
+      const isRecentlyEditedTodo = recentlyEditedTodoIds.has(item.todo.id);
 
       return (
         <View>
@@ -4913,6 +5035,7 @@ export default function App() {
             isMenuTarget={isTodoMenuTarget}
             isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
             isNewlyCreated={isNewlyCreatedTodo}
+            isRecentlyEdited={isRecentlyEditedTodo}
             isPendingDelete={isPendingDelete}
             metaTagVisibility={metaTagVisibility}
             onDelete={deleteTodo}
@@ -4922,6 +5045,7 @@ export default function App() {
             onSetDone={setTodoDone}
             onTouchStart={markTodoRowTouchStart}
             onToggleSelect={toggleTodoSelection}
+            searchHighlightQuery={searchQuery}
             selectMode={todoSelectMode}
           />
         </View>
@@ -4943,9 +5067,11 @@ export default function App() {
       openTodoDetailModal,
       openMenuForTodoAction,
       pendingDeleteIds,
+      recentlyEditedTodoIds,
       renderVisibleTodoRowGap,
       selectedTodoIds,
       setTodoDone,
+      searchQuery,
       toggleTodoGroupCollapsed,
       toggleTodoSelection,
       todoSelectMode,
@@ -6447,6 +6573,7 @@ export default function App() {
           dateLabelDisplayMode={dateLabelDisplayMode}
           filterColors={filterColors}
           filters={selectedFilters}
+          uiState={filterConfigUiState}
           isListItemSelected={(item) => (
             isListMenuItemSelected(item, selectedFilters.list, listMenuTree)
           )}
@@ -6466,6 +6593,7 @@ export default function App() {
           onToggleListItem={toggleListMenuItem}
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
           onToggleMetaTag={toggleMetaTagVisibility}
+          onUiStateChange={setFilterConfigUiState}
           resultCount={filteredTodos.length}
           sortMode={effectiveSortMode}
           visible={filterConfigModalVisible}

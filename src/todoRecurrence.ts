@@ -1,20 +1,10 @@
 import {
-  CUSTOM_DATE_LABEL,
-  formatDateFilterValue,
-  LATER_DATE_LABEL,
-  parseISODateLabel,
+  resolveDateFilterValueDate,
   startOfDay,
   toISODateString,
 } from './dates';
 import { decodeTodoReminder, type RepeatPreset } from './reminders';
 import { cloneTodoFilters, type Todo } from './todos';
-
-const RELATIVE_DATE_OFFSETS: Record<string, number> = {
-  today: 0,
-  tomorrow: 1,
-  'this week': 2,
-  'next week': 7,
-};
 
 const addDays = (date: Date, days: number): Date => {
   const next = new Date(date);
@@ -45,29 +35,13 @@ const addYears = (date: Date, years: number): Date => {
   return startOfDay(new Date(targetYear, next.getMonth(), targetDay));
 };
 
-const resolveTodoDate = (dateLabels: string[], now = new Date()): Date | null => {
+const resolveTodoDate = (
+  dateLabels: string[],
+  now = new Date(),
+  anchor?: number,
+): Date | null => {
   const label = dateLabels[0]?.trim();
-  const normalizedLabel = label ? formatDateFilterValue(label) : '';
-
-  if (
-    !normalizedLabel
-    || normalizedLabel === LATER_DATE_LABEL
-    || normalizedLabel === CUSTOM_DATE_LABEL
-  ) {
-    return null;
-  }
-
-  const customDate = parseISODateLabel(normalizedLabel);
-  if (customDate) {
-    return startOfDay(customDate);
-  }
-
-  const dayOffset = RELATIVE_DATE_OFFSETS[normalizedLabel.toLocaleLowerCase()];
-  if (dayOffset === undefined) {
-    return null;
-  }
-
-  return addDays(startOfDay(now), dayOffset);
+  return label ? resolveDateFilterValueDate(label, now, anchor) : null;
 };
 
 const addRepeatInterval = (date: Date, repeat: Exclude<RepeatPreset, 'none'>): Date => {
@@ -90,9 +64,10 @@ const getNextRepeatDateLabel = (
   dateLabels: string[],
   repeat: Exclude<RepeatPreset, 'none'>,
   now = new Date(),
+  anchor?: number,
 ): string => {
   const today = startOfDay(now);
-  let nextDate = addRepeatInterval(resolveTodoDate(dateLabels, now) ?? today, repeat);
+  let nextDate = addRepeatInterval(resolveTodoDate(dateLabels, now, anchor) ?? today, repeat);
   let safety = 0;
 
   while (nextDate.getTime() <= today.getTime() && safety < 5000) {
@@ -117,7 +92,7 @@ export const advanceRepeatingTodoAfterDone = (
     done: false,
     filters: {
       ...cloneTodoFilters(todo.filters),
-      date: [getNextRepeatDateLabel(todo.filters.date, repeat, now)],
+      date: [getNextRepeatDateLabel(todo.filters.date, repeat, now, todo.createdAt)],
     },
   };
 };

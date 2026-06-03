@@ -1,4 +1,8 @@
-import { formatDateFilterValue } from './dates';
+import {
+  freezeDateFilterValue,
+  formatDateFilterValue,
+  type DateLabelAnchor,
+} from './dates';
 import { normalizeReminderFilterValues } from './reminders';
 
 export type TodoFilters = {
@@ -38,7 +42,23 @@ export const cloneTodoFilters = (filters: TodoFilters = EMPTY_TODO_FILTERS): Tod
   reminder: [...filters.reminder],
 });
 
-export const normalizeTodoFilters = (value: unknown): TodoFilters => {
+const normalizeDateFilterValues = (
+  values: string[],
+  dateAnchor?: DateLabelAnchor,
+) => (
+  values
+    .map((label) => (
+      dateAnchor === undefined
+        ? formatDateFilterValue(label)
+        : freezeDateFilterValue(label, dateAnchor)
+    ))
+    .filter(Boolean)
+);
+
+export const normalizeTodoFilters = (
+  value: unknown,
+  dateAnchor?: DateLabelAnchor,
+): TodoFilters => {
   if (typeof value !== 'object' || value === null) {
     return cloneTodoFilters();
   }
@@ -46,7 +66,7 @@ export const normalizeTodoFilters = (value: unknown): TodoFilters => {
   const filters = value as Partial<TodoFilters>;
   return {
     date: isStringArray(filters.date)
-      ? filters.date.map(formatDateFilterValue).filter(Boolean)
+      ? normalizeDateFilterValues(filters.date, dateAnchor)
       : [],
     list: isStringArray(filters.list)
       ? filters.list.map(formatListLabel).filter(Boolean)
@@ -123,13 +143,14 @@ export const makeTodo = (
   text: string,
   filters: TodoFilters = EMPTY_TODO_FILTERS,
   content = '',
+  createdAt = Date.now(),
 ): Todo => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  id: `${createdAt}-${Math.random().toString(36).slice(2)}`,
   content: normalizeTodoContent(content),
   text,
   done: false,
-  createdAt: Date.now(),
-  filters: normalizeTodoFilters(filters),
+  createdAt,
+  filters: normalizeTodoFilters(filters, createdAt),
 });
 
 export const isTodo = (value: unknown): value is Todo => {
@@ -170,7 +191,7 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     text: todo.text,
     done: todo.done,
     createdAt: todo.createdAt,
-    filters: normalizeTodoFilters(todo.filters),
+    filters: normalizeTodoFilters(todo.filters, todo.createdAt),
   };
 };
 

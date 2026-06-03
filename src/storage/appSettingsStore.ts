@@ -55,6 +55,20 @@ export type StoredMenuPreset = {
   createdAt: number;
 };
 
+export type FilterConfigExpandedSections = {
+  lists: boolean;
+  priority: boolean;
+  date: boolean;
+  sort: boolean;
+  group: boolean;
+  metaTags: boolean;
+};
+
+export type FilterConfigUiState = {
+  expandedSections: FilterConfigExpandedSections;
+  scrollOffsetY: number | null;
+};
+
 export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
   { label: 'Inbox' },
   { label: 'Today' },
@@ -77,12 +91,25 @@ export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
   { label: 'Archive' },
 ];
 
+export const DEFAULT_FILTER_CONFIG_UI_STATE: FilterConfigUiState = {
+  expandedSections: {
+    lists: true,
+    priority: false,
+    date: true,
+    sort: false,
+    group: false,
+    metaTags: false,
+  },
+  scrollOffsetY: null,
+};
+
 export type { DateLabelDisplayMode };
 
 export type AppSettings = {
   collapsedTodoGroupIds: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
+  filterConfigUiState: FilterConfigUiState;
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
@@ -123,6 +150,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   collapsedTodoGroupIds: [],
   dateLabelDisplayMode: 'exact',
   deletedTodos: [],
+  filterConfigUiState: DEFAULT_FILTER_CONFIG_UI_STATE,
   filterColors: cloneFilterColors(),
   googleDriveBackupEnabled: false,
   googleDriveLastBackupAt: null,
@@ -164,6 +192,49 @@ const normalizeCollapsedTodoGroupIds = (value: unknown): string[] => {
 
 const normalizeDateLabelDisplayMode = (value: unknown): DateLabelDisplayMode =>
   value === 'remaining' ? 'remaining' : 'exact';
+
+const normalizeBooleanRecordValue = (
+  record: Record<string, unknown>,
+  key: keyof FilterConfigExpandedSections,
+) => (
+  typeof record[key] === 'boolean'
+    ? record[key] as boolean
+    : DEFAULT_FILTER_CONFIG_UI_STATE.expandedSections[key]
+);
+
+export const normalizeFilterConfigUiState = (value: unknown): FilterConfigUiState => {
+  if (!isRecord(value)) {
+    return {
+      expandedSections: { ...DEFAULT_FILTER_CONFIG_UI_STATE.expandedSections },
+      scrollOffsetY: DEFAULT_FILTER_CONFIG_UI_STATE.scrollOffsetY,
+    };
+  }
+
+  const expandedSections = isRecord(value.expandedSections) ? value.expandedSections : {};
+  const scrollOffsetY = (
+    typeof value.scrollOffsetY === 'number' &&
+    Number.isFinite(value.scrollOffsetY) &&
+    value.scrollOffsetY >= 0
+  )
+    ? value.scrollOffsetY
+    : null;
+
+  return {
+    expandedSections: {
+      lists: normalizeBooleanRecordValue(expandedSections, 'lists'),
+      priority: normalizeBooleanRecordValue(expandedSections, 'priority'),
+      date: normalizeBooleanRecordValue(expandedSections, 'date'),
+      sort: normalizeBooleanRecordValue(expandedSections, 'sort'),
+      group: normalizeBooleanRecordValue(expandedSections, 'group'),
+      metaTags: normalizeBooleanRecordValue(expandedSections, 'metaTags'),
+    },
+    scrollOffsetY,
+  };
+};
+
+export const cloneFilterConfigUiState = (
+  state: FilterConfigUiState = DEFAULT_FILTER_CONFIG_UI_STATE,
+): FilterConfigUiState => normalizeFilterConfigUiState(state);
 
 const normalizeTodoSortMode = (value: unknown): TodoSortMode => {
   if (
@@ -503,6 +574,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     return {
       ...DEFAULT_APP_SETTINGS,
       deletedTodos: [],
+      filterConfigUiState: cloneFilterConfigUiState(),
       filterColors: cloneFilterColors(),
       hideDoneTodos: false,
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
@@ -517,6 +589,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
     dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
+    filterConfigUiState: normalizeFilterConfigUiState(value.filterConfigUiState),
     filterColors: normalizeFilterColors(value.filterColors),
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
     googleDriveLastBackupAt:

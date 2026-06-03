@@ -178,13 +178,18 @@ const getDateLabelMenuRank = (label: string, index: number) => {
   return rank >= 0 ? rank : DATE_MENU_ITEMS.length + index;
 };
 
-const getBestDateFilterLabel = (values: string[], fallbackLabel: string, now = new Date()) => {
+const getBestDateFilterLabel = (
+  values: string[],
+  fallbackLabel: string,
+  now = new Date(),
+  anchor?: number,
+) => {
   let bestLabel = fallbackLabel;
-  let bestSortRank = getDateFilterSortRank(fallbackLabel, now);
+  let bestSortRank = getDateFilterSortRank(fallbackLabel, now, anchor);
   let bestMenuRank = DATE_MENU_ITEMS.length + values.length;
 
   values.forEach((value, index) => {
-    const sortRank = getDateFilterSortRank(value, now);
+    const sortRank = getDateFilterSortRank(value, now, anchor);
     const menuRank = getDateLabelMenuRank(value, index);
 
     if (sortRank < bestSortRank || (sortRank === bestSortRank && menuRank < bestMenuRank)) {
@@ -198,7 +203,11 @@ const getBestDateFilterLabel = (values: string[], fallbackLabel: string, now = n
 };
 
 const getTodoDateSortRank = (todo: Todo, now = new Date()) =>
-  getDateFilterSortRank(getBestDateFilterLabel(todo.filters.date, 'No date', now), now);
+  getDateFilterSortRank(
+    getBestDateFilterLabel(todo.filters.date, 'No date', now, todo.createdAt),
+    now,
+    todo.createdAt,
+  );
 
 const EXACT_RELATIVE_DATE_GROUP_LABELS = new Set(['Today', 'Tomorrow']);
 
@@ -338,13 +347,18 @@ const getTodoGroups = (
   }
 
   const now = new Date();
-  const rawLabel = getBestDateFilterLabel(todo.filters.date, 'No date', now);
-  const displayLabel = formatDateDisplayLabel(rawLabel, dateLabelDisplayMode, now);
+  const rawLabel = getBestDateFilterLabel(todo.filters.date, 'No date', now, todo.createdAt);
+  const displayLabel = formatDateDisplayLabel(
+    rawLabel,
+    dateLabelDisplayMode,
+    now,
+    todo.createdAt,
+  );
 
   return [{
     key: getDateGroupKey(rawLabel, displayLabel),
     label: displayLabel,
-    rank: getDateFilterSortRank(rawLabel, now),
+    rank: getDateFilterSortRank(rawLabel, now, todo.createdAt),
   }];
 };
 

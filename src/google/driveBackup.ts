@@ -74,6 +74,7 @@ export type BackupSettings = {
   menuPresets: BackupMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
   selectedFilters: TodoFilters;
+  showOverdueMetaTags: boolean;
   todoGroupMode: BackupTodoGroupMode;
   todoSortMode: BackupTodoSortMode;
 };
@@ -362,6 +363,7 @@ export const createBackupPayload = (
       menuPresets: cloneMenuPresets(settings.menuPresets),
       metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
+      showOverdueMetaTags: settings.showOverdueMetaTags,
       todoGroupMode: settings.todoGroupMode,
       todoSortMode: settings.todoSortMode,
     },
@@ -399,6 +401,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       menuPresets: normalizeBackupMenuPresets(settings.menuPresets),
       metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
       selectedFilters: normalizeTodoFilters(settings.selectedFilters),
+      showOverdueMetaTags: settings.showOverdueMetaTags !== false,
       todoGroupMode: normalizeBackupTodoGroupMode(settings.todoGroupMode),
       todoSortMode: normalizeBackupTodoSortMode(settings.todoSortMode),
     },

@@ -121,6 +121,7 @@ export type AppSettings = {
   menuPresets: StoredMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
   selectedFilters: TodoFilters;
+  showOverdueMetaTags: boolean;
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
 };
@@ -162,6 +163,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   menuPresets: [],
   metaTagVisibility: cloneMetaTagVisibility(),
   selectedFilters: cloneTodoFilters(),
+  showOverdueMetaTags: true,
   todoGroupMode: 'none',
   todoSortMode: 'newest',
 };
@@ -580,6 +582,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
       menuPresets: [],
       selectedFilters: cloneTodoFilters(),
+      showOverdueMetaTags: true,
       todoGroupMode: 'none',
       todoSortMode: 'newest',
     };
@@ -603,6 +606,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     menuPresets: normalizeMenuPresets(value.menuPresets),
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
     selectedFilters: normalizeTodoFilters(value.selectedFilters),
+    showOverdueMetaTags: value.showOverdueMetaTags !== false,
     todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
     todoSortMode: normalizeTodoSortMode(value.todoSortMode),
   };

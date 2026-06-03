@@ -6,6 +6,7 @@ import {
   type DateLabelAnchor,
   formatDateDisplayLabel,
   formatDateFilterValue,
+  formatOverdueDaysLabel,
   isDateFilterOverdue,
   type DateLabelDisplayMode,
 } from '../dates';
@@ -54,6 +55,7 @@ type TodoMetaTagsProps = {
   listLabel?: string;
   priorityLabel?: string;
   reminderValues?: string[];
+  showOverdueMetaTags?: boolean;
   visibility: MetaTagVisibility;
 };
 
@@ -68,20 +70,41 @@ function MetaTag({
   done?: boolean;
   filterColors: FilterColorSettings;
 }) {
-  const theme = getFilterColorTheme(
-    filterColors,
-    descriptor.filterKey,
-    descriptor.lookupValue,
-  );
+  const isPriorityTag = descriptor.filterKey === 'priority';
+  const colorMetaTag = descriptor.filterKey === 'date' || isPriorityTag;
+  const colorTheme = colorMetaTag
+    ? getFilterColorTheme(
+      filterColors,
+      descriptor.filterKey,
+      descriptor.lookupValue,
+    )
+    : null;
+  const priorityBackgroundTheme = isPriorityTag
+    ? getFilterColorTheme(filterColors, 'priorityBackground', descriptor.lookupValue)
+    : null;
+  const priorityBorderTheme = isPriorityTag
+    ? getFilterColorTheme(filterColors, 'priorityBorder', descriptor.lookupValue)
+    : null;
   const useOverdueStyle = descriptor.isOverdue === true;
+  const backgroundColor = useOverdueStyle
+    ? '#FFF0EE'
+    : isPriorityTag
+      ? priorityBackgroundTheme?.tint ?? '#FFFFFF'
+      : colorTheme?.tint ?? '#FFFFFF';
+  const borderColor = useOverdueStyle
+    ? '#F0C8C3'
+    : isPriorityTag
+      ? priorityBorderTheme?.accent ?? '#E8E2DA'
+      : colorTheme?.border ?? '#E8E2DA';
+  const textColor = useOverdueStyle ? '#CF413A' : colorTheme?.text ?? '#6A625A';
 
   return (
     <View
       style={[
         styles.tag,
         {
-          backgroundColor: useOverdueStyle ? '#FFF0EE' : theme?.tint ?? '#FFFFFF',
-          borderColor: useOverdueStyle ? '#F0C8C3' : theme?.border ?? '#E8E2DA',
+          backgroundColor,
+          borderColor,
         },
         done && styles.tagDone,
       ]}
@@ -90,7 +113,7 @@ function MetaTag({
         numberOfLines={1}
         style={[
           styles.tagText,
-          { color: useOverdueStyle ? '#CF413A' : theme?.text ?? '#6A625A' },
+          { color: textColor },
           done && styles.tagTextDone,
         ]}
       >
@@ -130,6 +153,7 @@ function buildMetaTags(
   dateLabel: string | undefined,
   dateLabelAnchor: DateLabelAnchor,
   dateLabelDisplayMode: DateLabelDisplayMode,
+  showOverdueMetaTags: boolean,
   listLabel: string | undefined,
   priorityLabel: string | undefined,
   createdAt: number | undefined,
@@ -140,16 +164,20 @@ function buildMetaTags(
   if (hasVisibleDateTag && dateLabel) {
     const now = new Date();
     const lookupValue = formatDateFilterValue(dateLabel);
+    const isOverdue = isOverdueStatusLabel(dateLabel)
+      || isDateFilterOverdue(dateLabel, now, dateLabelAnchor);
+    const overdueLabel = showOverdueMetaTags
+      ? formatOverdueDaysLabel(dateLabel, now, dateLabelAnchor)
+      : null;
     tags.push({
-      displayLabel: formatDateDisplayLabel(
+      displayLabel: overdueLabel ?? formatDateDisplayLabel(
         dateLabel,
         dateLabelDisplayMode,
         now,
         dateLabelAnchor,
       ),
       filterKey: 'date',
-      isOverdue: isOverdueStatusLabel(dateLabel)
-        || isDateFilterOverdue(dateLabel, now, dateLabelAnchor),
+      isOverdue,
       lookupValue: lookupValue || dateLabel,
     });
   }
@@ -219,6 +247,7 @@ function TodoMetaTagsComponent({
   listLabel,
   priorityLabel,
   reminderValues,
+  showOverdueMetaTags = true,
   visibility,
 }: TodoMetaTagsProps) {
   const tags = buildMetaTags(
@@ -226,6 +255,7 @@ function TodoMetaTagsComponent({
     dateLabel,
     dateLabelAnchor,
     dateLabelDisplayMode,
+    showOverdueMetaTags,
     listLabel,
     priorityLabel,
     createdAt,

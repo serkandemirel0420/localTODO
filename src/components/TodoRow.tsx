@@ -21,7 +21,7 @@ import {
   type DateLabelDisplayMode,
 } from '../dates';
 import {
-  getTodoPrimaryColorTheme,
+  getFilterColorTheme,
   type FilterColorSettings,
 } from '../filterColors';
 import {
@@ -257,6 +257,7 @@ export type TodoRowProps = {
   searchHighlightQuery?: string;
   sectionLabel?: string;
   selectMode?: boolean;
+  showOverdueMetaTags?: boolean;
 };
 
 function TodoRowComponent({
@@ -281,6 +282,7 @@ function TodoRowComponent({
   onToggleSelect,
   searchHighlightQuery = '',
   selectMode = false,
+  showOverdueMetaTags = true,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const changeHighlightPulse = useRef(new Animated.Value(0)).current;
@@ -290,7 +292,6 @@ function TodoRowComponent({
   const fallbackRowHeight = isGroupedLayout ? 52 : 56;
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
   const swipeActionInset = isGroupedLayout ? 2 : 0;
-  const todoColorTheme = getTodoPrimaryColorTheme(item.filters, filterColors);
   const rawDateStatusLabel = getBestTodoDateLabel(item.filters.date, item.createdAt);
   const listStatusLabel = item.filters.list[0] ?? '';
   const priorityStatusLabel = getBestOrderedFilterLabel(
@@ -298,6 +299,12 @@ function TodoRowComponent({
     PRIORITY_MENU_ITEMS,
     '',
   );
+  const itemBackgroundTheme = listStatusLabel
+    ? getFilterColorTheme(filterColors, 'list', listStatusLabel)
+    : null;
+  const priorityRailTheme = priorityStatusLabel && priorityStatusLabel !== 'None'
+    ? getFilterColorTheme(filterColors, 'priorityBorder', priorityStatusLabel)
+    : null;
   const effectiveMetaTagVisibility = applyHiddenMetaTagKinds(
     metaTagVisibility,
     hiddenMetaTagKinds,
@@ -814,11 +821,14 @@ function TodoRowComponent({
       style={[
         styles.row,
         isGroupedLayout && styles.rowGrouped,
-        todoColorTheme && !item.done && {
-          backgroundColor: todoColorTheme.tint,
-          borderColor: todoColorTheme.border,
-          shadowColor: todoColorTheme.accent,
+        itemBackgroundTheme && !item.done && !isPendingDelete && {
+          backgroundColor: itemBackgroundTheme.tint,
+          borderColor: itemBackgroundTheme.border,
+          shadowColor: itemBackgroundTheme.accent,
         },
+        item.pinned && !item.done && !isPendingDelete && (
+          isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
+        ),
         isPendingDelete && styles.rowPendingDelete,
         showRowHighlight && (
           isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
@@ -831,12 +841,12 @@ function TodoRowComponent({
         ),
       ]}
     >
-      {todoColorTheme ? (
+      {priorityRailTheme ? (
         <View
           style={[
             styles.colorRail,
             isGroupedLayout && styles.colorRailGrouped,
-            { backgroundColor: todoColorTheme.accent },
+            { backgroundColor: priorityRailTheme.accent },
             item.done && styles.colorRailDone,
           ]}
         />
@@ -895,17 +905,27 @@ function TodoRowComponent({
             isGroupedLayout && styles.contentColumnGrouped,
           ]}
         >
-          <Text
-            ellipsizeMode="tail"
-            numberOfLines={2}
-            style={[
-              styles.text,
-              item.done && styles.textDone,
-              isPendingDelete && styles.textPendingDelete,
-            ]}
-          >
-            {highlightedTitlePreview}
-          </Text>
+          <View style={styles.titleRow}>
+            <Text
+              ellipsizeMode="tail"
+              numberOfLines={2}
+              style={[
+                styles.text,
+                item.done && styles.textDone,
+                isPendingDelete && styles.textPendingDelete,
+              ]}
+            >
+              {highlightedTitlePreview}
+            </Text>
+            {item.pinned ? (
+              <Ionicons
+                color={item.done || isPendingDelete ? THEME_TEXT_SECONDARY : THEME_ACCENT}
+                name="pin"
+                size={14}
+                style={styles.pinnedIcon}
+              />
+            ) : null}
+          </View>
           {contentPreview ? (
             <Text
               ellipsizeMode="tail"
@@ -936,6 +956,7 @@ function TodoRowComponent({
                   : undefined
               }
               reminderValues={item.filters.reminder}
+              showOverdueMetaTags={showOverdueMetaTags}
               visibility={effectiveMetaTagVisibility}
             />
           )}
@@ -951,7 +972,6 @@ function TodoRowComponent({
         styles.shell,
         isGroupedLayout && styles.shellGrouped,
         showRowHighlight && styles.shellMenuTarget,
-        showRowHighlight && isGroupedLayout && styles.shellMenuTargetGrouped,
       ]}
     >
       {useStaticRowContainer ? (
@@ -1051,6 +1071,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.layout === next.layout &&
   prev.sectionLabel === next.sectionLabel &&
   prev.dateLabelDisplayMode === next.dateLabelDisplayMode &&
+  prev.showOverdueMetaTags === next.showOverdueMetaTags &&
   prev.item === next.item &&
   prev.filterColors === next.filterColors &&
   prev.metaTagVisibility === next.metaTagVisibility &&
@@ -1085,9 +1106,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 3,
-  },
-  shellMenuTargetGrouped: {
-    marginVertical: 2,
   },
   selectionFrame: {
     borderColor: THEME_ACCENT_SELECTION_BORDER,
@@ -1217,6 +1235,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0,
     elevation: 0,
   },
+  rowPinned: {
+    backgroundColor: '#F7F9FF',
+    borderColor: 'rgba(76, 120, 255, 0.2)',
+    shadowColor: THEME_ACCENT,
+    shadowOpacity: 0.05,
+  },
+  rowPinnedGrouped: {
+    backgroundColor: 'rgba(76, 120, 255, 0.04)',
+  },
   rowMenuTarget: {
     borderColor: THEME_ACCENT_SELECTION_BORDER,
     elevation: 0,
@@ -1318,9 +1345,16 @@ const styles = StyleSheet.create({
   contentColumnGrouped: {
     paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
   },
+  titleRow: {
+    alignItems: 'flex-start',
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    minWidth: 0,
+  },
   text: {
     alignSelf: 'stretch',
     color: THEME_TEXT,
+    flex: 1,
     flexShrink: 1,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
@@ -1344,6 +1378,10 @@ const styles = StyleSheet.create({
   contentDone: {
     color: THEME_TEXT_SECONDARY,
     textDecorationLine: 'line-through',
+  },
+  pinnedIcon: {
+    marginLeft: 8,
+    marginTop: 3,
   },
   searchHighlight: {
     backgroundColor: 'rgba(255, 211, 87, 0.55)',

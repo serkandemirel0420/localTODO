@@ -220,6 +220,9 @@ const compareTodosByFallback = (first: Todo, second: Todo) =>
   first.text.localeCompare(second.text) ||
   first.id.localeCompare(second.id);
 
+const compareTodosByPinned = (first: Todo, second: Todo) =>
+  Number(second.pinned) - Number(first.pinned);
+
 const getTodoRowEstimate = (todo: Todo, baseEstimate: number) =>
   todo.content.trim() ? baseEstimate + TODO_CONTENT_ROW_ESTIMATE : baseEstimate;
 
@@ -228,6 +231,12 @@ export const compareTodosBySortMode = (
   second: Todo,
   sortMode: TodoSortMode,
 ) => {
+  const pinnedCompare = compareTodosByPinned(first, second);
+
+  if (pinnedCompare !== 0) {
+    return pinnedCompare;
+  }
+
   if (sortMode === 'oldest') {
     return (
       first.createdAt - second.createdAt ||

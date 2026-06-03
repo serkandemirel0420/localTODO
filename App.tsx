@@ -107,8 +107,9 @@ import { isDevAppVariant } from './src/appVariant';
 import {
   cloneFilterColors,
   FILTER_COLOR_SWATCHES,
+  getFilterColor,
   getFilterColorTheme,
-  type FilterColorKey,
+  type FilterColorSettingKey,
   type FilterColorSettings,
 } from './src/filterColors';
 import {
@@ -274,6 +275,12 @@ type MenuRow =
       id: string;
       label: string;
       type: 'clearFilters';
+    }
+  | {
+      id: string;
+      label: string;
+      pinned: boolean;
+      type: 'pinAction';
     }
   | {
       id: string;
@@ -468,6 +475,7 @@ const NEW_TODO_HIGHLIGHT_DURATION_MS = 3200;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
+const AUTO_BACKUP_DEBOUNCE_MS = 2500;
 
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
   if (item.type === 'sectionHeader') {
@@ -646,10 +654,12 @@ const EMPTY_SELECTED_FILTERS: SelectedFilters = {
   priority: [],
   reminder: [],
 };
-const INITIAL_TODOS = Array.from({ length: 50 }, (_, index) => ({
+const INITIAL_TODO_COUNT = 50;
+const INITIAL_TODOS = Array.from({ length: INITIAL_TODO_COUNT }, (_, index) => ({
   id: `seed-${index + 1}`,
   content: '',
   text: `Todo item ${index + 1}`,
+  pinned: false,
   done: false,
   createdAt: Date.now() - index,
   filters: cloneTodoFilters(),
@@ -659,6 +669,36 @@ const cloneInitialTodos = () => INITIAL_TODOS.map((todo) => ({
   ...todo,
   filters: cloneTodoFilters(todo.filters),
 }));
+
+const isEmptyTodoFilters = (filters: TodoFilters) =>
+  filters.date.length === 0 &&
+  filters.list.length === 0 &&
+  filters.priority.length === 0 &&
+  filters.reminder.length === 0;
+
+const isInitialSeedTodo = (todo: Todo) => {
+  const match = /^seed-(\d+)$/.exec(todo.id);
+
+  if (!match) {
+    return false;
+  }
+
+  const seedNumber = Number(match[1]);
+
+  return (
+    Number.isInteger(seedNumber) &&
+    seedNumber >= 1 &&
+    seedNumber <= INITIAL_TODO_COUNT &&
+    todo.content === '' &&
+    todo.text === `Todo item ${seedNumber}` &&
+    todo.pinned === false &&
+    todo.done === false &&
+    isEmptyTodoFilters(todo.filters)
+  );
+};
+
+const hasOnlyInitialSeedTodos = (todos: Todo[]) =>
+  todos.length > 0 && todos.every(isInitialSeedTodo);
 
 const getGoogleClientIdForPlatform = () => {
   if (Platform.OS === 'ios') {
@@ -932,6 +972,119 @@ function MenuPresetSwipeRow({ label, onApply, onDelete, summary }: MenuPresetSwi
 
 const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
 
+type SettingsColorItem = {
+  displayLabel?: string;
+  filterKey: FilterColorSettingKey;
+  sourceLabel: string;
+  value: string;
+};
+
+type SettingsColorRowProps = SettingsColorItem & {
+  onSelectColor: (
+    filterKey: FilterColorSettingKey,
+    value: string,
+    color: string | null,
+  ) => void;
+  selectedAccent: string | null;
+};
+
+function SettingsColorRow({
+  displayLabel,
+  filterKey,
+  onSelectColor,
+  selectedAccent,
+  sourceLabel,
+  value,
+}: SettingsColorRowProps) {
+  const label = displayLabel ?? value;
+  const selectedAccentKey = selectedAccent?.toUpperCase() ?? null;
+  const noColorSelected = selectedAccent === null;
+
+  return (
+    <View style={styles.settingsColorRow}>
+      <View style={styles.settingsColorLabelWrap}>
+        <View
+          style={[
+            styles.settingsColorPreviewDot,
+            selectedAccent
+              ? { backgroundColor: selectedAccent }
+              : styles.settingsColorPreviewDotNoColor,
+          ]}
+        />
+        <View style={styles.settingsColorLabelTextWrap}>
+          <Text
+            ellipsizeMode="tail"
+            numberOfLines={1}
+            style={styles.settingsColorLabel}
+          >
+            {label}
+          </Text>
+          <Text
+            ellipsizeMode="tail"
+            numberOfLines={1}
+            style={styles.settingsColorSourceLabel}
+          >
+            {sourceLabel}
+          </Text>
+        </View>
+      </View>
+      <ScrollView
+        horizontal
+        keyboardShouldPersistTaps="handled"
+        showsHorizontalScrollIndicator={false}
+        style={styles.settingsColorSwatchScroll}
+        contentContainerStyle={styles.settingsColorSwatches}
+      >
+        {FILTER_COLOR_SWATCHES.map((swatch) => {
+          const selected = swatch.isNoColor === true
+            ? noColorSelected
+            : Boolean(
+              selectedAccentKey &&
+              swatch.accent &&
+              swatch.accent.toUpperCase() === selectedAccentKey,
+            );
+
+          return (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Set ${label} to ${swatch.label}`}
+              accessibilityState={{ selected }}
+              key={swatch.id}
+              onPress={() => onSelectColor(filterKey, value, swatch.accent)}
+              style={({ pressed }) => [
+                styles.settingsColorSwatchButton,
+                selected && {
+                  backgroundColor: swatch.tint,
+                  borderColor: swatch.accent ?? '#8F877F',
+                },
+                pressed && styles.settingsOptionRowPressed,
+              ]}
+            >
+              {swatch.isNoColor ? (
+                <View style={[
+                  styles.settingsColorSwatch,
+                  styles.settingsColorSwatchNoColor,
+                ]}>
+                  <Ionicons color="#8F877F" name="remove" size={16} />
+                </View>
+              ) : (
+                <View
+                  style={[
+                    styles.settingsColorSwatch,
+                    { backgroundColor: swatch.accent ?? 'transparent' },
+                  ]}
+                />
+              )}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+const MemoizedSettingsColorRow = React.memo(SettingsColorRow);
+
 export default function App() {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const todoTextMaxLength = useMemo(
@@ -967,6 +1120,7 @@ export default function App() {
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
+  const [createDraftPinned, setCreateDraftPinned] = useState(false);
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
   );
@@ -985,6 +1139,7 @@ export default function App() {
   const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
   const [repeatDraft, setRepeatDraft] = useState<RepeatPreset>('none');
   const [loaded, setLoaded] = useState(false);
+  const [pendingProdRestorePrompt, setPendingProdRestorePrompt] = useState(false);
   const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
@@ -1004,6 +1159,7 @@ export default function App() {
   const [presetSaveName, setPresetSaveName] = useState('');
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
+  const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
   const [activeDeletedTodoDetailId, setActiveDeletedTodoDetailId] = useState<string | null>(null);
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
@@ -1012,11 +1168,14 @@ export default function App() {
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
   );
+  const deferredFilterColors = useDeferredValue(filterColors);
+  const filterColorsRef = useRef(filterColors);
   const [filterConfigUiState, setFilterConfigUiState] = useState<FilterConfigUiState>(
     () => cloneFilterConfigUiState(DEFAULT_FILTER_CONFIG_UI_STATE),
   );
   const [hideDoneTodos, setHideDoneTodos] = useState(false);
   const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
+  const [showOverdueMetaTags, setShowOverdueMetaTags] = useState(true);
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
   const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
@@ -1078,9 +1237,16 @@ export default function App() {
   const loadedRef = useRef(loaded);
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
   const pendingTodoAlarmOpenIdRef = useRef<string | null>(null);
+  const googleDriveBusyRef = useRef(googleDriveBusy);
+  const autoBackupInFlightRef = useRef(false);
+  const autoBackupFailedStateKeyRef = useRef<string | null>(null);
+  const autoBackupStateKeyRef = useRef<string | null>(null);
+  const prodRestorePromptShownRef = useRef(false);
   todosRef.current = todos;
+  filterColorsRef.current = filterColors;
   loadedRef.current = loaded;
   pendingDeleteIdsRef.current = pendingDeleteIds;
+  googleDriveBusyRef.current = googleDriveBusy;
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
   const didApplyTodoListInitialOffsetRef = useRef(false);
@@ -1133,6 +1299,32 @@ export default function App() {
         localTodoStore.load(),
         localTodoStore.hasInitialSeeded(),
       ]);
+
+      if (!isDevAppVariant) {
+        if (storedTodos.length === 0 || hasOnlyInitialSeedTodos(storedTodos)) {
+          const shouldPromptRestore = !initialSeeded || storedTodos.length > 0;
+
+          if (storedTodos.length > 0) {
+            await localTodoStore.replaceAll([]);
+          }
+
+          if (!initialSeeded) {
+            await localTodoStore.markInitialSeeded();
+          }
+
+          if (alive && shouldPromptRestore) {
+            setPendingProdRestorePrompt(true);
+          }
+
+          return [];
+        }
+
+        if (!initialSeeded) {
+          await localTodoStore.markInitialSeeded();
+        }
+
+        return storedTodos;
+      }
 
       if (!initialSeeded && storedTodos.length === 0) {
         const seededTodos = cloneInitialTodos();
@@ -1195,6 +1387,7 @@ export default function App() {
         setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
         setHideDoneTodos(settings.hideDoneTodos);
         setDateLabelDisplayMode(settings.dateLabelDisplayMode);
+        setShowOverdueMetaTags(settings.showOverdueMetaTags);
         setListMenuTree(settings.listMenuTree);
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
@@ -1242,6 +1435,7 @@ export default function App() {
     menuPresets,
     metaTagVisibility,
     selectedFilters,
+    showOverdueMetaTags,
     todoGroupMode,
     todoSortMode,
     ...overrides,
@@ -1261,6 +1455,7 @@ export default function App() {
     menuPresets,
     metaTagVisibility,
     selectedFilters,
+    showOverdueMetaTags,
     todoGroupMode,
     todoSortMode,
   ]);
@@ -1280,6 +1475,29 @@ export default function App() {
   }, [
     createSettingsSnapshot,
     settingsLoaded,
+  ]);
+
+  const autoBackupStateKey = useMemo(() => {
+    if (!loaded || !settingsLoaded) {
+      return null;
+    }
+
+    const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
+    const backupSettings = createSettingsSnapshot({
+      googleDriveLastBackupAt: null,
+      googleDriveLastRestoreAt: null,
+    });
+
+    return JSON.stringify({
+      settings: backupSettings,
+      todos: backupTodos,
+    });
+  }, [
+    createSettingsSnapshot,
+    loaded,
+    pendingDeleteIds,
+    settingsLoaded,
+    todos,
   ]);
 
   const clearTodoMenuHighlightRequest = useCallback(() => {
@@ -1865,6 +2083,7 @@ export default function App() {
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
     setCreateDraftText('');
+    setCreateDraftPinned(false);
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -2191,7 +2410,7 @@ export default function App() {
       listMenuTree,
       todoFilters,
     );
-    const todo = makeTodo(text, todoFilters, content);
+    const todo = makeTodo(text, todoFilters, content, Date.now(), createDraftPinned);
 
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setTodos((current) => [todo, ...current]);
@@ -2209,6 +2428,7 @@ export default function App() {
     closeCreateDrawer,
     createDraftContent,
     createDraftFilters,
+    createDraftPinned,
     createDraftText,
     highlightNewlyCreatedTodo,
     listMenuTree,
@@ -2296,25 +2516,12 @@ export default function App() {
   const createDrawerListPickerTopSpace = Math.round(
     createDrawerListPickerSheetHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO,
   );
-  const createDrawerPriorityHigh = createDraftFilters.priority[0] === 'High';
   const createDrawerDateActive = createDraftFilters.date.length > 0
     || hasTodoReminderTime(createDraftFilters.reminder)
     || hasTodoRepeat(createDraftFilters.reminder);
 
-  const toggleCreateDraftPriority = useCallback(() => {
-    setCreateDraftPriorityFromPicker(false);
-    setCreateDraftFilters((current) => {
-      const currentPriority = current.priority[0];
-      const nextPriority =
-        currentPriority === 'High'
-          ? []
-          : ['High'];
-
-      return {
-        ...current,
-        priority: nextPriority,
-      };
-    });
+  const toggleCreateDraftPinned = useCallback(() => {
+    setCreateDraftPinned((current) => !current);
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
@@ -2363,6 +2570,7 @@ export default function App() {
       id: deletedTodo.id,
       content: deletedTodo.content,
       text: deletedTodo.text,
+      pinned: deletedTodo.pinned,
       done: deletedTodo.done,
       createdAt: deletedTodo.createdAt,
       filters: cloneTodoFilters(deletedTodo.filters),
@@ -2530,6 +2738,34 @@ export default function App() {
     });
   }, [highlightEditedTodos, pendingDeleteIds]);
 
+  const updateTodoPinnedForIds = useCallback((ids: string[], pinned: boolean) => {
+    const targetIds = new Set(ids.filter((id) => !pendingDeleteIds.has(id)));
+
+    if (targetIds.size === 0) {
+      return;
+    }
+
+    setTodos((current) => {
+      const updatedTodos: Todo[] = [];
+      const nextTodos = current.map((todo) => {
+        if (!targetIds.has(todo.id) || todo.pinned === pinned) {
+          return todo;
+        }
+
+        const updatedTodo = { ...todo, pinned };
+        updatedTodos.push(updatedTodo);
+        return updatedTodo;
+      });
+
+      if (updatedTodos.length > 0) {
+        highlightEditedTodos(updatedTodos.map((todo) => todo.id));
+        localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
+      }
+
+      return nextTodos;
+    });
+  }, [highlightEditedTodos, pendingDeleteIds]);
+
   const getCurrentTodoEditTargetIds = useCallback(() => {
     if (activeTodoMenuIdRef.current) {
       return pendingDeleteIds.has(activeTodoMenuIdRef.current)
@@ -2539,6 +2775,35 @@ export default function App() {
 
     return [...selectedTodoIds].filter((id) => !pendingDeleteIds.has(id));
   }, [pendingDeleteIds, selectedTodoIds]);
+
+  const toggleCurrentTodoTargetsPinned = useCallback(() => {
+    const targetIds = getCurrentTodoEditTargetIds();
+
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    const targetIdSet = new Set(targetIds);
+    const targetTodos = todos.filter((todo) => (
+      targetIdSet.has(todo.id) && !pendingDeleteIds.has(todo.id)
+    ));
+
+    if (targetTodos.length === 0) {
+      return;
+    }
+
+    updateTodoPinnedForIds(targetIds, !targetTodos.every((todo) => todo.pinned));
+    closeListMenuState();
+    exitTodoSelectMode();
+    Haptics.selectionAsync().catch(() => undefined);
+  }, [
+    closeListMenuState,
+    exitTodoSelectMode,
+    getCurrentTodoEditTargetIds,
+    pendingDeleteIds,
+    todos,
+    updateTodoPinnedForIds,
+  ]);
 
   const updateCurrentTodoTargetFilters = useCallback((
     updater: (filters: SelectedFilters) => SelectedFilters,
@@ -2976,25 +3241,60 @@ export default function App() {
   const settingsColorGroups = useMemo(
     () => [
       {
-        filterKey: 'priority' as const,
-        title: 'Priority',
-        values: PRIORITY_MENU_ITEMS,
+        id: 'item-backgrounds',
+        items: settingsListColorLabels.map((value) => ({
+          displayLabel: value,
+          filterKey: 'list' as const,
+          sourceLabel: 'List',
+          value,
+        })),
+        title: 'Item backgrounds',
       },
       {
-        filterKey: 'date' as const,
-        title: 'Date',
-        values: DATE_MENU_ITEMS,
+        id: 'date-meta-tags',
+        items: DATE_MENU_ITEMS.map((value) => ({
+          displayLabel: value,
+          filterKey: 'date' as const,
+          sourceLabel: 'Date tag',
+          value,
+        })),
+        title: 'Date tags',
       },
       {
-        filterKey: 'list' as const,
-        title: 'Lists',
-        values: settingsListColorLabels,
+        id: 'priority-color',
+        items: PRIORITY_MENU_ITEMS.map((value) => ({
+          displayLabel: `${value} color`,
+          filterKey: 'priority' as const,
+          sourceLabel: 'Priority color',
+          value,
+        })),
+        title: 'Priority color',
+      },
+      {
+        id: 'priority-border',
+        items: PRIORITY_MENU_ITEMS.map((value) => ({
+          displayLabel: `${value} border`,
+          filterKey: 'priorityBorder' as const,
+          sourceLabel: 'Priority border',
+          value,
+        })),
+        title: 'Priority border',
+      },
+      {
+        id: 'priority-bg',
+        items: PRIORITY_MENU_ITEMS.map((value) => ({
+          displayLabel: `${value} bg`,
+          filterKey: 'priorityBackground' as const,
+          sourceLabel: 'Priority bg',
+          value,
+        })),
+        title: 'Priority bg',
       },
     ],
     [settingsListColorLabels],
   );
   const settingsColorItemCount = settingsColorGroups.reduce(
-    (count, group) => count + group.values.length,
+    (count, group) => count + group.items.length,
     0,
   );
   const activeListDisplay = useMemo(
@@ -3151,10 +3451,25 @@ export default function App() {
 
     return bulkTodoSharedFilters;
   }, [activeTodoMenuId, bulkTodoSharedFilters, todos]);
+  const currentTodoEditTargets = useMemo(() => {
+    if (activeTodoMenuId) {
+      const activeTodo = todos.find((todo) => todo.id === activeTodoMenuId);
+      return activeTodo && !pendingDeleteIds.has(activeTodo.id) ? [activeTodo] : [];
+    }
+
+    return selectedTodosForBulk;
+  }, [activeTodoMenuId, pendingDeleteIds, selectedTodosForBulk, todos]);
+  const hasTodoEditTargets = currentTodoEditTargets.length > 0;
+  const todoEditTargetsAllPinned =
+    hasTodoEditTargets && currentTodoEditTargets.every((todo) => todo.pinned);
+  const todoPinActionLabel = activeTodoMenuId
+    ? (todoEditTargetsAllPinned ? 'Unpin item' : 'Pin item')
+    : (todoEditTargetsAllPinned ? 'Unpin selected' : 'Pin selected');
   const activeTodoDetail = useMemo(
     () => todos.find((todo) => todo.id === activeTodoDetailId) ?? null,
     [activeTodoDetailId, todos],
   );
+  const activeTodoDetailCanEdit = Boolean(activeTodoDetail && !activeTodoDetail.done);
   const activeDeletedTodoDetail = useMemo(
     () => deletedTodos.find((todo) => todo.id === activeDeletedTodoDetailId) ?? null,
     [activeDeletedTodoDetailId, deletedTodos],
@@ -3196,6 +3511,7 @@ export default function App() {
   );
   const activeTodoDetailHasChanges = Boolean(
     activeTodoDetail &&
+      activeTodoDetailCanEdit &&
       (
         activeTodoDetail.text !== activeTodoDetailDraftTextForSave ||
         activeTodoDetail.content !== activeTodoDetailDraftContentForSave
@@ -3203,11 +3519,12 @@ export default function App() {
   );
   const activeTodoDetailCanSave = Boolean(
     activeTodoDetail &&
+      activeTodoDetailCanEdit &&
       activeTodoDetailHasChanges &&
       activeTodoDetailDraftTextForSave.length > 0,
   );
   const saveActiveTodoDetail = useCallback(() => {
-    if (!activeTodoDetail || !activeTodoDetailCanSave) {
+    if (!activeTodoDetail || !activeTodoDetailCanEdit || !activeTodoDetailCanSave) {
       return;
     }
 
@@ -3237,6 +3554,7 @@ export default function App() {
     );
   }, [
     activeTodoDetail,
+    activeTodoDetailCanEdit,
     activeTodoDetailCanSave,
     activeTodoDetailDraftContentForSave,
     activeTodoDetailDraftTextForSave,
@@ -3244,7 +3562,6 @@ export default function App() {
   ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
-  const hasTodoEditTargets = Boolean(activeTodoMenuId) || selectedTodosForBulk.length > 0;
   const includeActiveTodoReminderRows = hasTodoEditTargets;
   const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
   const searchFilterItems = useMemo(
@@ -3389,8 +3706,18 @@ export default function App() {
       return rows;
     }
 
+    const pinActionRow: MenuRow | null = hasTodoEditTargets
+      ? {
+        id: 'main-pin',
+        label: todoPinActionLabel,
+        pinned: todoEditTargetsAllPinned,
+        type: 'pinAction',
+      }
+      : null;
+
     if (todoSelectMode) {
       return [
+        ...(pinActionRow ? [pinActionRow] : []),
         {
           count: menuFilters.list.length || undefined,
           id: 'main-lists',
@@ -3427,6 +3754,7 @@ export default function App() {
         type: 'menu',
         valueLabel: activeMenuPreset?.label,
       },
+      ...(pinActionRow ? [pinActionRow] : []),
       {
         count: menuFilters.list.length || undefined,
         id: 'main-lists',
@@ -3507,7 +3835,9 @@ export default function App() {
     effectiveGroupMode,
     effectiveSortMode,
     metaTagVisibility,
+    todoEditTargetsAllPinned,
     todoSelectMode,
+    todoPinActionLabel,
     visibleListMenuItems,
   ]);
 
@@ -3751,17 +4081,43 @@ export default function App() {
   }, [clearAppliedMenuPreset]);
 
   const setFilterColor = useCallback((
-    filterKey: FilterKey,
+    filterKey: FilterColorSettingKey,
     value: string,
     color: string | null,
   ) => {
-    setFilterColors((current) => ({
-      ...current,
+    const nextColorKey = color?.toUpperCase() ?? null;
+    const currentColorKey = getFilterColor(
+      filterColorsRef.current,
+      filterKey,
+      value,
+    )?.toUpperCase() ?? null;
+
+    if (currentColorKey === nextColorKey) {
+      return;
+    }
+
+    filterColorsRef.current = {
+      ...filterColorsRef.current,
       [filterKey]: {
-        ...current[filterKey],
+        ...filterColorsRef.current[filterKey],
         [value]: color,
       },
-    }));
+    };
+    setFilterColors((current) => {
+      const latestColorKey = getFilterColor(current, filterKey, value)?.toUpperCase() ?? null;
+
+      if (latestColorKey === nextColorKey) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [filterKey]: {
+          ...current[filterKey],
+          [value]: color,
+        },
+      };
+    });
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, []);
 
@@ -3819,6 +4175,11 @@ export default function App() {
     setDateLabelDisplayMode((current) => (
       current === 'remaining' ? 'exact' : 'remaining'
     ));
+    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+  }, []);
+
+  const toggleShowOverdueMetaTags = useCallback(() => {
+    setShowOverdueMetaTags((current) => !current);
     requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
   }, []);
 
@@ -4202,6 +4563,7 @@ export default function App() {
     exitTodoSelectMode();
     setSettingsBackupExpanded(false);
     setSettingsColorsExpanded(false);
+    setSettingsDateLabelsExpanded(false);
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
     setSettingsListsExpanded(false);
@@ -4439,9 +4801,15 @@ export default function App() {
     return nextAuth.accessToken;
   }, [googleAuth]);
 
-  const handleGoogleDriveError = useCallback((error: unknown, fallbackMessage: string) => {
+  const handleGoogleDriveError = useCallback((
+    error: unknown,
+    fallbackMessage: string,
+    notify = true,
+  ) => {
     setGoogleDriveBackupStatus(error instanceof Error ? error.message : fallbackMessage);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+    if (notify) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+    }
   }, []);
 
   const authenticateWithAndroidGoogle = useCallback(async () => {
@@ -4504,7 +4872,10 @@ export default function App() {
     }
   }, []);
 
-  const uploadBackupWithToken = useCallback(async (accessToken: string) => {
+  const uploadBackupWithToken = useCallback(async (
+    accessToken: string,
+    options: { notify?: boolean } = {},
+  ) => {
     setGoogleDriveBackupStatus('Backing up to Google Drive...');
 
     const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
@@ -4523,6 +4894,7 @@ export default function App() {
       listOrderMode,
       menuPresets,
       selectedFilters,
+      showOverdueMetaTags,
       todoGroupMode,
       todoSortMode,
       metaTagVisibility,
@@ -4532,7 +4904,9 @@ export default function App() {
     setGoogleDriveBackupStatus(
       `Backed up ${backupTodos.length} items · ${formatBackupTime(payload.exportedAt)}`,
     );
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    if (options.notify !== false) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    }
   }, [
     collapsedTodoGroupIds,
     dateLabelDisplayMode,
@@ -4550,6 +4924,7 @@ export default function App() {
     metaTagVisibility,
     pendingDeleteIds,
     selectedFilters,
+    showOverdueMetaTags,
     todoGroupMode,
     todoSortMode,
     todos,
@@ -4566,6 +4941,8 @@ export default function App() {
     }
 
     const restoredAt = new Date().toISOString();
+    autoBackupStateKeyRef.current = null;
+    autoBackupFailedStateKeyRef.current = null;
     setPendingDeleteIds(new Set());
     await localTodoStore.replaceAll(backup.payload.todos);
     await localTodoStore.markInitialSeeded();
@@ -4579,6 +4956,7 @@ export default function App() {
     setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
     setHideDoneTodos(backup.payload.settings.hideDoneTodos);
+    setShowOverdueMetaTags(backup.payload.settings.showOverdueMetaTags);
     setDateLabelDisplayMode(
       backup.payload.settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
     );
@@ -4725,6 +5103,112 @@ export default function App() {
   const restoreFromGoogleDrive = useCallback(async () => {
     await performGoogleDriveAction('restore');
   }, [performGoogleDriveAction]);
+
+  useEffect(() => {
+    if (!loaded || !settingsLoaded || autoBackupStateKey === null) {
+      return undefined;
+    }
+
+    if (autoBackupStateKeyRef.current === null) {
+      autoBackupStateKeyRef.current = autoBackupStateKey;
+      return undefined;
+    }
+
+    if (autoBackupStateKeyRef.current === autoBackupStateKey) {
+      return undefined;
+    }
+
+    if (!googleDriveBackupEnabled) {
+      autoBackupStateKeyRef.current = autoBackupStateKey;
+      autoBackupFailedStateKeyRef.current = null;
+      return undefined;
+    }
+
+    if (
+      !googleAuth?.accessToken ||
+      !googleDriveActionReady ||
+      googleDriveBusy ||
+      autoBackupInFlightRef.current ||
+      autoBackupFailedStateKeyRef.current === autoBackupStateKey
+    ) {
+      return undefined;
+    }
+
+    const stateKey = autoBackupStateKey;
+    const backupTimer = setTimeout(() => {
+      if (googleDriveBusyRef.current || autoBackupInFlightRef.current) {
+        return;
+      }
+
+      autoBackupInFlightRef.current = true;
+      setGoogleDriveBusy(true);
+      getFreshGoogleAccessToken()
+        .then((accessToken) => uploadBackupWithToken(accessToken, { notify: false }))
+        .then(() => {
+          autoBackupStateKeyRef.current = stateKey;
+          autoBackupFailedStateKeyRef.current = null;
+        })
+        .catch((error: unknown) => {
+          autoBackupFailedStateKeyRef.current = stateKey;
+          handleGoogleDriveError(error, 'Google Drive auto backup failed', false);
+        })
+        .finally(() => {
+          autoBackupInFlightRef.current = false;
+          setGoogleDriveBusy(false);
+        });
+    }, AUTO_BACKUP_DEBOUNCE_MS);
+
+    return () => clearTimeout(backupTimer);
+  }, [
+    autoBackupStateKey,
+    getFreshGoogleAccessToken,
+    googleAuth?.accessToken,
+    googleDriveActionReady,
+    googleDriveBackupEnabled,
+    googleDriveBusy,
+    handleGoogleDriveError,
+    loaded,
+    settingsLoaded,
+    uploadBackupWithToken,
+  ]);
+
+  useEffect(() => {
+    if (
+      isDevAppVariant ||
+      !loaded ||
+      !pendingProdRestorePrompt ||
+      prodRestorePromptShownRef.current ||
+      !googleDriveActionReady
+    ) {
+      return;
+    }
+
+    prodRestorePromptShownRef.current = true;
+
+    Alert.alert(
+      'Restore production backup?',
+      'No default items were added. Restore your Google Drive backup now?',
+      [
+        {
+          onPress: () => setPendingProdRestorePrompt(false),
+          style: 'cancel',
+          text: 'Start clean',
+        },
+        {
+          onPress: () => {
+            setPendingProdRestorePrompt(false);
+            restoreFromGoogleDrive().catch(() => undefined);
+          },
+          text: 'Restore',
+        },
+      ],
+    );
+  }, [
+    googleDriveActionReady,
+    loaded,
+    pendingProdRestorePrompt,
+    restoreFromGoogleDrive,
+  ]);
 
   const scrollTodoAboveMenu = useCallback((id: string) => {
     const list = todoListRef.current;
@@ -4984,7 +5468,7 @@ export default function App() {
               {!item.isFirstInSection ? <View style={styles.todoRowDivider} /> : null}
               <TodoRow
                 dateLabelDisplayMode={dateLabelDisplayMode}
-                filterColors={filterColors}
+                filterColors={deferredFilterColors}
                 hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
                 isSelected={isSelected}
                 item={item.todo}
@@ -5005,6 +5489,7 @@ export default function App() {
                 searchHighlightQuery={searchQuery}
                 selectMode={todoSelectMode}
                 sectionLabel={item.sectionLabel}
+                showOverdueMetaTags={showOverdueMetaTags}
               />
             </View>
           </View>
@@ -5029,7 +5514,7 @@ export default function App() {
           {renderVisibleTodoRowGap(item.gapBefore)}
           <TodoRow
             dateLabelDisplayMode={dateLabelDisplayMode}
-            filterColors={filterColors}
+            filterColors={deferredFilterColors}
             isSelected={isSelected}
             item={item.todo}
             isMenuTarget={isTodoMenuTarget}
@@ -5047,6 +5532,7 @@ export default function App() {
             onToggleSelect={toggleTodoSelection}
             searchHighlightQuery={searchQuery}
             selectMode={todoSelectMode}
+            showOverdueMetaTags={showOverdueMetaTags}
           />
         </View>
       );
@@ -5056,8 +5542,8 @@ export default function App() {
       activeTodoMenuHighlightId,
       dateLabelDisplayMode,
       deleteTodo,
+      deferredFilterColors,
       enterTodoSelectMode,
-      filterColors,
       getInstantPressHandlers,
       groupedHiddenMetaTagKinds,
       menuMode,
@@ -5072,6 +5558,7 @@ export default function App() {
       selectedTodoIds,
       setTodoDone,
       searchQuery,
+      showOverdueMetaTags,
       toggleTodoGroupCollapsed,
       toggleTodoSelection,
       todoSelectMode,
@@ -5732,6 +6219,31 @@ export default function App() {
   	                            );
   	                          }
 
+                            if (item.type === 'pinAction') {
+                              return (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel={item.label}
+                                  accessibilityState={{ selected: item.pinned }}
+                                  onPress={toggleCurrentTodoTargetsPinned}
+                                  style={({ pressed }) => [
+                                    styles.listMenuRow,
+                                    item.pinned && styles.listMenuRowSelected,
+                                    pressed && styles.listMenuRowPressed,
+                                  ]}
+                                >
+                                  <View style={styles.listMenuRowTextWrap}>
+                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                  </View>
+                                  <Ionicons
+                                    color={item.pinned ? THEME_ACCENT : THEME_TEXT_SECONDARY}
+                                    name={item.pinned ? 'pin' : 'pin-outline'}
+                                    size={20}
+                                  />
+                                </Pressable>
+                              );
+                            }
+
   	                          if (item.type === 'menu') {
   	                            const canClearSection = menuSectionCanClear(
   	                              item.menuMode,
@@ -6073,6 +6585,7 @@ export default function App() {
                 <TextInput
                   autoCapitalize="sentences"
                   autoCorrect
+                  editable={activeTodoDetailCanEdit}
                   multiline
                   onChangeText={setActiveTodoDetailDraftText}
                   onSubmitEditing={() => todoDetailContentInputRef.current?.focus()}
@@ -6125,6 +6638,7 @@ export default function App() {
                   autoCorrect
                   multiline
                   onChangeText={setActiveTodoDetailDraftContent}
+                  editable={activeTodoDetailCanEdit}
                   placeholder="Content"
                   placeholderTextColor="#B5ADA5"
                   selectionColor="#2F6F62"
@@ -6462,17 +6976,19 @@ export default function App() {
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={
-                      createDrawerPriorityHigh ? 'Remove high priority' : 'Set high priority'
+                      createDraftPinned ? 'Unpin new todo' : 'Pin new todo'
                     }
-                    onPress={toggleCreateDraftPriority}
+                    accessibilityState={{ selected: createDraftPinned }}
+                    onPress={toggleCreateDraftPinned}
                     style={({ pressed }) => [
                       styles.createDrawerToolbarButton,
                       pressed && styles.createDrawerToolbarButtonPressed,
+                      createDraftPinned && styles.createDrawerToolbarButtonActive,
                     ]}
                   >
                     <Ionicons
-                      color={createDrawerPriorityHigh ? '#CF413A' : '#8C847C'}
-                      name={createDrawerPriorityHigh ? 'flag' : 'flag-outline'}
+                      color={createDraftPinned ? THEME_ACCENT : '#8C847C'}
+                      name={createDraftPinned ? 'pin' : 'pin-outline'}
                       size={22}
                     />
                   </Pressable>
@@ -6632,43 +7148,81 @@ export default function App() {
                     <Text style={styles.settingsSectionTitle}>Date labels</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       {dateLabelDisplayMode === 'remaining' ? 'Days remaining' : 'Exact day'}
+                      {' · '}
+                      {showOverdueMetaTags ? 'Overdue count' : 'No overdue count'}
                     </Text>
                   </View>
-                </View>
-
-                <View style={styles.settingsCard}>
                   <Pressable
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
-                    onPress={toggleDateLabelDisplayMode}
+                    accessibilityLabel={`${settingsDateLabelsExpanded ? 'Collapse' : 'Expand'} Date labels section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsDateLabelsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsDateLabelsExpanded((current) => !current)}
                     style={({ pressed }) => [
-                      styles.settingsRow,
-                      pressed && styles.settingsOptionRowPressed,
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
                     ]}
                   >
-                    <View style={styles.settingsRowTextWrap}>
-                      <Text style={styles.settingsRowTitle}>Show days remaining</Text>
-                      <Text style={styles.settingsRowSubtitle}>
-                        0 days, 1 day, 3 days… instead of Today, Tomorrow, Jun 5.
-                      </Text>
-                    </View>
-                    <View
+                    <Text
                       style={[
-                        styles.settingsStatusPill,
-                        dateLabelDisplayMode === 'remaining' && styles.settingsStatusPillEnabled,
+                        styles.settingsSectionChevron,
+                        settingsDateLabelsExpanded && styles.settingsSectionChevronExpanded,
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.settingsStatusText,
-                          dateLabelDisplayMode === 'remaining' && styles.settingsStatusTextEnabled,
-                        ]}
-                      >
-                        {dateLabelDisplayMode === 'remaining' ? 'Remaining' : 'Exact'}
-                      </Text>
-                    </View>
+                      ›
+                    </Text>
                   </Pressable>
                 </View>
+
+                {settingsDateLabelsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Pressable
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
+                      onPress={toggleDateLabelDisplayMode}
+                      style={({ pressed }) => [
+                        styles.settingsRow,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Show days remaining</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          0 days, 1 day, 3 days… instead of Today, Tomorrow, Jun 5.
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.settingsStatusPill,
+                          dateLabelDisplayMode === 'remaining' && styles.settingsStatusPillEnabled,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.settingsStatusText,
+                            dateLabelDisplayMode === 'remaining' && styles.settingsStatusTextEnabled,
+                          ]}
+                        >
+                          {dateLabelDisplayMode === 'remaining' ? 'Remaining' : 'Exact'}
+                        </Text>
+                      </View>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: showOverdueMetaTags }}
+                      onPress={toggleShowOverdueMetaTags}
+                      style={({ pressed }) => [
+                        styles.settingsOptionRow,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsOptionText}>Show overdue count</Text>
+                      <Text style={styles.settingsOptionValue}>
+                        {showOverdueMetaTags ? 'On' : 'Off'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
 
               <View style={styles.settingsSection}>
@@ -7187,7 +7741,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Colors</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {settingsColorItemCount} items · Priority, dates, lists
+                      {settingsColorItemCount} items · Backgrounds, priority parts
                     </Text>
                   </View>
                   <Pressable
@@ -7216,82 +7770,30 @@ export default function App() {
                   <View style={styles.settingsCard}>
                     {settingsColorGroups.map((group, groupIndex) => (
                       <View
-                        key={group.filterKey}
+                        key={group.id}
                         style={[
                           styles.settingsColorGroup,
                           groupIndex === 0 && styles.settingsColorGroupFirst,
                         ]}
                       >
                         <Text style={styles.settingsColorGroupTitle}>{group.title}</Text>
-                        {group.values.map((value) => {
-                          const colorTheme = getFilterColorTheme(filterColors, group.filterKey, value);
-                          const noColorSelected = colorTheme === null;
+                        {group.items.map((item) => {
+                          const selectedAccent = getFilterColor(
+                            filterColors,
+                            item.filterKey,
+                            item.value,
+                          );
 
                           return (
-                            <View key={`${group.filterKey}-${value}`} style={styles.settingsColorRow}>
-                              <View style={styles.settingsColorLabelWrap}>
-                                <View
-                                  style={[
-                                    styles.settingsColorPreviewDot,
-                                    colorTheme
-                                      ? { backgroundColor: colorTheme.accent }
-                                      : styles.settingsColorPreviewDotNoColor,
-                                  ]}
-                                />
-                                <Text style={styles.settingsColorLabel}>{value}</Text>
-                              </View>
-                              <ScrollView
-                                horizontal
-                                keyboardShouldPersistTaps="handled"
-                                showsHorizontalScrollIndicator={false}
-                                style={styles.settingsColorSwatchScroll}
-                                contentContainerStyle={styles.settingsColorSwatches}
-                              >
-                                {FILTER_COLOR_SWATCHES.map((swatch) => {
-                                  const selected = swatch.isNoColor === true
-                                    ? noColorSelected
-                                    : Boolean(
-                                      colorTheme
-                                        && swatch.accent
-                                        && swatch.accent.toUpperCase() === colorTheme.accent.toUpperCase(),
-                                    );
-
-                                  return (
-                                    <Pressable
-                                      accessibilityRole="button"
-                                      accessibilityLabel={`Set ${value} color to ${swatch.label}`}
-                                      accessibilityState={{ selected }}
-                                      key={swatch.id}
-                                      onPress={() => setFilterColor(group.filterKey, value, swatch.accent)}
-                                      style={({ pressed }) => [
-                                        styles.settingsColorSwatchButton,
-                                        selected && {
-                                          backgroundColor: swatch.tint,
-                                          borderColor: swatch.accent ?? '#8F877F',
-                                        },
-                                        pressed && styles.settingsOptionRowPressed,
-                                      ]}
-                                    >
-                                      {swatch.isNoColor ? (
-                                        <View style={[
-                                          styles.settingsColorSwatch,
-                                          styles.settingsColorSwatchNoColor,
-                                        ]}>
-                                          <Ionicons color="#8F877F" name="remove" size={16} />
-                                        </View>
-                                      ) : (
-                                        <View
-                                          style={[
-                                            styles.settingsColorSwatch,
-                                            { backgroundColor: swatch.accent ?? 'transparent' },
-                                          ]}
-                                        />
-                                      )}
-                                    </Pressable>
-                                  );
-                                })}
-                              </ScrollView>
-                            </View>
+                            <MemoizedSettingsColorRow
+                              displayLabel={item.displayLabel}
+                              filterKey={item.filterKey}
+                              key={`${item.filterKey}-${item.value}`}
+                              onSelectColor={setFilterColor}
+                              selectedAccent={selectedAccent}
+                              sourceLabel={item.sourceLabel}
+                              value={item.value}
+                            />
                           );
                         })}
                       </View>
@@ -8058,7 +8560,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   settingsColorLabelWrap: {
-    width: 112,
+    width: 124,
     minWidth: 0,
     alignItems: 'center',
     flexDirection: 'row',
@@ -8075,11 +8577,23 @@ const styles = StyleSheet.create({
     borderColor: '#A79F96',
   },
   settingsColorLabel: {
-    flex: 1,
     color: THEME_TEXT,
     fontSize: 14,
     fontWeight: FONT_REGULAR,
     lineHeight: 18,
+    minWidth: 0,
+  },
+  settingsColorLabelTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsColorSourceLabel: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 10,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 13,
+    marginTop: 1,
+    minWidth: 0,
   },
   settingsColorSwatchScroll: {
     flex: 1,

@@ -273,6 +273,20 @@ export const formatRemainingDaysLabel = (
   return `${Math.abs(dayOffset)} days ago`;
 };
 
+export const formatOverdueDaysLabel = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): string | null => {
+  const dayOffset = getDateLabelDayOffset(label, now, anchor);
+  if (dayOffset === null || dayOffset >= 0) {
+    return null;
+  }
+
+  const overdueDays = Math.abs(dayOffset);
+  return `${overdueDays} ${overdueDays === 1 ? 'day' : 'days'} overdue`;
+};
+
 export const formatDateDisplayLabel = (
   label: string,
   mode: DateLabelDisplayMode = 'exact',

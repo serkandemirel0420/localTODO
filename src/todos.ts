@@ -16,6 +16,7 @@ export type Todo = {
   id: string;
   content: string;
   text: string;
+  pinned: boolean;
   done: boolean;
   createdAt: number;
   filters: TodoFilters;
@@ -144,10 +145,12 @@ export const makeTodo = (
   filters: TodoFilters = EMPTY_TODO_FILTERS,
   content = '',
   createdAt = Date.now(),
+  pinned = false,
 ): Todo => ({
   id: `${createdAt}-${Math.random().toString(36).slice(2)}`,
   content: normalizeTodoContent(content),
   text,
+  pinned,
   done: false,
   createdAt,
   filters: normalizeTodoFilters(filters, createdAt),
@@ -163,6 +166,7 @@ export const isTodo = (value: unknown): value is Todo => {
     typeof todo.id === 'string' &&
     (typeof todo.content === 'undefined' || typeof todo.content === 'string') &&
     typeof todo.text === 'string' &&
+    (typeof todo.pinned === 'undefined' || typeof todo.pinned === 'boolean') &&
     typeof todo.done === 'boolean' &&
     typeof todo.createdAt === 'number' &&
     typeof todo.filters === 'object' &&
@@ -189,6 +193,7 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     id: todo.id,
     content: typeof todo.content === 'string' ? normalizeTodoContent(todo.content) : '',
     text: todo.text,
+    pinned: todo.pinned === true,
     done: todo.done,
     createdAt: todo.createdAt,
     filters: normalizeTodoFilters(todo.filters, todo.createdAt),

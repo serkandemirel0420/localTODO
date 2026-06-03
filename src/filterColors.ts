@@ -16,7 +16,11 @@ export type FilterColorSettings = {
   date: Record<string, FilterColorValue>;
   list: Record<string, FilterColorValue>;
   priority: Record<string, FilterColorValue>;
+  priorityBackground: Record<string, FilterColorValue>;
+  priorityBorder: Record<string, FilterColorValue>;
 };
+
+export type FilterColorSettingKey = keyof FilterColorSettings;
 
 export type FilterColorSwatch = {
   accent: string | null;
@@ -30,7 +34,7 @@ export type FilterColorSwatch = {
 
 export type FilterColorTheme = Omit<FilterColorSwatch, 'accent'> & {
   accent: string;
-  filterKey: FilterColorKey;
+  filterKey: FilterColorSettingKey;
   value: string;
 };
 
@@ -206,6 +210,8 @@ export const DEFAULT_FILTER_COLORS: FilterColorSettings = {
   date: DEFAULT_DATE_COLORS,
   list: DEFAULT_LIST_COLORS,
   priority: DEFAULT_PRIORITY_COLORS,
+  priorityBackground: DEFAULT_PRIORITY_COLORS,
+  priorityBorder: DEFAULT_PRIORITY_COLORS,
 };
 
 const FILTER_COLOR_PRECEDENCE: FilterColorKey[] = ['priority', 'list', 'date'];
@@ -305,11 +311,23 @@ const normalizeListColorMap = (
 
 export const normalizeFilterColors = (value: unknown): FilterColorSettings => {
   const record = isRecord(value) ? value : {};
+  const priority = normalizeColorMap(record.priority, DEFAULT_FILTER_COLORS.priority);
+  const priorityBackgroundFallback = isRecord(record.priorityBackground)
+    ? DEFAULT_FILTER_COLORS.priorityBackground
+    : priority;
+  const priorityBorderFallback = isRecord(record.priorityBorder)
+    ? DEFAULT_FILTER_COLORS.priorityBorder
+    : priority;
 
   return {
     date: normalizeColorMap(record.date, DEFAULT_FILTER_COLORS.date, formatDateFilterValue),
     list: normalizeListColorMap(record.list, DEFAULT_FILTER_COLORS.list),
-    priority: normalizeColorMap(record.priority, DEFAULT_FILTER_COLORS.priority),
+    priority,
+    priorityBackground: normalizeColorMap(
+      record.priorityBackground,
+      priorityBackgroundFallback,
+    ),
+    priorityBorder: normalizeColorMap(record.priorityBorder, priorityBorderFallback),
   };
 };
 
@@ -344,7 +362,7 @@ const getDateColorLookupValues = (value: string) => {
   return values.filter((item, index) => item && values.indexOf(item) === index);
 };
 
-const getColorLookupValues = (filterKey: FilterColorKey, value: string) =>
+const getColorLookupValues = (filterKey: FilterColorSettingKey, value: string) =>
   filterKey === 'date' ? getDateColorLookupValues(value) : [value];
 
 const getFallbackSwatch = (value: string) => {
@@ -358,7 +376,7 @@ const getFallbackSwatch = (value: string) => {
 
 export const getFilterColor = (
   colors: FilterColorSettings,
-  filterKey: FilterColorKey,
+  filterKey: FilterColorSettingKey,
   value: string,
 ) => {
   const lookupValues = getColorLookupValues(filterKey, value);
@@ -388,7 +406,7 @@ export const getFilterColor = (
 
 export const getFilterColorTheme = (
   colors: FilterColorSettings,
-  filterKey: FilterColorKey,
+  filterKey: FilterColorSettingKey,
   value: string,
 ): FilterColorTheme | null => {
   const accent = getFilterColor(colors, filterKey, value);

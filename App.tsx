@@ -5457,7 +5457,7 @@ export default function App() {
         const isRecentlyEditedTodo = recentlyEditedTodoIds.has(item.todo.id);
 
         return (
-          <View>
+          <View style={styles.todoListItem}>
             {renderVisibleTodoRowGap(item.gapBefore)}
             <View
               style={[
@@ -9399,6 +9399,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingBottom: 100,
     paddingTop: TODO_LIST_CONTENT_TOP_PADDING,
+  },
+  todoListItem: {
+    alignSelf: 'stretch',
+    width: '100%',
   },
   todoListRowGap: {
     height: TODO_LIST_ROW_GAP,

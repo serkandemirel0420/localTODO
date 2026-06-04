@@ -272,6 +272,12 @@ type NativeGoogleSignIn = typeof import('@react-native-google-signin/google-sign
 
 type MenuRow =
   | {
+      count: number;
+      id: string;
+      label: string;
+      type: 'deleteAction';
+    }
+  | {
       id: string;
       label: string;
       type: 'clearFilters';
@@ -436,6 +442,7 @@ const THEME_ACCENT_SOFT = '#E8EEFF';
 const THEME_DANGER = '#D32F2F';
 const THEME_DANGER_SOFT = '#D9645A';
 const THEME_BORDER = '#E8EAED';
+const TODO_DETAIL_SELECTION_COLOR = '#C0C0C0';
 const CARD_BORDER_RADIUS = 12;
 const CONTROL_BORDER_RADIUS = 10;
 const PULL_MAX = 178;
@@ -470,8 +477,8 @@ const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 
 const TODO_MENU_TARGET_TOP_OFFSET = 16;
 const TODO_MENU_TARGET_HIGHLIGHT_DELAY_MS = 260;
 const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
-const EDITED_TODO_HIGHLIGHT_DURATION_MS = 1200;
-const NEW_TODO_HIGHLIGHT_DURATION_MS = 3200;
+const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
+const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
@@ -654,21 +661,7 @@ const EMPTY_SELECTED_FILTERS: SelectedFilters = {
   priority: [],
   reminder: [],
 };
-const INITIAL_TODO_COUNT = 50;
-const INITIAL_TODOS = Array.from({ length: INITIAL_TODO_COUNT }, (_, index) => ({
-  id: `seed-${index + 1}`,
-  content: '',
-  text: `Todo item ${index + 1}`,
-  pinned: false,
-  done: false,
-  createdAt: Date.now() - index,
-  filters: cloneTodoFilters(),
-}));
-
-const cloneInitialTodos = () => INITIAL_TODOS.map((todo) => ({
-  ...todo,
-  filters: cloneTodoFilters(todo.filters),
-}));
+const LEGACY_INITIAL_TODO_COUNT = 50;
 
 const isEmptyTodoFilters = (filters: TodoFilters) =>
   filters.date.length === 0 &&
@@ -688,7 +681,7 @@ const isInitialSeedTodo = (todo: Todo) => {
   return (
     Number.isInteger(seedNumber) &&
     seedNumber >= 1 &&
-    seedNumber <= INITIAL_TODO_COUNT &&
+    seedNumber <= LEGACY_INITIAL_TODO_COUNT &&
     todo.content === '' &&
     todo.text === `Todo item ${seedNumber}` &&
     todo.pinned === false &&
@@ -697,8 +690,8 @@ const isInitialSeedTodo = (todo: Todo) => {
   );
 };
 
-const hasOnlyInitialSeedTodos = (todos: Todo[]) =>
-  todos.length > 0 && todos.every(isInitialSeedTodo);
+const removeInitialSeedTodos = (todos: Todo[]) =>
+  todos.filter((todo) => !isInitialSeedTodo(todo));
 
 const getGoogleClientIdForPlatform = () => {
   if (Platform.OS === 'ios') {
@@ -1228,6 +1221,7 @@ export default function App() {
   const activeTodoMenuIdRef = useRef<string | null>(null);
   const listMenuOpenRef = useRef(false);
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
+  const pendingMenuEditedTodoIdsRef = useRef<Set<string>>(new Set());
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1295,40 +1289,12 @@ export default function App() {
     let alive = true;
 
     const loadTodos = async () => {
-      const [storedTodos, initialSeeded] = await Promise.all([
-        localTodoStore.load(),
-        localTodoStore.hasInitialSeeded(),
-      ]);
+      const storedTodos = await localTodoStore.load();
+      const cleanedTodos = removeInitialSeedTodos(storedTodos);
 
-      if (!isDevAppVariant) {
-        if (storedTodos.length === 0 || hasOnlyInitialSeedTodos(storedTodos)) {
-          if (storedTodos.length > 0) {
-            await localTodoStore.replaceAll([]);
-          }
-
-          if (!initialSeeded) {
-            await localTodoStore.markInitialSeeded();
-          }
-
-          return [];
-        }
-
-        if (!initialSeeded) {
-          await localTodoStore.markInitialSeeded();
-        }
-
-        return storedTodos;
-      }
-
-      if (!initialSeeded && storedTodos.length === 0) {
-        const seededTodos = cloneInitialTodos();
-        await localTodoStore.replaceAll(seededTodos);
-        await localTodoStore.markInitialSeeded();
-        return seededTodos;
-      }
-
-      if (!initialSeeded) {
-        await localTodoStore.markInitialSeeded();
+      if (cleanedTodos.length !== storedTodos.length) {
+        await localTodoStore.replaceAll(cleanedTodos);
+        return cleanedTodos;
       }
 
       return storedTodos;
@@ -1534,6 +1500,7 @@ export default function App() {
       return;
     }
 
+    targetIds.forEach((id) => pendingMenuEditedTodoIdsRef.current.delete(id));
     targetIds.forEach((id) => {
       const timer = editedTodoHighlightTimersRef.current.get(id);
 
@@ -1554,7 +1521,7 @@ export default function App() {
     });
   }, []);
 
-  const highlightEditedTodos = useCallback((ids: Iterable<string>) => {
+  const startEditedTodoHighlights = useCallback((ids: Iterable<string>) => {
     const targetIds = [...new Set(ids)]
       .filter((id) => !pendingDeleteIdsRef.current.has(id));
 
@@ -1591,6 +1558,35 @@ export default function App() {
       editedTodoHighlightTimersRef.current.set(id, timer);
     });
   }, []);
+
+  const highlightEditedTodos = useCallback((ids: Iterable<string>) => {
+    const targetIds = [...new Set(ids)]
+      .filter((id) => !pendingDeleteIdsRef.current.has(id));
+
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    if (listMenuOpenRef.current) {
+      targetIds.forEach((id) => {
+        pendingMenuEditedTodoIdsRef.current.add(id);
+      });
+      return;
+    }
+
+    startEditedTodoHighlights(targetIds);
+  }, [startEditedTodoHighlights]);
+
+  const flushPendingMenuEditedTodoHighlights = useCallback(() => {
+    const targetIds = [...pendingMenuEditedTodoIdsRef.current]
+      .filter((id) => !pendingDeleteIdsRef.current.has(id));
+
+    pendingMenuEditedTodoIdsRef.current.clear();
+
+    if (targetIds.length > 0) {
+      startEditedTodoHighlights(targetIds);
+    }
+  }, [startEditedTodoHighlights]);
 
   useEffect(
     () => () => {
@@ -1753,11 +1749,17 @@ export default function App() {
     setMenuMode(null);
     setActiveTodoMenuId(null);
     setActiveTodoMenuHighlightId(null);
+    flushPendingMenuEditedTodoHighlights();
     restoreTodoMenuReturnOffset();
     menuPullAnim.setValue(0);
     menuDismissPullRef.current = 0;
     menuDismissHapticRef.current = 0;
-  }, [clearTodoMenuHighlightRequest, menuPullAnim, restoreTodoMenuReturnOffset]);
+  }, [
+    clearTodoMenuHighlightRequest,
+    flushPendingMenuEditedTodoHighlights,
+    menuPullAnim,
+    restoreTodoMenuReturnOffset,
+  ]);
 
   const closeListMenu = useCallback(() => {
     closeListMenuState();
@@ -3768,6 +3770,12 @@ export default function App() {
           menuMode: 'date',
           type: 'menu',
         },
+        {
+          count: selectedTodoCount,
+          id: 'main-delete-selected',
+          label: 'Delete selected',
+          type: 'deleteAction',
+        },
       ];
     }
 
@@ -3861,6 +3869,7 @@ export default function App() {
     effectiveGroupMode,
     effectiveSortMode,
     metaTagVisibility,
+    selectedTodoCount,
     todoEditTargetsAllPinned,
     todoSelectMode,
     todoPinActionLabel,
@@ -4971,7 +4980,6 @@ export default function App() {
     autoBackupFailedStateKeyRef.current = null;
     setPendingDeleteIds(new Set());
     await localTodoStore.replaceAll(backup.payload.todos);
-    await localTodoStore.markInitialSeeded();
     setTodos(backup.payload.todos);
     reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
     setDeletedTodos(backup.payload.settings.deletedTodos);
@@ -5450,7 +5458,9 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
-                isRecentlyEditedTodo && styles.todoSectionGroupedShellRecentlyEdited,
+                (isRecentlyEditedTodo || isNewlyCreatedTodo) &&
+                  !isTodoMenuTarget &&
+                  styles.todoSectionGroupedShellRecentlyEdited,
                 item.isLastInSection && styles.todoSectionGroupedShellLast,
               ]}
             >
@@ -6007,6 +6017,29 @@ export default function App() {
                             style={styles.listMenuList}
                             renderItem={({ item }) => {
                           if ('type' in item) {
+                            if (item.type === 'deleteAction') {
+                              return (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Delete selected items"
+                                  onPress={deleteSelectedTodos}
+                                  style={({ pressed }) => [
+                                    styles.listMenuRow,
+                                    styles.listMenuDangerRow,
+                                    pressed && styles.listMenuRowPressed,
+                                  ]}
+                                >
+                                  <View style={styles.listMenuRowTextWrap}>
+                                    <Text style={styles.listMenuDangerText}>{item.label}</Text>
+                                  </View>
+                                  <View style={styles.listMenuSubmenuZone}>
+                                    <Text style={styles.listMenuDangerCount}>{item.count}</Text>
+                                    <Ionicons color="#D14A42" name="trash-outline" size={20} />
+                                  </View>
+                                </Pressable>
+                              );
+                            }
+
                             if (item.type === 'clearFilters') {
                               return (
                                 <Pressable
@@ -6597,7 +6630,7 @@ export default function App() {
                   placeholder="Task title"
                   placeholderTextColor="#B5ADA5"
                   returnKeyType="next"
-                  selectionColor="#2F6F62"
+                  selectionColor={TODO_DETAIL_SELECTION_COLOR}
                   scrollEnabled={false}
                   style={styles.todoDetailTitleInput}
                   textAlignVertical="top"
@@ -6646,7 +6679,7 @@ export default function App() {
                   editable={activeTodoDetailCanEdit}
                   placeholder="Content"
                   placeholderTextColor="#B5ADA5"
-                  selectionColor="#2F6F62"
+                  selectionColor={TODO_DETAIL_SELECTION_COLOR}
                   scrollEnabled
                   style={[
                     styles.todoDetailContentInput,
@@ -9210,12 +9243,29 @@ const styles = StyleSheet.create({
   clearFiltersRow: {
     marginTop: 2,
   },
+  listMenuDangerRow: {
+    marginTop: 2,
+  },
   clearFiltersText: {
     color: '#8F4D46',
     fontSize: 15,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
     letterSpacing: 0.1,
+  },
+  listMenuDangerText: {
+    color: '#A13E37',
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+  },
+  listMenuDangerCount: {
+    color: '#A13E37',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.2,
   },
   filterTypeText: {
     color: '#A79F96',
@@ -9455,7 +9505,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   todoSectionGroupedShellRecentlyEdited: {
-    backgroundColor: 'rgba(76, 120, 255, 0.055)',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,

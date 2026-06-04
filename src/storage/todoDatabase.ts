@@ -4,7 +4,6 @@ import * as SQLite from 'expo-sqlite';
 import { normalizeTodo, type Todo } from '../todos';
 
 const LEGACY_STORAGE_KEY = 'local-todo.items.v1';
-const INITIAL_SEED_STORAGE_KEY = 'local-todo.initial-seed.v1';
 const DATABASE_NAME = 'local-todo.db';
 const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
 const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
@@ -440,11 +439,4 @@ export const deleteTodoFromDatabase = async (id: string) => {
     await database.runAsync('DELETE FROM todos_fts WHERE id = ?', [id]);
     await database.runAsync('DELETE FROM todos WHERE id = ?', [id]);
   });
-};
-
-export const hasInitialSeededTodos = async () =>
-  (await AsyncStorage.getItem(INITIAL_SEED_STORAGE_KEY)) === 'true';
-
-export const markInitialTodosSeeded = async () => {
-  await AsyncStorage.setItem(INITIAL_SEED_STORAGE_KEY, 'true');
 };

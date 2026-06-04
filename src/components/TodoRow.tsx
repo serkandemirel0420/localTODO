@@ -3,7 +3,6 @@ import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
-  Easing,
   type GestureResponderEvent,
   StyleSheet,
   Text,
@@ -40,7 +39,9 @@ const THEME_BORDER = '#E5E5EA';
 const THEME_TEXT = '#1C1C1E';
 const THEME_TEXT_SECONDARY = '#8E8E93';
 const THEME_ACCENT = '#4C78FF';
+const THEME_ACCENT_SOFT = '#E8EEFF';
 const THEME_ACCENT_SELECTION_BORDER = 'rgba(76, 120, 255, 0.36)';
+const THEME_MENU_TARGET_BORDER = 'rgba(76, 120, 255, 0.28)';
 const SWIPE_DONE = '#4168E8';
 const SWIPE_DELETE = '#D14A42';
 const SWIPE_MENU = '#EA8D35';
@@ -59,8 +60,6 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
-const NEW_TODO_HIGHLIGHT_PULSE_MS = 520;
-const NEW_TODO_HIGHLIGHT_PULSE_COUNT = 3;
 const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
 const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
 
@@ -283,7 +282,6 @@ function TodoRowComponent({
   showOverdueMetaTags = true,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
-  const changeHighlightPulse = useRef(new Animated.Value(0)).current;
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -326,24 +324,11 @@ function TodoRowComponent({
     [contentPreview, searchHighlightTerms],
   );
   const isHighlightedForMenu = isMenuTargetHighlighted;
-  const isHighlightedForCreate = isNewlyCreated && !isMenuTargetHighlighted;
-  const isHighlightedForEdit = isRecentlyEdited && !isHighlightedForCreate;
+  const suppressChangeFill = isMenuTarget;
+  const isHighlightedForCreate = isNewlyCreated && !suppressChangeFill;
+  const isHighlightedForEdit =
+    (isRecentlyEdited || isHighlightedForCreate) && !suppressChangeFill;
   const isHighlightedForSelection = selectMode && isSelected;
-  const showChangePulse = isHighlightedForCreate;
-  const changePulseBackgroundColors = [
-    'rgba(76, 120, 255, 0)',
-    'rgba(76, 120, 255, 0.2)',
-    'rgba(76, 120, 255, 0.38)',
-  ];
-  const changePulseBorderColors = [
-    'rgba(76, 120, 255, 0)',
-    'rgba(76, 120, 255, 0.55)',
-    'rgba(76, 120, 255, 0.9)',
-  ];
-  const showRowHighlight =
-    isHighlightedForMenu ||
-    isHighlightedForCreate ||
-    isHighlightedForSelection;
   const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
 
@@ -355,43 +340,6 @@ function TodoRowComponent({
     swipeableRef.current?.close();
     setIsSwipeOpen(false);
   }, [isMenuTarget]);
-
-  useEffect(() => {
-    if (isHighlightedForCreate) {
-      changeHighlightPulse.setValue(1);
-      const pulse = Animated.loop(
-        Animated.sequence([
-          Animated.timing(changeHighlightPulse, {
-            toValue: 0.45,
-            duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: false,
-          }),
-          Animated.timing(changeHighlightPulse, {
-            toValue: 1,
-            duration: NEW_TODO_HIGHLIGHT_PULSE_MS,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: false,
-          }),
-        ]),
-        { iterations: NEW_TODO_HIGHLIGHT_PULSE_COUNT },
-      );
-
-      pulse.start();
-
-      return () => {
-        pulse.stop();
-        changeHighlightPulse.setValue(0);
-      };
-    }
-
-    changeHighlightPulse.setValue(0);
-    return undefined;
-  }, [
-    changeHighlightPulse,
-    isHighlightedForCreate,
-    item.id,
-  ]);
 
   const handleRowLayout = useCallback((event: LayoutChangeEvent) => {
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -800,14 +748,14 @@ function TodoRowComponent({
           isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
         ),
         isPendingDelete && styles.rowPendingDelete,
-        showRowHighlight && (
+        isHighlightedForMenu && (
           isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
-        ),
-        isHighlightedForCreate && (
-          isGroupedLayout ? styles.rowNewlyCreatedGrouped : styles.rowNewlyCreated
         ),
         isHighlightedForEdit && (
           isGroupedLayout ? styles.rowRecentlyEditedGrouped : styles.rowRecentlyEdited
+        ),
+        isHighlightedForSelection && (
+          isGroupedLayout ? styles.rowSelectedGrouped : styles.rowSelected
         ),
       ]}
     >
@@ -822,10 +770,8 @@ function TodoRowComponent({
         />
       ) : null}
       <GestureTouchableOpacity
-        accessibilityRole="checkbox"
-        accessibilityState={{
-          checked: selectMode ? isSelected : item.done,
-        }}
+        accessibilityRole={selectMode ? 'button' : 'checkbox'}
+        accessibilityState={selectMode ? { selected: isSelected } : { checked: item.done }}
         accessibilityLabel={
           selectMode
             ? (isSelected ? 'Deselect todo' : 'Select todo')
@@ -840,14 +786,15 @@ function TodoRowComponent({
           style={[
             styles.checkbox,
             selectMode
-              ? (isSelected ? styles.checkboxChecked : styles.checkboxSelectMode)
+              ? [
+                  styles.checkboxSelectMode,
+                  isSelected && styles.checkboxSelectModeSelected,
+                ]
               : (item.done && styles.checkboxChecked),
           ]}
         >
           {selectMode ? (
-            isSelected ? (
-              <Ionicons color={THEME_CARD} name="checkmark" size={14} />
-            ) : null
+            isSelected ? <View style={styles.checkboxSelectModeDot} /> : null
           ) : item.done ? (
             <Ionicons color={THEME_CARD} name="checkmark" size={14} />
           ) : null}
@@ -946,7 +893,7 @@ function TodoRowComponent({
       style={[
         styles.shell,
         isGroupedLayout && styles.shellGrouped,
-        showRowHighlight && styles.shellMenuTarget,
+        isHighlightedForMenu && styles.shellMenuTarget,
       ]}
     >
       {useStaticRowContainer ? (
@@ -1004,34 +951,12 @@ function TodoRowComponent({
           {rowContent}
         </Swipeable>
       )}
-      {showRowHighlight ? (
+      {isHighlightedForMenu ? (
         <View
           pointerEvents="none"
           style={[
             styles.selectionFrame,
             isGroupedLayout && styles.selectionFrameGrouped,
-            isHighlightedForSelection && styles.selectionFrameSelected,
-            isHighlightedForSelection && isGroupedLayout && styles.selectionFrameSelectedGrouped,
-            isHighlightedForCreate && styles.selectionFrameNewlyCreated,
-          ]}
-        />
-      ) : null}
-      {showChangePulse ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.todoChangeOverlay,
-            isGroupedLayout && styles.todoChangeOverlayGrouped,
-            {
-              backgroundColor: changeHighlightPulse.interpolate({
-                inputRange: [0, 0.45, 1],
-                outputRange: changePulseBackgroundColors,
-              }),
-              borderColor: changeHighlightPulse.interpolate({
-                inputRange: [0, 0.45, 1],
-                outputRange: changePulseBorderColors,
-              }),
-            },
           ]}
         />
       ) : null}
@@ -1087,9 +1012,9 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   selectionFrame: {
-    borderColor: THEME_ACCENT_SELECTION_BORDER,
+    borderColor: THEME_MENU_TARGET_BORDER,
     borderRadius: 3,
-    borderWidth: 1.5,
+    borderWidth: 1,
     bottom: -3,
     left: -3,
     position: 'absolute',
@@ -1230,45 +1155,29 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(76, 120, 255, 0.04)',
   },
   rowMenuTarget: {
-    borderColor: THEME_ACCENT_SELECTION_BORDER,
+    borderColor: THEME_MENU_TARGET_BORDER,
     elevation: 0,
     shadowOpacity: 0,
   },
   rowMenuTargetGrouped: {
     backgroundColor: 'transparent',
   },
-  rowNewlyCreated: {
-    backgroundColor: 'rgba(76, 120, 255, 0.16)',
-  },
-  rowNewlyCreatedGrouped: {
-    backgroundColor: 'rgba(76, 120, 255, 0.14)',
-  },
   rowRecentlyEdited: {
-    backgroundColor: 'rgba(76, 120, 255, 0.07)',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   rowRecentlyEditedGrouped: {
     backgroundColor: 'transparent',
   },
-  selectionFrameNewlyCreated: {
-    borderColor: 'rgba(76, 120, 255, 0.72)',
-    borderWidth: 2,
+  rowSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT_SELECTION_BORDER,
+    elevation: 0,
+    shadowOpacity: 0,
   },
-  todoChangeOverlay: {
-    borderRadius: ROW_BORDER_RADIUS,
-    borderWidth: 2,
-    bottom: -2,
-    left: -2,
-    position: 'absolute',
-    right: -2,
-    top: -2,
-    zIndex: 4,
-  },
-  todoChangeOverlayGrouped: {
-    borderRadius: 0,
-    bottom: 0,
-    left: -6,
-    right: -6,
-    top: 0,
+  rowSelectedGrouped: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
   },
   colorRail: {
     alignSelf: 'stretch',
@@ -1303,7 +1212,18 @@ const styles = StyleSheet.create({
     borderColor: THEME_ACCENT,
   },
   checkboxSelectMode: {
+    backgroundColor: THEME_CARD,
+    borderColor: 'rgba(76, 120, 255, 0.52)',
+    borderRadius: 11,
+  },
+  checkboxSelectModeSelected: {
     borderColor: THEME_ACCENT,
+  },
+  checkboxSelectModeDot: {
+    backgroundColor: THEME_ACCENT,
+    borderRadius: 4,
+    height: 8,
+    width: 8,
   },
   textPressable: {
     alignSelf: 'stretch',

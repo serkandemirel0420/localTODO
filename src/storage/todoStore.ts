@@ -1,9 +1,7 @@
 import { type Todo } from '../todos';
 import {
   deleteTodoFromDatabase,
-  hasInitialSeededTodos,
   loadTodosFromDatabase,
-  markInitialTodosSeeded,
   replaceAllTodosInDatabase,
   searchTodosInDatabase,
   updateTodoDoneInDatabase,
@@ -14,9 +12,7 @@ import {
 
 export type TodoStore = {
   delete: (id: string) => Promise<void>;
-  hasInitialSeeded: () => Promise<boolean>;
   load: () => Promise<Todo[]>;
-  markInitialSeeded: () => Promise<void>;
   replaceAll: (todos: Todo[]) => Promise<void>;
   search: (query: string) => Promise<Todo[]>;
   updateDone: (id: string, done: boolean) => Promise<void>;
@@ -27,9 +23,7 @@ export type TodoStore = {
 
 export const localTodoStore: TodoStore = {
   delete: deleteTodoFromDatabase,
-  hasInitialSeeded: hasInitialSeededTodos,
   load: loadTodosFromDatabase,
-  markInitialSeeded: markInitialTodosSeeded,
   replaceAll: replaceAllTodosInDatabase,
   search: searchTodosInDatabase,
   updateDone: updateTodoDoneInDatabase,

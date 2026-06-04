@@ -41,10 +41,9 @@ const getTodoIdFromAlarmIdentifier = (identifier: string) => (
     : null
 );
 
-const getTodoAlarmResponseTodoId = (
-  response: Notifications.NotificationResponse | null | undefined,
+const getTodoAlarmRequestTodoId = (
+  request: Notifications.NotificationRequest | null | undefined,
 ) => {
-  const request = response?.notification.request;
   if (!request) {
     return null;
   }
@@ -56,6 +55,37 @@ const getTodoAlarmResponseTodoId = (
   }
 
   return getTodoIdFromAlarmIdentifier(request.identifier);
+};
+
+const getTodoAlarmResponseTodoId = (
+  response: Notifications.NotificationResponse | null | undefined,
+) => getTodoAlarmRequestTodoId(response?.notification.request);
+
+const dismissPresentedTodoAlarmNotifications = async (
+  shouldDismiss: (todoId: string) => boolean,
+) => {
+  if (!canScheduleNotifications()) {
+    return;
+  }
+
+  const presentedNotifications = await Notifications
+    .getPresentedNotificationsAsync()
+    .catch(() => []);
+  const dismissals = presentedNotifications.flatMap((notification) => {
+    const todoId = getTodoAlarmRequestTodoId(notification.request);
+
+    if (!todoId || !shouldDismiss(todoId)) {
+      return [];
+    }
+
+    return [
+      Notifications
+        .dismissNotificationAsync(notification.request.identifier)
+        .catch(() => undefined),
+    ];
+  });
+
+  await Promise.all(dismissals);
 };
 
 const allowsNotifications = (
@@ -245,7 +275,7 @@ const createTodoAlarmRequest = (
   const repeatLabel = reminder.repeat === 'none'
     ? ''
     : ` (${formatRepeatLabel(reminder.repeat)})`;
-  const title = todo.text.trim() ? `Reminder: ${todo.text}` : 'Reminder';
+  const title = todo.text.trim() || 'Todo';
   const body = todo.content.trim() || null;
 
   return {
@@ -304,6 +334,9 @@ export const cancelTodoAlarm = async (todoId: string) => {
   await Notifications.cancelScheduledNotificationAsync(
     getTodoAlarmIdentifier(todoId),
   );
+  await dismissPresentedTodoAlarmNotifications((notificationTodoId) => (
+    notificationTodoId === todoId
+  ));
 };
 
 export const syncTodoAlarm = async (todo: Todo) => {
@@ -352,6 +385,9 @@ export const reconcileTodoAlarms = async (todos: Todo[]) => {
         Notifications.cancelScheduledNotificationAsync(request.identifier)
       )),
   );
+
+  const currentTodoIds = new Set(todos.map((todo) => todo.id));
+  await dismissPresentedTodoAlarmNotifications((todoId) => !currentTodoIds.has(todoId));
 
   if (requests.length === 0) {
     return;

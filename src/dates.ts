@@ -1,5 +1,6 @@
 export const CUSTOM_DATE_LABEL = 'Custom date';
 export const LATER_DATE_LABEL = 'Later';
+export const OVERDUE_DATE_LABEL = 'Overdue';
 export const SOMEDAY_DATE_LABEL = 'Someday';
 
 export type DateLabelDisplayMode = 'exact' | 'remaining';
@@ -17,6 +18,7 @@ const DATE_PRESET_LABELS: Record<string, string> = {
   custom: CUSTOM_DATE_LABEL,
   'custom date': CUSTOM_DATE_LABEL,
   later: LATER_DATE_LABEL,
+  overdue: OVERDUE_DATE_LABEL,
   someday: LATER_DATE_LABEL,
   today: 'Today',
   tomorrow: 'Tomorrow',
@@ -148,6 +150,7 @@ export const resolveDateFilterValueDate = (
 
   if (
     !formattedLabel
+    || formattedLabel === OVERDUE_DATE_LABEL
     || formattedLabel === LATER_DATE_LABEL
     || formattedLabel === CUSTOM_DATE_LABEL
   ) {
@@ -218,7 +221,8 @@ const getDateLabelDayOffset = (
   const formattedLabel = formatDateFilterValue(label);
 
   if (
-    formattedLabel === LATER_DATE_LABEL
+    formattedLabel === OVERDUE_DATE_LABEL
+    || formattedLabel === LATER_DATE_LABEL
     || formattedLabel === CUSTOM_DATE_LABEL
   ) {
     return null;
@@ -241,12 +245,12 @@ export const formatRemainingDaysLabel = (
 ): string | null => {
   const formattedLabel = formatDateFilterValue(label);
 
-  if (formattedLabel === LATER_DATE_LABEL) {
-    return LATER_DATE_LABEL;
-  }
-
-  if (formattedLabel === CUSTOM_DATE_LABEL) {
-    return null;
+  if (
+    formattedLabel === OVERDUE_DATE_LABEL
+    || formattedLabel === LATER_DATE_LABEL
+    || formattedLabel === CUSTOM_DATE_LABEL
+  ) {
+    return formattedLabel === CUSTOM_DATE_LABEL ? null : formattedLabel;
   }
 
   const dayOffset = getDateLabelDayOffset(label, now, anchor);
@@ -311,7 +315,11 @@ export const formatCompactDateFilterLabel = (
 ): string => {
   const formattedLabel = formatDateFilterValue(label);
 
-  if (formattedLabel === LATER_DATE_LABEL || formattedLabel === CUSTOM_DATE_LABEL) {
+  if (
+    formattedLabel === OVERDUE_DATE_LABEL
+    || formattedLabel === LATER_DATE_LABEL
+    || formattedLabel === CUSTOM_DATE_LABEL
+  ) {
     return formattedLabel;
   }
 
@@ -449,6 +457,10 @@ export const dateFilterValueMatches = (
 
   if (!todoDateValue || !selectedDateValue || selectedDateValue === CUSTOM_DATE_LABEL) {
     return false;
+  }
+
+  if (selectedDateValue === OVERDUE_DATE_LABEL) {
+    return isDateFilterOverdue(todoDateValue, now, todoDateAnchor);
   }
 
   if (selectedDateValue === LATER_DATE_LABEL) {

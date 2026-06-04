@@ -4,6 +4,7 @@ import {
   formatDateFilterValue,
   isCustomDateLabel,
   LATER_DATE_LABEL,
+  OVERDUE_DATE_LABEL,
   SOMEDAY_DATE_LABEL,
 } from './dates';
 import { formatListLabel, type TodoFilters } from './todos';
@@ -158,6 +159,7 @@ const DEFAULT_PRIORITY_COLORS: Record<string, string> = {
 const DEFAULT_DATE_COLORS: Record<string, string> = {
   [CUSTOM_DATE_LABEL]: '#8C847C',
   [LATER_DATE_LABEL]: '#8C847C',
+  [OVERDUE_DATE_LABEL]: '#CF413A',
   'Next Week': '#6D62B7',
   Someday: '#8C847C',
   'This Week': '#3E78B2',

@@ -1,4 +1,4 @@
-import { DATE_FILTER_PRESETS } from './dates';
+import { DATE_FILTER_PRESETS, OVERDUE_DATE_LABEL } from './dates';
 import { REMINDER_PICKER_LABEL, REPEAT_PICKER_LABEL } from './reminders';
 import {
   type TodoGroupMode,
@@ -6,7 +6,7 @@ import {
 } from './storage/appSettingsStore';
 
 export const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
-export const DATE_MENU_ITEMS: string[] = [...DATE_FILTER_PRESETS];
+export const DATE_MENU_ITEMS: string[] = [OVERDUE_DATE_LABEL, ...DATE_FILTER_PRESETS];
 
 /** Date drawer list: presets + custom date + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [

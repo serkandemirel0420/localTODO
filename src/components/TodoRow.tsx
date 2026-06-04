@@ -4,14 +4,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
   type GestureResponderEvent,
+  Pressable,
   StyleSheet,
   Text,
   type LayoutChangeEvent,
   View,
 } from 'react-native';
 import {
+  LongPressGestureHandler,
   Swipeable,
+  State,
   TouchableOpacity as GestureTouchableOpacity,
+  type LongPressGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
 import { TodoMetaTags } from './TodoMetaTags';
@@ -282,6 +286,7 @@ function TodoRowComponent({
   showOverdueMetaTags = true,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
+  const lastSelectLongPressAtRef = useRef(0);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -470,6 +475,12 @@ function TodoRowComponent({
       return;
     }
 
+    const now = Date.now();
+    if (now - lastSelectLongPressAtRef.current < 240) {
+      return;
+    }
+    lastSelectLongPressAtRef.current = now;
+
     closeOtherOpenSwipeable();
 
     if (selectMode) {
@@ -487,6 +498,16 @@ function TodoRowComponent({
     selectMode,
     toggleSelection,
   ]);
+
+  const handleRowLongPressStateChange = useCallback((
+    event: LongPressGestureHandlerStateChangeEvent,
+  ) => {
+    if (event.nativeEvent.state !== State.ACTIVE) {
+      return;
+    }
+
+    enterSelectMode();
+  }, [enterSelectMode]);
 
   const handleSwipeableWillOpen = useCallback(
     (direction: 'left' | 'right') => {
@@ -734,157 +755,164 @@ function TodoRowComponent({
   );
 
   const rowContent = (
-    <View
-      onLayout={isGroupedLayout ? undefined : handleRowLayout}
-      style={[
-        styles.row,
-        isGroupedLayout && styles.rowGrouped,
-        itemBackgroundTheme && !item.done && !isPendingDelete && {
-          backgroundColor: itemBackgroundTheme.tint,
-          borderColor: itemBackgroundTheme.border,
-          shadowColor: itemBackgroundTheme.accent,
-        },
-        item.pinned && !item.done && !isPendingDelete && (
-          isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
-        ),
-        isPendingDelete && styles.rowPendingDelete,
-        isHighlightedForMenu && (
-          isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
-        ),
-        isHighlightedForEdit && (
-          isGroupedLayout ? styles.rowRecentlyEditedGrouped : styles.rowRecentlyEdited
-        ),
-        isHighlightedForSelection && (
-          isGroupedLayout ? styles.rowSelectedGrouped : styles.rowSelected
-        ),
-      ]}
+    <LongPressGestureHandler
+      enabled={!isPendingDelete}
+      minDurationMs={280}
+      onHandlerStateChange={handleRowLongPressStateChange}
     >
-      {priorityRailTheme ? (
-        <View
-          style={[
-            styles.colorRail,
-            isGroupedLayout && styles.colorRailGrouped,
-            { backgroundColor: priorityRailTheme.accent },
-            item.done && styles.colorRailDone,
-          ]}
-        />
-      ) : null}
-      <GestureTouchableOpacity
-        accessibilityRole={selectMode ? 'button' : 'checkbox'}
-        accessibilityState={selectMode ? { selected: isSelected } : { checked: item.done }}
-        accessibilityLabel={
-          selectMode
-            ? (isSelected ? 'Deselect todo' : 'Select todo')
-            : (item.done ? 'Mark todo active' : 'Mark todo done')
-        }
-        activeOpacity={0.72}
-        disabled={isPendingDelete}
-        onPress={toggleDoneFromCheckbox}
-        style={styles.checkboxPressable}
+      <View
+        collapsable={false}
+        onLayout={isGroupedLayout ? undefined : handleRowLayout}
+        style={[
+          styles.row,
+          isGroupedLayout && styles.rowGrouped,
+          itemBackgroundTheme && !item.done && !isPendingDelete && {
+            backgroundColor: itemBackgroundTheme.tint,
+            borderColor: itemBackgroundTheme.border,
+            shadowColor: itemBackgroundTheme.accent,
+          },
+          item.pinned && !item.done && !isPendingDelete && (
+            isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
+          ),
+          isPendingDelete && styles.rowPendingDelete,
+          isHighlightedForMenu && (
+            isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
+          ),
+          isHighlightedForEdit && (
+            isGroupedLayout ? styles.rowRecentlyEditedGrouped : styles.rowRecentlyEdited
+          ),
+          isHighlightedForSelection && (
+            isGroupedLayout ? styles.rowSelectedGrouped : styles.rowSelected
+          ),
+        ]}
       >
-        <View
-          style={[
-            styles.checkbox,
+        {priorityRailTheme ? (
+          <View
+            style={[
+              styles.colorRail,
+              isGroupedLayout && styles.colorRailGrouped,
+              { backgroundColor: priorityRailTheme.accent },
+              item.done && styles.colorRailDone,
+            ]}
+          />
+        ) : null}
+        <GestureTouchableOpacity
+          accessibilityRole={selectMode ? 'button' : 'checkbox'}
+          accessibilityState={selectMode ? { selected: isSelected } : { checked: item.done }}
+          accessibilityLabel={
             selectMode
-              ? [
-                  styles.checkboxSelectMode,
-                  isSelected && styles.checkboxSelectModeSelected,
-                ]
-              : (item.done && styles.checkboxChecked),
-          ]}
-        >
-          {selectMode ? (
-            isSelected ? <View style={styles.checkboxSelectModeDot} /> : null
-          ) : item.done ? (
-            <Ionicons color={THEME_CARD} name="checkmark" size={14} />
-          ) : null}
-        </View>
-      </GestureTouchableOpacity>
-      <GestureTouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel={
-          isPendingDelete
-            ? `Deleting todo: ${item.text}`
-            : selectMode
-              ? (isSelected ? `Deselect todo: ${item.text}` : `Select todo: ${item.text}`)
-              : `Open todo details: ${item.text}`
-        }
-        activeOpacity={1}
-        delayLongPress={280}
-        disabled={isPendingDelete}
-        onLongPress={enterSelectMode}
-        onPress={handleTodoPress}
-        style={styles.textPressable}
-      >
-        <View
-          style={[
-            styles.contentColumn,
-            isGroupedLayout && styles.contentColumnGrouped,
-          ]}
+              ? (isSelected ? 'Deselect todo' : 'Select todo')
+              : (item.done ? 'Mark todo active' : 'Mark todo done')
+          }
+          activeOpacity={0.72}
+          disabled={isPendingDelete}
+          onPress={toggleDoneFromCheckbox}
+          style={styles.checkboxPressable}
         >
           <View
             style={[
-              styles.titleBlock,
-              item.pinned && styles.titleBlockPinned,
+              styles.checkbox,
+              selectMode
+                ? [
+                    styles.checkboxSelectMode,
+                    isSelected && styles.checkboxSelectModeSelected,
+                  ]
+                : (item.done && styles.checkboxChecked),
             ]}
           >
-            <Text
-              ellipsizeMode="tail"
-              numberOfLines={2}
-              style={[
-                styles.text,
-                item.done && styles.textDone,
-                isPendingDelete && styles.textPendingDelete,
-              ]}
-            >
-              {highlightedTitlePreview}
-            </Text>
-            {item.pinned ? (
-              <Ionicons
-                color={item.done || isPendingDelete ? THEME_TEXT_SECONDARY : THEME_ACCENT}
-                name="pin"
-                size={14}
-                style={styles.pinnedIcon}
-              />
+            {selectMode ? (
+              isSelected ? <View style={styles.checkboxSelectModeDot} /> : null
+            ) : item.done ? (
+              <Ionicons color={THEME_CARD} name="checkmark" size={14} />
             ) : null}
           </View>
-          {contentPreview ? (
-            <Text
-              ellipsizeMode="tail"
-              numberOfLines={1}
+        </GestureTouchableOpacity>
+        <GestureTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={
+            isPendingDelete
+              ? `Deleting todo: ${item.text}`
+              : selectMode
+                ? (isSelected ? `Deselect todo: ${item.text}` : `Select todo: ${item.text}`)
+                : `Open todo details: ${item.text}`
+          }
+          activeOpacity={1}
+          delayLongPress={280}
+          disabled={isPendingDelete}
+          onLongPress={enterSelectMode}
+          onPress={handleTodoPress}
+          style={styles.textPressable}
+        >
+          <View
+            style={[
+              styles.contentColumn,
+              isGroupedLayout && styles.contentColumnGrouped,
+            ]}
+          >
+            <View
               style={[
-                styles.content,
-                item.done && styles.contentDone,
-                isPendingDelete && styles.contentPendingDelete,
+                styles.titleBlock,
+                item.pinned && styles.titleBlockPinned,
               ]}
             >
-              {highlightedContentPreview}
-            </Text>
-          ) : null}
-          {isPendingDelete ? (
-            <Text style={styles.pendingDeleteText}>Deleting...</Text>
-          ) : (
-            <TodoMetaTags
-              createdAt={item.createdAt}
-              dateLabel={rawDateStatusLabel || undefined}
-              dateLabelAnchor={item.createdAt}
-              dateLabelDisplayMode={dateLabelDisplayMode}
-              done={item.done}
-              filterColors={filterColors}
-              listLabel={listStatusLabel || undefined}
-              priorityLabel={
-                priorityStatusLabel && priorityStatusLabel !== 'None'
-                  ? priorityStatusLabel
-                  : undefined
-              }
-              reminderValues={item.filters.reminder}
-              showOverdueMetaTags={showOverdueMetaTags}
-              visibility={effectiveMetaTagVisibility}
-            />
-          )}
-        </View>
-      </GestureTouchableOpacity>
-    </View>
+              <Text
+                ellipsizeMode="tail"
+                numberOfLines={2}
+                style={[
+                  styles.text,
+                  item.done && styles.textDone,
+                  isPendingDelete && styles.textPendingDelete,
+                ]}
+              >
+                {highlightedTitlePreview}
+              </Text>
+              {item.pinned ? (
+                <Ionicons
+                  color={item.done || isPendingDelete ? THEME_TEXT_SECONDARY : THEME_ACCENT}
+                  name="pin"
+                  size={14}
+                  style={styles.pinnedIcon}
+                />
+              ) : null}
+            </View>
+            {contentPreview ? (
+              <Text
+                ellipsizeMode="tail"
+                numberOfLines={1}
+                style={[
+                  styles.content,
+                  item.done && styles.contentDone,
+                  isPendingDelete && styles.contentPendingDelete,
+                ]}
+              >
+                {highlightedContentPreview}
+              </Text>
+            ) : null}
+            {isPendingDelete ? (
+              <Text style={styles.pendingDeleteText}>Deleting...</Text>
+            ) : (
+              <TodoMetaTags
+                createdAt={item.createdAt}
+                dateLabel={rawDateStatusLabel || undefined}
+                dateLabelAnchor={item.createdAt}
+                dateLabelDisplayMode={dateLabelDisplayMode}
+                done={item.done}
+                filterColors={filterColors}
+                listLabel={listStatusLabel || undefined}
+                priorityLabel={
+                  priorityStatusLabel && priorityStatusLabel !== 'None'
+                    ? priorityStatusLabel
+                    : undefined
+                }
+                reminderValues={item.filters.reminder}
+                showOverdueMetaTags={showOverdueMetaTags}
+                visibility={effectiveMetaTagVisibility}
+              />
+            )}
+          </View>
+        </GestureTouchableOpacity>
+      </View>
+    </LongPressGestureHandler>
   );
 
   return (
@@ -898,6 +926,7 @@ function TodoRowComponent({
     >
       {useStaticRowContainer ? (
         <View
+          pointerEvents={selectMode ? 'none' : 'auto'}
           style={[
             styles.swipeableContainer,
             isGroupedLayout && styles.swipeableContainerGrouped,
@@ -908,6 +937,9 @@ function TodoRowComponent({
             style={[
               styles.swipeableChildren,
               isGroupedLayout && styles.swipeableChildrenGrouped,
+              isHighlightedForSelection &&
+                isGroupedLayout &&
+                styles.swipeableChildrenGroupedSelected,
               isHighlightedForEdit &&
                 isGroupedLayout &&
                 styles.swipeableChildrenGroupedRecentlyEdited,
@@ -924,6 +956,9 @@ function TodoRowComponent({
           childrenContainerStyle={[
             styles.swipeableChildren,
             isGroupedLayout && styles.swipeableChildrenGrouped,
+            isHighlightedForSelection &&
+              isGroupedLayout &&
+              styles.swipeableChildrenGroupedSelected,
             isHighlightedForEdit &&
               isGroupedLayout &&
               styles.swipeableChildrenGroupedRecentlyEdited,
@@ -951,6 +986,16 @@ function TodoRowComponent({
           {rowContent}
         </Swipeable>
       )}
+      {selectMode ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ selected: isSelected }}
+          accessibilityLabel={isSelected ? `Deselect todo: ${item.text}` : `Select todo: ${item.text}`}
+          disabled={isPendingDelete}
+          onPress={toggleSelection}
+          style={styles.selectModeRowPressable}
+        />
+      ) : null}
       {isHighlightedForMenu ? (
         <View
           pointerEvents="none"
@@ -1076,6 +1121,9 @@ const styles = StyleSheet.create({
   swipeableChildrenGroupedRecentlyEdited: {
     backgroundColor: 'transparent',
   },
+  swipeableChildrenGroupedSelected: {
+    backgroundColor: 'transparent',
+  },
   swipeActionsRoot: {
     alignSelf: 'stretch',
   },
@@ -1178,6 +1226,15 @@ const styles = StyleSheet.create({
     backgroundColor: THEME_ACCENT_SOFT,
     marginHorizontal: -16,
     paddingHorizontal: 16,
+  },
+  selectModeRowPressable: {
+    bottom: 0,
+    elevation: 3,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 2,
   },
   colorRail: {
     alignSelf: 'stretch',

@@ -443,6 +443,9 @@ const THEME_DANGER = '#D32F2F';
 const THEME_DANGER_SOFT = '#D9645A';
 const THEME_BORDER = '#E8EAED';
 const TODO_DETAIL_SELECTION_COLOR = '#C0C0C0';
+const TODO_DETAIL_CONTENT_VISIBLE_LINES = 6;
+const TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT = 165;
+const TODO_DETAIL_CONTENT_EXTRA_LINES = 5;
 const CARD_BORDER_RADIUS = 12;
 const CONTROL_BORDER_RADIUS = 10;
 const PULL_MAX = 178;
@@ -458,6 +461,12 @@ const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
 const MENU_DISMISS_RELEASE = 52;
+
+const formatTodoDetailDraftContentForEditing = (content: string) => {
+  const normalized = normalizeTodoContent(content);
+
+  return `${normalized}${'\n'.repeat(TODO_DETAIL_CONTENT_EXTRA_LINES)}`;
+};
 const MENU_DISMISS_VELOCITY = 680;
 const GOOGLE_IOS_LEGACY_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 const GOOGLE_IOS_CLIENT_ID = isDevAppVariant
@@ -1145,6 +1154,10 @@ export default function App() {
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
+  const [activeTodoDetailContentSelection, setActiveTodoDetailContentSelection] = useState({
+    end: 0,
+    start: 0,
+  });
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
@@ -1789,6 +1802,7 @@ export default function App() {
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     setSelectedTodoIds(new Set([id]));
   }, [closeListMenuState]);
@@ -1813,6 +1827,7 @@ export default function App() {
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     Haptics.selectionAsync().catch(() => undefined);
   }, [suppressNextHeaderSearchFocus]);
@@ -1842,7 +1857,8 @@ export default function App() {
 
     exitTodoSelectMode();
     setNavTab((current) => (current === 'search' ? null : current));
-    setActiveTodoDetailDraftContent(todo?.content ?? '');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
+    setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo?.content ?? ''));
     setActiveTodoDetailDraftText(todo?.text ?? '');
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
@@ -2065,6 +2081,8 @@ export default function App() {
   );
 
   const closeSettingsModal = useCallback(() => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
     setSettingsModalVisible(false);
     setNavTab((current) => (current === 'settings' ? null : current));
     Haptics.selectionAsync().catch(() => undefined);
@@ -2141,7 +2159,8 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
-    setActiveTodoDetailDraftContent(todo.content);
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
+    setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
     setActiveTodoDetailDraftText(todo.text);
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
@@ -2883,6 +2902,33 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const clearCreateDraftDateOptions = useCallback(() => {
+    setCreateDraftFilters((current) => ({
+      ...current,
+      date: [],
+      reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
+    }));
+    setDatePickerVisible(false);
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setRepeatDraft('none');
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const handleCreateDrawerCalendarPress = useCallback(() => {
+    if (createDrawerPicker === 'date' && createDrawerDateActive) {
+      clearCreateDraftDateOptions();
+      return;
+    }
+
+    openCreateDrawerPicker('date');
+  }, [
+    clearCreateDraftDateOptions,
+    createDrawerDateActive,
+    createDrawerPicker,
+    openCreateDrawerPicker,
+  ]);
+
   const openDatePicker = useCallback((
     source: 'create' | 'filters',
     dateLabels: string[],
@@ -3079,13 +3125,13 @@ export default function App() {
     }
 
     if (isDateMenuItemSelected(label, createDraftFilters.date)) {
-      clearCreateDraftDate();
+      clearCreateDraftDateOptions();
       return;
     }
 
     setCreateDraftFilterValue('date', label);
   }, [
-    clearCreateDraftDate,
+    clearCreateDraftDateOptions,
     createDraftFilters.date,
     openCreateReminderModal,
     openCreateRepeatModal,
@@ -3512,6 +3558,7 @@ export default function App() {
       }
       setActiveTodoDetailDraftContent('');
       setActiveTodoDetailDraftText('');
+      setActiveTodoDetailContentSelection({ end: 0, start: 0 });
       todoDetailDraftTodoIdRef.current = null;
       return;
     }
@@ -3520,8 +3567,11 @@ export default function App() {
       return;
     }
 
-    setActiveTodoDetailDraftContent(activeTodoDetail.content);
+    setActiveTodoDetailDraftContent(
+      formatTodoDetailDraftContentForEditing(activeTodoDetail.content),
+    );
     setActiveTodoDetailDraftText(activeTodoDetail.text);
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
   }, [activeTodoDetail, activeTodoDetailId]);
   const activeTodoDetailDraftTextForSave = useMemo(
@@ -3575,6 +3625,7 @@ export default function App() {
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
       () => undefined,
@@ -4593,6 +4644,7 @@ export default function App() {
 
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
+    searchInputRef.current?.blur();
     closeListMenuState();
     setFilterConfigModalVisible(false);
     exitTodoSelectMode();
@@ -5461,10 +5513,22 @@ export default function App() {
                 (isRecentlyEditedTodo || isNewlyCreatedTodo) &&
                   !isTodoMenuTarget &&
                   styles.todoSectionGroupedShellRecentlyEdited,
+                todoSelectMode &&
+                  isSelected &&
+                  styles.todoSectionGroupedShellSelected,
                 item.isLastInSection && styles.todoSectionGroupedShellLast,
               ]}
             >
-              {!item.isFirstInSection ? <View style={styles.todoRowDivider} /> : null}
+              {!item.isFirstInSection ? (
+                <View
+                  style={[
+                    styles.todoRowDivider,
+                    todoSelectMode &&
+                      isSelected &&
+                      styles.todoRowDividerSelected,
+                  ]}
+                />
+              ) : null}
               <TodoRow
                 dateLabelDisplayMode={dateLabelDisplayMode}
                 filterColors={deferredFilterColors}
@@ -6670,15 +6734,25 @@ export default function App() {
                 </Pressable>
               </View>
               <View style={styles.todoDetailContentContainer}>
+                {activeTodoDetailDraftContentForSave.length === 0 ? (
+                  <View pointerEvents="none" style={styles.todoDetailContentPlaceholderLayer}>
+                    <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
+                  </View>
+                ) : null}
                 <TextInput
                   ref={todoDetailContentInputRef}
                   autoCapitalize="sentences"
                   autoCorrect
                   multiline
                   onChangeText={setActiveTodoDetailDraftContent}
+                  onSelectionChange={(event) => {
+                    setActiveTodoDetailContentSelection(event.nativeEvent.selection);
+                  }}
                   editable={activeTodoDetailCanEdit}
                   placeholder="Content"
                   placeholderTextColor="#B5ADA5"
+                  numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
+                  selection={activeTodoDetailContentSelection}
                   selectionColor={TODO_DETAIL_SELECTION_COLOR}
                   scrollEnabled
                   style={[
@@ -6998,7 +7072,7 @@ export default function App() {
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`Date: ${createDrawerDateLabel}`}
-                    onPress={() => openCreateDrawerPicker('date')}
+                    onPress={handleCreateDrawerCalendarPress}
                     style={({ pressed }) => [
                       styles.createDrawerToolbarButton,
                       pressed && styles.createDrawerToolbarButtonPressed,
@@ -8052,6 +8126,20 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     paddingHorizontal: 18,
     paddingTop: 16,
+    position: 'relative',
+  },
+  todoDetailContentPlaceholderLayer: {
+    left: 18,
+    position: 'absolute',
+    top: 16,
+    zIndex: 1,
+  },
+  todoDetailContentPlaceholder: {
+    color: '#B5ADA5',
+    fontSize: 17,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 25,
   },
   todoDetailContentInput: {
     color: '#3A332E',
@@ -8059,7 +8147,7 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     letterSpacing: 0,
     lineHeight: 25,
-    minHeight: 165,
+    minHeight: TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT,
     paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 0,
@@ -9507,6 +9595,9 @@ const styles = StyleSheet.create({
   todoSectionGroupedShellRecentlyEdited: {
     backgroundColor: THEME_ACCENT_SOFT,
   },
+  todoSectionGroupedShellSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,
     borderBottomLeftRadius: CARD_BORDER_RADIUS,
@@ -9556,6 +9647,9 @@ const styles = StyleSheet.create({
     backgroundColor: THEME_BORDER,
     height: TODO_ROW_DIVIDER_HEIGHT,
     marginLeft: 38,
+  },
+  todoRowDividerSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   searchFiltersPanel: {
     flex: 1,

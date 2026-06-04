@@ -296,7 +296,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'nowrap',
     gap: 4,
-    marginTop: 4,
+    marginTop: 7,
     minWidth: 0,
     overflow: 'hidden',
     width: '100%',

@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   type LayoutChangeEvent,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -73,6 +74,16 @@ type SearchHighlightRange = {
 };
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
+
+type TextLayoutLine = {
+  text?: string;
+};
+
+type TextLayoutEvent = {
+  nativeEvent: {
+    lines?: TextLayoutLine[];
+  };
+};
 
 let openTodoSwipeable: Swipeable | null = null;
 
@@ -289,6 +300,8 @@ function TodoRowComponent({
   const lastSelectLongPressAtRef = useRef(0);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
+  const [singleLineTitleMeasurementKey, setSingleLineTitleMeasurementKey] = useState('');
+  const { width: windowWidth } = useWindowDimensions();
   const isGroupedLayout = layout === 'grouped';
   const fallbackRowHeight = isGroupedLayout ? 52 : 56;
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
@@ -336,6 +349,29 @@ function TodoRowComponent({
   const isHighlightedForSelection = selectMode && isSelected;
   const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
+  const titleMeasurementKey = [
+    Math.round(windowWidth),
+    layout,
+    item.pinned ? 'pinned' : 'normal',
+    priorityRailTheme ? 'priority' : 'plain',
+    displayTitle,
+  ].join('|');
+  const titleNumberOfLines = singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2;
+
+  const handleTitleTextLayout = useCallback((event: TextLayoutEvent) => {
+    const lines = event.nativeEvent.lines ?? [];
+    const visibleLineCount = lines.filter((line) => (line.text ?? '').trim()).length;
+    const measuredLineCount = visibleLineCount || lines.length;
+    const isSingleVisibleLine = measuredLineCount <= 1;
+
+    setSingleLineTitleMeasurementKey((currentKey) => {
+      if (isSingleVisibleLine) {
+        return currentKey === titleMeasurementKey ? currentKey : titleMeasurementKey;
+      }
+
+      return currentKey === titleMeasurementKey ? '' : currentKey;
+    });
+  }, [titleMeasurementKey]);
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -857,7 +893,8 @@ function TodoRowComponent({
             >
               <Text
                 ellipsizeMode="tail"
-                numberOfLines={2}
+                numberOfLines={titleNumberOfLines}
+                onTextLayout={handleTitleTextLayout}
                 style={[
                   styles.text,
                   item.done && styles.textDone,

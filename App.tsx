@@ -1139,7 +1139,6 @@ export default function App() {
   const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
   const [repeatDraft, setRepeatDraft] = useState<RepeatPreset>('none');
   const [loaded, setLoaded] = useState(false);
-  const [pendingProdRestorePrompt, setPendingProdRestorePrompt] = useState(false);
   const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
@@ -1243,7 +1242,6 @@ export default function App() {
   const autoBackupInFlightRef = useRef(false);
   const autoBackupFailedStateKeyRef = useRef<string | null>(null);
   const autoBackupStateKeyRef = useRef<string | null>(null);
-  const prodRestorePromptShownRef = useRef(false);
   todosRef.current = todos;
   filterColorsRef.current = filterColors;
   loadedRef.current = loaded;
@@ -1304,18 +1302,12 @@ export default function App() {
 
       if (!isDevAppVariant) {
         if (storedTodos.length === 0 || hasOnlyInitialSeedTodos(storedTodos)) {
-          const shouldPromptRestore = !initialSeeded || storedTodos.length > 0;
-
           if (storedTodos.length > 0) {
             await localTodoStore.replaceAll([]);
           }
 
           if (!initialSeeded) {
             await localTodoStore.markInitialSeeded();
-          }
-
-          if (alive && shouldPromptRestore) {
-            setPendingProdRestorePrompt(true);
           }
 
           return [];
@@ -5204,44 +5196,6 @@ export default function App() {
     loaded,
     settingsLoaded,
     uploadBackupWithToken,
-  ]);
-
-  useEffect(() => {
-    if (
-      isDevAppVariant ||
-      !loaded ||
-      !pendingProdRestorePrompt ||
-      prodRestorePromptShownRef.current ||
-      !googleDriveActionReady
-    ) {
-      return;
-    }
-
-    prodRestorePromptShownRef.current = true;
-
-    Alert.alert(
-      'Restore production backup?',
-      'No default items were added. Restore your Google Drive backup now?',
-      [
-        {
-          onPress: () => setPendingProdRestorePrompt(false),
-          style: 'cancel',
-          text: 'Start clean',
-        },
-        {
-          onPress: () => {
-            setPendingProdRestorePrompt(false);
-            restoreFromGoogleDrive().catch(() => undefined);
-          },
-          text: 'Restore',
-        },
-      ],
-    );
-  }, [
-    googleDriveActionReady,
-    loaded,
-    pendingProdRestorePrompt,
-    restoreFromGoogleDrive,
   ]);
 
   const scrollTodoAboveMenu = useCallback((id: string) => {

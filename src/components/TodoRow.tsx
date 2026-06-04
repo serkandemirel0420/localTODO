@@ -1316,6 +1316,7 @@ const styles = StyleSheet.create({
     color: THEME_TEXT,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
+    includeFontPadding: false,
     lineHeight: 21,
   },
   textDone: {

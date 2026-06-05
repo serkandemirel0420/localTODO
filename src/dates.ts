@@ -259,11 +259,11 @@ export const formatRemainingDaysLabel = (
   }
 
   if (dayOffset === 0) {
-    return '0 days';
+    return 'Today';
   }
 
   if (dayOffset === 1) {
-    return '1 day';
+    return 'Tomorrow';
   }
 
   if (dayOffset === -1) {

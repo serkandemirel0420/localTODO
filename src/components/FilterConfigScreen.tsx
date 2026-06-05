@@ -61,7 +61,7 @@ const THEME_ACCENT = '#4C78FF';
 const THEME_ACCENT_SOFT = '#E8EEFF';
 const SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const OPTION_ROW_HEIGHT = 48;
-const FILTER_CONFIG_ONE_HANDED_SCROLL_RATIO = 0.35;
+const FILTER_CONFIG_ONE_HANDED_SCROLL_RATIO = 0.7;
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 8 : 0;
 
 export type FilterConfigListItem = {
@@ -494,7 +494,7 @@ export const FilterConfigScreen = ({
                 <Text style={styles.optionLabel}>Show days remaining</Text>
                 <Text style={styles.dateDisplayModeSubtitle}>
                   {dateLabelDisplayMode === 'remaining'
-                    ? '0 days, 1 day, 3 days…'
+                    ? 'Today, Tomorrow, 3 days…'
                     : 'Today, Tomorrow, Jun 5…'}
                 </Text>
               </View>

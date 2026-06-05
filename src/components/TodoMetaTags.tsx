@@ -30,6 +30,7 @@ import { formatListLabel } from '../todos';
 const FONT_MEDIUM = '500' as const;
 const REMINDER_STATUS_COLOR = '#4C78FF';
 const REPEAT_STATUS_COLOR = '#2F6F62';
+const PIN_STATUS_COLOR = '#4C78FF';
 
 type MetaTagDescriptor = {
   displayLabel: string;
@@ -42,7 +43,7 @@ type StatusIconDescriptor = {
   accessibilityLabel: string;
   color: string;
   iconName: React.ComponentProps<typeof Ionicons>['name'];
-  id: 'reminder' | 'repeat';
+  id: 'reminder' | 'repeat' | 'pin';
 };
 
 type TodoMetaTagsProps = {
@@ -53,6 +54,7 @@ type TodoMetaTagsProps = {
   done?: boolean;
   filterColors: FilterColorSettings;
   listLabel?: string;
+  pinned?: boolean;
   priorityLabel?: string;
   reminderValues?: string[];
   showOverdueMetaTags?: boolean;
@@ -212,6 +214,7 @@ function buildMetaTags(
 
 function buildStatusIcons(
   reminderValues: string[] | undefined,
+  pinned: boolean | undefined,
 ): StatusIconDescriptor[] {
   const { time, repeat } = decodeTodoReminder(reminderValues ?? []);
   const icons: StatusIconDescriptor[] = [];
@@ -234,6 +237,15 @@ function buildStatusIcons(
     });
   }
 
+  if (pinned) {
+    icons.push({
+      accessibilityLabel: 'Pinned todo',
+      color: PIN_STATUS_COLOR,
+      iconName: 'pin',
+      id: 'pin',
+    });
+  }
+
   return icons;
 }
 
@@ -245,6 +257,7 @@ function TodoMetaTagsComponent({
   done,
   filterColors,
   listLabel,
+  pinned,
   priorityLabel,
   reminderValues,
   showOverdueMetaTags = true,
@@ -260,7 +273,7 @@ function TodoMetaTagsComponent({
     priorityLabel,
     createdAt,
   );
-  const statusIcons = buildStatusIcons(reminderValues);
+  const statusIcons = buildStatusIcons(reminderValues, pinned);
 
   if (tags.length === 0 && statusIcons.length === 0) {
     return null;

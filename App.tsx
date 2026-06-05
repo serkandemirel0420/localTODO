@@ -461,6 +461,7 @@ const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
 const MENU_DISMISS_RELEASE = 52;
+const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 116;
 
 const formatTodoDetailDraftContentForEditing = (content: string) => {
   const normalized = normalizeTodoContent(content);
@@ -559,6 +560,8 @@ const buildActiveFilterItems = (
 type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
 
 type CreateDrawerPicker = 'date' | 'list' | 'priority';
+const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
+const CREATE_DRAWER_NO_LIST_LABEL = '--';
 
 const getDefaultCreateDraftFilters = (
   listMenuTree: ListMenuNode[],
@@ -577,13 +580,14 @@ const getCreateTodoFilters = (
   const normalized = normalizeTodoFilters(filters);
   const knownListLabels = new Set(collectListNodeLabels(listMenuTree));
   const listLabel = normalized.list.find((label) => knownListLabels.has(label));
+  const hasUnknownListLabel = normalized.list.some((label) => !knownListLabels.has(label));
   const priorityLabel = normalized.priority.find((label) => (
     label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
   ));
 
   return {
     date: normalized.date[0] ? [normalized.date[0]] : [],
-    list: listLabel ? [listLabel] : fallback.list,
+    list: listLabel ? [listLabel] : hasUnknownListLabel ? fallback.list : [],
     priority: priorityLabel ? [priorityLabel] : [],
     reminder: [...normalized.reminder],
   };
@@ -617,6 +621,7 @@ const getRememberedCreateDraftFilters = (
   return {
     ...normalized,
     date: normalized.date[0] || hasRememberedFilters ? normalized.date : fallback.date,
+    list: normalized.list[0] || hasRememberedFilters ? normalized.list : fallback.list,
     reminder: [...normalized.reminder],
   };
 };
@@ -1105,6 +1110,12 @@ export default function App() {
 
     return baseMaxHeight;
   }, [keyboardOverlayInset, windowHeight]);
+  const deletedTodoDetailCardMaxHeight = useMemo(() => {
+    const verticalReserve = (TOP_SAFE_GAP + 24) * 2;
+    const availableHeight = Math.max(220, windowHeight - verticalReserve);
+
+    return Math.min(420, availableHeight, Math.max(260, Math.round(availableHeight * 0.72)));
+  }, [windowHeight]);
   const todoDetailContentInputMaxHeight = useMemo(() => {
     const baseMaxHeight = Math.max(176, Math.round(windowHeight * 0.42));
 
@@ -2412,7 +2423,11 @@ export default function App() {
     }
 
     if (createDrawerPicker === 'list') {
-      return Math.max(120, windowHeight * 0.5);
+      return Math.max(
+        88,
+        Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO) -
+          CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT,
+      );
     }
 
     return Math.max(120, windowHeight * 0.42);
@@ -2528,7 +2543,7 @@ export default function App() {
     if (createDrawerPicker === 'list') {
       const tree =
         listOrderMode === 'alphabetical' ? sortListMenuTree(listMenuTree) : listMenuTree;
-      return tree.map((node) => node.label);
+      return [CREATE_DRAWER_NO_LIST_PICKER_VALUE, ...tree.map((node) => node.label)];
     }
 
     if (createDrawerPicker === 'date') {
@@ -2547,7 +2562,10 @@ export default function App() {
     [createDraftFilters.date, dateLabelDisplayMode],
   );
 
-  const createDrawerListLabel = createDraftFilters.list[0] ?? 'Inbox';
+  const createDrawerListLabel = createDraftFilters.list[0] ?? CREATE_DRAWER_NO_LIST_LABEL;
+  const createDrawerListAccessibilityLabel = createDraftFilters.list[0]
+    ? `List: ${createDrawerListLabel}`
+    : 'List: No list';
   const createDrawerListPickerOpen = createDrawerPicker === 'list';
   const createDrawerListPickerHalfSheet =
     createDrawerListPickerOpen && keyboardOverlayInset === 0;
@@ -2558,6 +2576,8 @@ export default function App() {
   const createDrawerDateActive = createDraftFilters.date.length > 0
     || hasTodoReminderTime(createDraftFilters.reminder)
     || hasTodoRepeat(createDraftFilters.reminder);
+  const createDrawerListActive = createDraftFilters.list.length > 0;
+  const createDrawerPriorityActive = createDraftFilters.priority.length > 0;
 
   const toggleCreateDraftPinned = useCallback(() => {
     setCreateDraftPinned((current) => !current);
@@ -2915,17 +2935,86 @@ export default function App() {
     Haptics.selectionAsync().catch(() => undefined);
   }, []);
 
+  const clearCreateDraftList = useCallback((closePicker = false) => {
+    setCreateDraftFilters((current) => ({
+      ...current,
+      list: [],
+    }));
+    if (closePicker) {
+      setCreateDrawerPicker(null);
+    }
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
+  const clearCreateDraftPriority = useCallback(() => {
+    setCreateDraftPriorityFromPicker(false);
+    setCreateDraftFilters((current) => ({
+      ...current,
+      priority: [],
+    }));
+    Haptics.selectionAsync().catch(() => undefined);
+  }, []);
+
   const handleCreateDrawerCalendarPress = useCallback(() => {
-    if (createDrawerPicker === 'date' && createDrawerDateActive) {
-      clearCreateDraftDateOptions();
+    if (createDrawerPicker === 'date') {
+      if (createDrawerDateActive) {
+        clearCreateDraftDateOptions();
+        return;
+      }
+
+      backToCreateDrawerInput();
+      Haptics.selectionAsync().catch(() => undefined);
       return;
     }
 
     openCreateDrawerPicker('date');
   }, [
+    backToCreateDrawerInput,
     clearCreateDraftDateOptions,
     createDrawerDateActive,
     createDrawerPicker,
+    openCreateDrawerPicker,
+  ]);
+
+  const handleCreateDrawerListPress = useCallback(() => {
+    if (createDrawerPicker === 'list') {
+      if (createDrawerListActive) {
+        clearCreateDraftList();
+        return;
+      }
+
+      backToCreateDrawerInput();
+      Haptics.selectionAsync().catch(() => undefined);
+      return;
+    }
+
+    openCreateDrawerPicker('list');
+  }, [
+    backToCreateDrawerInput,
+    clearCreateDraftList,
+    createDrawerListActive,
+    createDrawerPicker,
+    openCreateDrawerPicker,
+  ]);
+
+  const handleCreateDrawerPriorityPress = useCallback(() => {
+    if (createDrawerPicker === 'priority') {
+      if (createDrawerPriorityActive) {
+        clearCreateDraftPriority();
+        return;
+      }
+
+      backToCreateDrawerInput();
+      Haptics.selectionAsync().catch(() => undefined);
+      return;
+    }
+
+    openCreateDrawerPicker('priority');
+  }, [
+    backToCreateDrawerInput,
+    clearCreateDraftPriority,
+    createDrawerPicker,
+    createDrawerPriorityActive,
     openCreateDrawerPicker,
   ]);
 
@@ -6775,7 +6864,7 @@ export default function App() {
           transparent
           visible={activeDeletedTodoDetail !== null}
         >
-          <View style={styles.todoDetailModalRoot}>
+          <View style={styles.deletedTodoDetailModalRoot}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close deleted item details"
@@ -6785,7 +6874,11 @@ export default function App() {
             {activeDeletedTodoDetail ? (
               <View
                 accessibilityViewIsModal
-                style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
+                style={[
+                  styles.todoDetailCard,
+                  styles.deletedTodoDetailCard,
+                  { maxHeight: deletedTodoDetailCardMaxHeight },
+                ]}
               >
                 <View style={styles.deletedTodoDetailHeader}>
                   <View style={styles.deletedTodoDetailHeaderText}>
@@ -6809,6 +6902,7 @@ export default function App() {
                 </View>
                 <ScrollView
                   contentContainerStyle={styles.deletedTodoDetailContentContainer}
+                  style={styles.deletedTodoDetailContentScroller}
                   showsVerticalScrollIndicator={false}
                 >
                   <Text style={styles.deletedTodoDetailContentText}>
@@ -6901,6 +6995,8 @@ export default function App() {
                     ]}
                   >
                     {createDrawerPickerItems.map((label) => {
+                      const isNoListPickerItem = createDrawerPicker === 'list'
+                        && label === CREATE_DRAWER_NO_LIST_PICKER_VALUE;
                       const selected =
                         createDrawerPicker === 'priority'
                           ? (
@@ -6915,15 +7011,19 @@ export default function App() {
                               createDraftFilters.reminder,
                               isDateMenuItemSelected,
                             )
-                            : createDraftFilters[createDrawerPicker][0] === label;
-                      const displayLabel = createDrawerPicker === 'date'
-                        ? getDatePickerMenuDisplayLabel(
-                          label,
-                          createDraftFilters.date,
-                          createDraftFilters.reminder,
-                          getDateMenuDisplayLabel,
-                        )
-                        : label;
+                            : isNoListPickerItem
+                              ? createDraftFilters.list.length === 0
+                              : createDraftFilters[createDrawerPicker][0] === label;
+                      const displayLabel = isNoListPickerItem
+                        ? CREATE_DRAWER_NO_LIST_LABEL
+                        : createDrawerPicker === 'date'
+                          ? getDatePickerMenuDisplayLabel(
+                            label,
+                            createDraftFilters.date,
+                            createDraftFilters.reminder,
+                            getDateMenuDisplayLabel,
+                          )
+                          : label;
                       const showCustomDateClear = (
                         label === CUSTOM_DATE_LABEL &&
                         getSelectedCustomDateLabel(createDraftFilters.date) !== null
@@ -7010,11 +7110,19 @@ export default function App() {
                           accessibilityRole="button"
                           accessibilityState={{ selected }}
                           key={`${createDrawerPicker}-${label}`}
-                          onPress={() => (
-                            createDrawerPicker === 'date'
-                              ? handleCreateDrawerDatePress(label)
-                              : setCreateDraftFilterValue(createDrawerPicker, label)
-                          )}
+                          onPress={() => {
+                            if (createDrawerPicker === 'date') {
+                              handleCreateDrawerDatePress(label);
+                              return;
+                            }
+
+                            if (isNoListPickerItem) {
+                              clearCreateDraftList(true);
+                              return;
+                            }
+
+                            setCreateDraftFilterValue(createDrawerPicker, label);
+                          }}
                           style={({ pressed }) => [
                             styles.createDrawerPickerRow,
                             selected && styles.createDrawerPickerRowSelected,
@@ -7107,7 +7215,7 @@ export default function App() {
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Set priority"
-                    onPress={() => openCreateDrawerPicker('priority')}
+                    onPress={handleCreateDrawerPriorityPress}
                     style={({ pressed }) => [
                       styles.createDrawerToolbarButton,
                       pressed && styles.createDrawerToolbarButtonPressed,
@@ -7127,8 +7235,8 @@ export default function App() {
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={`List: ${createDrawerListLabel}`}
-                    onPress={() => openCreateDrawerPicker('list')}
+                    accessibilityLabel={createDrawerListAccessibilityLabel}
+                    onPress={handleCreateDrawerListPress}
                     style={({ pressed }) => [
                       styles.createDrawerInboxChip,
                       pressed && styles.createDrawerToolbarButtonPressed,
@@ -7300,7 +7408,7 @@ export default function App() {
                       <View style={styles.settingsRowTextWrap}>
                         <Text style={styles.settingsRowTitle}>Show days remaining</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          0 days, 1 day, 3 days… instead of Today, Tomorrow, Jun 5.
+                          Today, Tomorrow, 3 days… instead of exact calendar dates.
                         </Text>
                       </View>
                       <View
@@ -8036,6 +8144,12 @@ const styles = StyleSheet.create({
   todoDetailModalRoot: {
     flex: 1,
   },
+  deletedTodoDetailModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingVertical: TOP_SAFE_GAP + 24,
+  },
   todoDetailOverlay: {
     bottom: 0,
     elevation: 10,
@@ -8075,6 +8189,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.14,
     shadowRadius: 24,
     elevation: 10,
+  },
+  deletedTodoDetailCard: {
+    alignSelf: 'center',
+    maxWidth: 430,
+    width: '100%',
   },
   todoDetailHeader: {
     alignItems: 'flex-start',
@@ -8185,6 +8304,9 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
     paddingHorizontal: 18,
     paddingTop: 16,
+  },
+  deletedTodoDetailContentScroller: {
+    flexShrink: 1,
   },
   deletedTodoDetailContentText: {
     color: '#3A332E',

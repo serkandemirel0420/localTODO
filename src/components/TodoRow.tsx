@@ -885,12 +885,7 @@ function TodoRowComponent({
               isGroupedLayout && styles.contentColumnGrouped,
             ]}
           >
-            <View
-              style={[
-                styles.titleBlock,
-                item.pinned && styles.titleBlockPinned,
-              ]}
-            >
+            <View style={styles.titleBlock}>
               <Text
                 ellipsizeMode="tail"
                 numberOfLines={titleNumberOfLines}
@@ -903,14 +898,6 @@ function TodoRowComponent({
               >
                 {highlightedTitlePreview}
               </Text>
-              {item.pinned ? (
-                <Ionicons
-                  color={item.done || isPendingDelete ? THEME_TEXT_SECONDARY : THEME_ACCENT}
-                  name="pin"
-                  size={14}
-                  style={styles.pinnedIcon}
-                />
-              ) : null}
             </View>
             {contentPreview ? (
               <Text
@@ -936,6 +923,7 @@ function TodoRowComponent({
                 done={item.done}
                 filterColors={filterColors}
                 listLabel={listStatusLabel || undefined}
+                pinned={item.pinned}
                 priorityLabel={
                   priorityStatusLabel && priorityStatusLabel !== 'None'
                     ? priorityStatusLabel
@@ -1346,9 +1334,6 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: '100%',
   },
-  titleBlockPinned: {
-    paddingRight: 22,
-  },
   text: {
     color: THEME_TEXT,
     fontSize: 16,
@@ -1373,11 +1358,6 @@ const styles = StyleSheet.create({
   contentDone: {
     color: THEME_TEXT_SECONDARY,
     textDecorationLine: 'line-through',
-  },
-  pinnedIcon: {
-    position: 'absolute',
-    right: 0,
-    top: 3,
   },
   searchHighlight: {
     backgroundColor: 'rgba(255, 211, 87, 0.55)',

@@ -38,7 +38,11 @@ import {
   PRIORITY_MENU_ITEMS,
 } from '../todoOptions';
 import { getEffectiveTodoDateLabels } from '../todoDates';
-import { TODO_ROW_TITLE_MAX_CHARS, type Todo } from '../todos';
+import {
+  getTodoRowTitleAreaWidth,
+  TODO_ROW_TITLE_MAX_CHARS,
+  type Todo,
+} from '../todos';
 
 const THEME_CARD = '#FFFFFF';
 const THEME_BORDER = '#E5E5EA';
@@ -69,8 +73,10 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
+const TODO_ROW_TITLE_ESTIMATED_CHAR_WIDTH = 8.8;
 const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
 const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
+const ZERO_WIDTH_SPACER_PATTERN = /[\u200B\uFEFF]/g;
 
 type SearchHighlightRange = {
   end: number;
@@ -524,7 +530,7 @@ function TodoRowComponent({
   const priorityRailTheme = priorityStatusLabel && priorityStatusLabel !== 'None'
     ? getFilterColorTheme(filterColors, 'priorityBorder', priorityStatusLabel)
     : null;
-  const content = item.content.trim();
+  const content = item.content.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
   const displayTitle = useMemo(
     () => item.text.trim().replace(/\s+/g, ' '),
@@ -558,16 +564,21 @@ function TodoRowComponent({
     priorityRailTheme ? 'priority' : 'plain',
     displayTitle,
   ].join('|');
-  const shouldMeasureTitleLines = !isGroupedLayout;
-  const titleNumberOfLines = shouldMeasureTitleLines
-    ? (singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2)
-    : 2;
+  const titleAreaWidth = getTodoRowTitleAreaWidth(viewportWidth, {
+    grouped: isGroupedLayout,
+    hasPriorityRail: Boolean(priorityRailTheme),
+    pinned: item.pinned,
+  });
+  const estimatedTitleCharsPerLine = Math.max(
+    12,
+    Math.floor(titleAreaWidth / TODO_ROW_TITLE_ESTIMATED_CHAR_WIDTH),
+  );
+  const isClearlySingleLineTitle = Array.from(displayTitle).length <= estimatedTitleCharsPerLine;
+  const titleNumberOfLines =
+    isClearlySingleLineTitle || singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2;
+  const hasDisplayTitle = displayTitle.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim().length > 0;
 
   const handleTitleTextLayout = useCallback((event: TextLayoutEvent) => {
-    if (!shouldMeasureTitleLines) {
-      return;
-    }
-
     const lines = event.nativeEvent.lines ?? [];
     const visibleLineCount = lines.filter((line) => (line.text ?? '').trim()).length;
     const measuredLineCount = visibleLineCount || lines.length;
@@ -580,7 +591,7 @@ function TodoRowComponent({
 
       return currentKey === titleMeasurementKey ? '' : currentKey;
     });
-  }, [shouldMeasureTitleLines, titleMeasurementKey]);
+  }, [titleMeasurementKey]);
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -1119,20 +1130,22 @@ function TodoRowComponent({
               isGroupedLayout && styles.contentColumnGrouped,
             ]}
           >
-            <View style={styles.titleBlock}>
-              <Text
-                ellipsizeMode="tail"
-                numberOfLines={titleNumberOfLines}
-                onTextLayout={shouldMeasureTitleLines ? handleTitleTextLayout : undefined}
-                style={[
-                  styles.text,
-                  isVisuallyDone && styles.textDone,
-                  isPendingDelete && styles.textPendingDelete,
-                ]}
-              >
-                {highlightedTitlePreview}
-              </Text>
-            </View>
+            {hasDisplayTitle ? (
+              <View style={styles.titleBlock}>
+                <Text
+                  ellipsizeMode="tail"
+                  numberOfLines={titleNumberOfLines}
+                  onTextLayout={handleTitleTextLayout}
+                  style={[
+                    styles.text,
+                    isVisuallyDone && styles.textDone,
+                    isPendingDelete && styles.textPendingDelete,
+                  ]}
+                >
+                  {highlightedTitlePreview}
+                </Text>
+              </View>
+            ) : null}
             {contentPreview ? (
               <Text
                 ellipsizeMode="tail"
@@ -1398,8 +1411,8 @@ const styles = StyleSheet.create({
   swipeableChildrenGrouped: {
     backgroundColor: THEME_CARD,
     borderRadius: 0,
-    flex: 1,
-    flexGrow: 1,
+    flex: 0,
+    flexGrow: 0,
     minWidth: 0,
     overflow: 'visible',
     width: '100%',
@@ -1611,7 +1624,6 @@ const styles = StyleSheet.create({
   contentColumn: {
     alignItems: 'stretch',
     alignSelf: 'stretch',
-    flex: 1,
     flexShrink: 1,
     minWidth: 0,
     paddingRight: TODO_ROW_TEXT_RIGHT_INSET,

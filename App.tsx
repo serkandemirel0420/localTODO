@@ -178,7 +178,9 @@ import {
   REMINDER_PICKER_LABEL,
   REPEATING_ITEMS_FILTER_LABEL,
   REPEATING_ITEMS_FILTER_VALUE,
+  removeRepeatingItemsFilter,
   REPEAT_PICKER_LABEL,
+  toggleRepeatingItemsFilterValue,
   type ReminderTime,
   type RepeatPreset,
 } from './src/reminders';
@@ -196,6 +198,11 @@ WebBrowser.maybeCompleteAuthSession();
 
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
+
+type CompletionUndoState = {
+  id: number;
+  itemIds: string[];
+};
 
 type VisibleListMenuItem = {
   depth: number;
@@ -380,7 +387,7 @@ const countDateMenuSelections = (
   includeReminderRows: boolean,
 ) =>
   filters.date.length +
-  (hasRepeatingItemsFilter(filters.reminder) ? 1 : 0) +
+  (!includeReminderRows && hasRepeatingItemsFilter(filters.reminder) ? 1 : 0) +
   (includeReminderRows && hasTodoReminderTime(filters.reminder) ? 1 : 0) +
   (includeReminderRows && hasTodoRepeat(filters.reminder) ? 1 : 0);
 
@@ -521,6 +528,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
+const COMPLETION_UNDO_DURATION_MS = 3000;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
@@ -616,12 +624,13 @@ const getCreateTodoFilters = (
   const priorityLabel = normalized.priority.find((label) => (
     label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
   ));
+  const reminderValues = removeRepeatingItemsFilter(normalized.reminder);
 
   return {
     date: normalized.date[0] ? [normalized.date[0]] : [],
     list: listLabel ? [listLabel] : hasUnknownListLabel ? fallback.list : [],
     priority: priorityLabel ? [priorityLabel] : [],
-    reminder: [...normalized.reminder],
+    reminder: reminderValues,
   };
 };
 
@@ -631,10 +640,11 @@ const hasRememberedCreateDraftFilters = (
 ) => {
   const normalized = normalizeTodoFilters(filters);
   const knownListLabels = new Set(collectListNodeLabels(listMenuTree));
+  const reminderValues = removeRepeatingItemsFilter(normalized.reminder);
 
   return (
     normalized.date.length > 0 ||
-    normalized.reminder.length > 0 ||
+    reminderValues.length > 0 ||
     normalized.priority.some((label) => (
       label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
     )) ||
@@ -942,38 +952,85 @@ const formatPresetSummary = (
   return parts.join(' · ');
 };
 
+const todoMatchesDateFilterGroup = (
+  todo: Todo,
+  filters: SelectedFilters,
+  now = new Date(),
+) => {
+  const hasDateFilters = filters.date.length > 0;
+  const hasRepeatingFilter = hasRepeatingItemsFilter(filters.reminder);
+
+  if (!hasDateFilters && !hasRepeatingFilter) {
+    return true;
+  }
+
+  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
+  if (hasRepeatingFilter && todoRepeats) {
+    return true;
+  }
+
+  if (!hasDateFilters || todoRepeats) {
+    return false;
+  }
+
+  return todoMatchesSelectedDateFilters(
+    getEffectiveTodoDateLabels(todo, now),
+    filters.date,
+    now,
+    todo.createdAt,
+  );
+};
+
 const todoMatchesFilters = (
   todo: Todo,
   filters: SelectedFilters,
   listMenuTree: ListMenuNode[],
   now = new Date(),
 ) => {
-  const matchesStandardFilters = FILTER_KEYS.every((filterKey) => {
+  return FILTER_KEYS.every((filterKey) => {
     const values = filters[filterKey];
-    if (values.length === 0) {
-      return true;
-    }
 
     if (filterKey === 'list') {
+      if (values.length === 0) {
+        return true;
+      }
+
       return todoMatchesSelectedListFilters(values, todo.filters.list, listMenuTree);
     }
 
     if (filterKey === 'date') {
-      return todoMatchesSelectedDateFilters(
-        getEffectiveTodoDateLabels(todo, now),
-        values,
-        now,
-        todo.createdAt,
-      );
+      return todoMatchesDateFilterGroup(todo, filters, now);
+    }
+
+    if (values.length === 0) {
+      return true;
     }
 
     return values.some((value) => todo.filters[filterKey].includes(value));
   });
+};
 
-  return matchesStandardFilters && (
-    !hasRepeatingItemsFilter(filters.reminder) ||
-    hasTodoRepeat(todo.filters.reminder)
-  );
+const getFiltersAfterCreateReveal = (
+  todo: Todo,
+  filters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+  now = new Date(),
+): SelectedFilters => {
+  const dateGroupMatches = todoMatchesDateFilterGroup(todo, filters, now);
+  const priorityMatches =
+    filters.priority.length === 0 ||
+    filters.priority.some((value) => todo.filters.priority.includes(value));
+
+  return {
+    date: dateGroupMatches ? [...filters.date] : [],
+    list: todoMatchesSelectedListFilters(filters.list, todo.filters.list, listMenuTree)
+      ? [...filters.list]
+      : [],
+    priority: priorityMatches ? [...filters.priority] : [],
+    reminder: !dateGroupMatches && hasRepeatingItemsFilter(filters.reminder)
+      ? removeRepeatingItemsFilter(filters.reminder)
+      : [...filters.reminder],
+  };
 };
 
 type MenuPresetSwipeRowProps = {
@@ -1228,6 +1285,7 @@ export default function App() {
   const [recentlyEditedTodoIds, setRecentlyEditedTodoIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [completionUndo, setCompletionUndo] = useState<CompletionUndoState | null>(null);
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
@@ -1288,7 +1346,7 @@ export default function App() {
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [collapseAllTodoSectionsRequest, setCollapseAllTodoSectionsRequest] = useState(0);
+  const [toggleAllTodoSectionsRequest, setToggleAllTodoSectionsRequest] = useState(0);
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
   const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
     () => cloneMetaTagVisibility(),
@@ -1327,6 +1385,8 @@ export default function App() {
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
+  const completionUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const completionUndoSequenceRef = useRef(0);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -1354,7 +1414,7 @@ export default function App() {
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastFilterNavTapRef = useRef(0);
-  const handledCollapseAllTodoSectionsRequestRef = useRef(0);
+  const handledToggleAllTodoSectionsRequestRef = useRef(0);
   const lastQuickPresetNavTapRef = useRef({ presetId: '', timestamp: 0 });
   const quickPresetNavPressInRef = useRef<string | null>(null);
   const listMenuOpen = menuMode !== null;
@@ -1689,6 +1749,87 @@ export default function App() {
     startEditedTodoHighlights(targetIds);
   }, [startEditedTodoHighlights]);
 
+  const clearCompletionUndoToast = useCallback(() => {
+    if (completionUndoTimerRef.current) {
+      clearTimeout(completionUndoTimerRef.current);
+      completionUndoTimerRef.current = null;
+    }
+
+    setCompletionUndo(null);
+  }, []);
+
+  const scheduleCompletionUndoDismiss = useCallback((toastId: number) => {
+    if (completionUndoTimerRef.current) {
+      clearTimeout(completionUndoTimerRef.current);
+    }
+
+    completionUndoTimerRef.current = setTimeout(() => {
+      completionUndoTimerRef.current = null;
+      setCompletionUndo((current) => (
+        current?.id === toastId ? null : current
+      ));
+    }, COMPLETION_UNDO_DURATION_MS);
+  }, []);
+
+  const showCompletionUndoToast = useCallback((id: string) => {
+    const toastId = completionUndoSequenceRef.current + 1;
+    completionUndoSequenceRef.current = toastId;
+
+    setCompletionUndo((current) => {
+      const itemIds = current?.itemIds.includes(id)
+        ? current.itemIds
+        : [...(current?.itemIds ?? []), id];
+
+      return { id: toastId, itemIds };
+    });
+    scheduleCompletionUndoDismiss(toastId);
+  }, [scheduleCompletionUndoDismiss]);
+
+  const removeCompletionUndoItem = useCallback((id: string) => {
+    setCompletionUndo((current) => {
+      if (!current?.itemIds.includes(id)) {
+        return current;
+      }
+
+      const itemIds = current.itemIds.filter((itemId) => itemId !== id);
+
+      return itemIds.length > 0 ? { ...current, itemIds } : null;
+    });
+  }, []);
+
+  const undoCompletionDone = useCallback(() => {
+    if (!completionUndo?.itemIds.length) {
+      return;
+    }
+
+    const targetIds = new Set(completionUndo.itemIds);
+    const restoredTodos = todosRef.current
+      .filter((todo) => (
+        targetIds.has(todo.id) &&
+        todo.done &&
+        !pendingDeleteIdsRef.current.has(todo.id)
+      ))
+      .map((todo) => ({ ...todo, done: false }));
+
+    if (restoredTodos.length === 0) {
+      clearCompletionUndoToast();
+      return;
+    }
+
+    const restoredById = new Map(restoredTodos.map((todo) => [todo.id, todo]));
+
+    setTodos((current) => current.map((todo) => (
+      restoredById.get(todo.id) ?? todo
+    )));
+    restoredTodos.forEach((todo) => {
+      localTodoStore.updateDone(todo.id, false).catch(() => undefined);
+      syncTodoAlarm(todo).catch(() => undefined);
+    });
+    highlightEditedTodos(restoredById.keys());
+    clearCompletionUndoToast();
+    triggerSubtleHaptic();
+  }, [clearCompletionUndoToast, completionUndo, highlightEditedTodos]);
+
   const flushPendingMenuEditedTodoHighlights = useCallback(() => {
     const targetIds = [...pendingMenuEditedTodoIdsRef.current]
       .filter((id) => !pendingDeleteIdsRef.current.has(id));
@@ -1776,6 +1917,10 @@ export default function App() {
     () => () => {
       editedTodoHighlightTimersRef.current.forEach(clearTimeout);
       editedTodoHighlightTimersRef.current.clear();
+      if (completionUndoTimerRef.current) {
+        clearTimeout(completionUndoTimerRef.current);
+        completionUndoTimerRef.current = null;
+      }
       repeatingTodoCompletionTimersRef.current.forEach(clearTimeout);
       repeatingTodoCompletionTimersRef.current.clear();
       if (suppressHeaderSearchFocusTimerRef.current) {
@@ -2633,18 +2778,6 @@ export default function App() {
       return;
     }
 
-    const exists = todos.some(
-      (todo) => (
-        !pendingDeleteIds.has(todo.id) &&
-        normalizeTodoText(todo.text) === normalizeTodoText(text)
-      ),
-    );
-    if (exists) {
-      Keyboard.dismiss();
-      closeCreateDrawer();
-      return;
-    }
-
     const todoFilters = getCreateTodoFilters(
       listMenuTree,
       createDraftFilters,
@@ -2653,9 +2786,23 @@ export default function App() {
       listMenuTree,
       todoFilters,
     );
-    const todo = makeTodo(text, todoFilters, content, Date.now(), createDraftPinned);
+    const createdAt = Date.now();
+    const todo = makeTodo(text, todoFilters, content, createdAt, createDraftPinned);
+    const nextSelectedFilters = getFiltersAfterCreateReveal(
+      todo,
+      selectedFilters,
+      listMenuTree,
+      new Date(createdAt),
+    );
 
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
+    if (!filtersEqual(selectedFilters, nextSelectedFilters)) {
+      setSelectedFilters(nextSelectedFilters);
+    }
+    if (query.trim()) {
+      setQuery('');
+      setSearchResultIds(null);
+    }
     setTodos((current) => [todo, ...current]);
     highlightNewlyCreatedTodo(todo.id);
     localTodoStore.upsert(todo).catch(() => undefined);
@@ -2666,17 +2813,16 @@ export default function App() {
     resetCreateDrawerState(nextLastCreateTodoFilters);
     triggerSubtleHaptic();
   }, [
-    closeCreateDrawer,
     createDraftContent,
     createDraftFilters,
     createDraftPinned,
     createDraftText,
     highlightNewlyCreatedTodo,
     listMenuTree,
-    pendingDeleteIds,
+    query,
     resetCreateDrawerState,
+    selectedFilters,
     todoTextMaxLength,
-    todos,
   ]);
 
   const createDrawerCanSubmit = useMemo(
@@ -2874,6 +3020,10 @@ export default function App() {
     }
 
     const updatedTodo = todosRef.current.find((todo) => todo.id === id);
+    if (!done) {
+      removeCompletionUndoItem(id);
+    }
+
     const repeatedNextTodo = done && updatedTodo
       ? advanceRepeatingTodoAfterDone(updatedTodo)
       : null;
@@ -2904,6 +3054,9 @@ export default function App() {
         localTodoStore.updateDone(id, done).catch(() => undefined);
       }
       syncTodoAlarm(nextTodo).catch(() => undefined);
+      if (done && updatedTodo && !updatedTodo.done && nextTodo.done) {
+        showCompletionUndoToast(id);
+      }
     } else if (done) {
       cancelTodoAlarm(id).catch(() => undefined);
     }
@@ -2911,7 +3064,9 @@ export default function App() {
     hideDoneTodosForCurrentView,
     highlightEditedTodos,
     pendingDeleteIds,
+    removeCompletionUndoItem,
     scheduleRepeatingTodoRollForward,
+    showCompletionUndoToast,
   ]);
 
   const deleteSelectedTodos = useCallback(() => {
@@ -3742,13 +3897,13 @@ export default function App() {
   );
   useEffect(() => {
     if (
-      collapseAllTodoSectionsRequest === 0 ||
-      handledCollapseAllTodoSectionsRequestRef.current === collapseAllTodoSectionsRequest
+      toggleAllTodoSectionsRequest === 0 ||
+      handledToggleAllTodoSectionsRequestRef.current === toggleAllTodoSectionsRequest
     ) {
       return;
     }
 
-    handledCollapseAllTodoSectionsRequestRef.current = collapseAllTodoSectionsRequest;
+    handledToggleAllTodoSectionsRequestRef.current = toggleAllTodoSectionsRequest;
     const sectionIds = todoListRows.flatMap((row) => (
       row.type === 'section' ? [row.id] : []
     ));
@@ -3759,19 +3914,28 @@ export default function App() {
 
     todoListRef.current?.clearLayoutCacheOnUpdate();
     setCollapsedTodoGroupIds((current) => {
+      const shouldExpandAll = sectionIds.every((sectionId) => current.has(sectionId));
       const next = new Set(current);
       let changed = false;
 
-      sectionIds.forEach((sectionId) => {
-        if (!next.has(sectionId)) {
-          next.add(sectionId);
-          changed = true;
-        }
-      });
+      if (shouldExpandAll) {
+        sectionIds.forEach((sectionId) => {
+          if (next.delete(sectionId)) {
+            changed = true;
+          }
+        });
+      } else {
+        sectionIds.forEach((sectionId) => {
+          if (!next.has(sectionId)) {
+            next.add(sectionId);
+            changed = true;
+          }
+        });
+      }
 
       return changed ? next : current;
     });
-  }, [collapseAllTodoSectionsRequest, todoListRows]);
+  }, [toggleAllTodoSectionsRequest, todoListRows]);
   const pendingDeleteKey = useMemo(
     () => [...pendingDeleteIds].sort().join('|'),
     [pendingDeleteIds],
@@ -4416,9 +4580,7 @@ export default function App() {
   const toggleRepeatingItemsFilter = useCallback(() => {
     setSelectedFilters((current) => ({
       ...current,
-      reminder: hasRepeatingItemsFilter(current.reminder)
-        ? []
-        : [REPEATING_ITEMS_FILTER_VALUE],
+      reminder: toggleRepeatingItemsFilterValue(current.reminder),
     }));
     triggerSubtleHaptic();
   }, []);
@@ -4527,7 +4689,7 @@ export default function App() {
   const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
     const removeValue = (current: SelectedFilters) => {
       if (value === REPEATING_ITEMS_FILTER_VALUE) {
-        return { ...current, reminder: [] };
+        return { ...current, reminder: removeRepeatingItemsFilter(current.reminder) };
       }
 
       const formattedValue = filterKey === 'date'
@@ -4721,7 +4883,9 @@ export default function App() {
         };
 
         if (filterKey === 'date') {
-          nextFilters.reminder = [];
+          nextFilters.reminder = includeActiveTodoReminderRows
+            ? []
+            : removeRepeatingItemsFilter(current.reminder);
         }
 
         return nextFilters;
@@ -4795,7 +4959,7 @@ export default function App() {
   }, [
     clearAppliedMenuPreset,
     clearFilters,
-    hasTodoEditTargets,
+    includeActiveTodoReminderRows,
     listMenuTree,
     selectedFilters.list,
     todoGroupMode,
@@ -4978,7 +5142,7 @@ export default function App() {
     setOpenQuickPresetNavSlotNumber(slotNumber);
 
     if (isDoubleTap) {
-      setCollapseAllTodoSectionsRequest((current) => current + 1);
+      setToggleAllTodoSectionsRequest((current) => current + 1);
     }
 
     requestAnimationFrame(() => {
@@ -6597,6 +6761,23 @@ export default function App() {
           </View>
 
         </View>
+
+        {completionUndo ? (
+          <View pointerEvents="box-none" style={styles.completionUndoToastLayer}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Undo mark done"
+              onPress={undoCompletionDone}
+              style={({ pressed }) => [
+                styles.completionUndoButton,
+                pressed && styles.completionUndoButtonPressed,
+              ]}
+            >
+              <Ionicons color="#FFFFFF" name="arrow-undo" size={18} />
+              <Text style={styles.completionUndoButtonText}>Undo</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         <View style={[
           styles.bottomNav,
@@ -9018,6 +9199,7 @@ const styles = StyleSheet.create({
   mainKeyboardAvoiding: {
     flex: 1,
     minHeight: 0,
+    position: 'relative',
   },
   settingsOverlay: {
     position: 'absolute',
@@ -10084,6 +10266,42 @@ const styles = StyleSheet.create({
   },
   navSearchIcon: {
     marginRight: 8,
+  },
+  completionUndoToastLayer: {
+    alignItems: 'center',
+    bottom: BOTTOM_NAV_RESERVED_HEIGHT + 10,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    zIndex: 17,
+    elevation: 6,
+  },
+  completionUndoButton: {
+    alignItems: 'center',
+    backgroundColor: NAV_ACCENT,
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 42,
+    minWidth: 112,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  completionUndoButtonPressed: {
+    opacity: 0.82,
+    transform: [{ scale: 0.99 }],
+  },
+  completionUndoButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   bottomNav: {
     alignItems: 'stretch',

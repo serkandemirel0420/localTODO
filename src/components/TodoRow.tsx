@@ -60,8 +60,11 @@ const SWIPE_ACTION_ICON_SIZE = 24;
 const LEFT_SWIPE_ACTION_WIDTH =
   (SWIPE_ACTION_BUTTON_WIDTH * 2) + SWIPE_ACTION_GAP + (SWIPE_ACTION_EDGE_PADDING * 2);
 const RIGHT_SWIPE_ACTION_WIDTH = SWIPE_ACTION_BUTTON_WIDTH + (SWIPE_ACTION_EDGE_PADDING * 2);
-const LEFT_SWIPE_OPEN_DISTANCE = 66;
+const LEFT_SWIPE_OPEN_DISTANCE = 44;
 const RIGHT_SWIPE_OPEN_DISTANCE = 38;
+const SWIPE_DRAG_START_DISTANCE = 8;
+const GROUPED_SWIPE_DRAG_START_DISTANCE = 6;
+const GROUPED_SWIPE_DIRECTION_RATIO = 1.1;
 const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
@@ -121,15 +124,22 @@ const GroupedTodoSwipeContainer = React.forwardRef<
   const translateX = useRef(new Animated.Value(0)).current;
   const controllerRef = useRef<TodoSwipeController | null>(null);
   const isOpenRef = useRef(false);
+  const swipeAnimationRunRef = useRef(0);
   const [actionsVisible, setActionsVisible] = useState(false);
 
   const close = useCallback(() => {
+    const runId = swipeAnimationRunRef.current + 1;
+    swipeAnimationRunRef.current = runId;
     Animated.spring(translateX, {
       bounciness: 0,
       speed: 24,
       toValue: 0,
       useNativeDriver: true,
     }).start(() => {
+      if (swipeAnimationRunRef.current !== runId) {
+        return;
+      }
+
       if (isOpenRef.current && controllerRef.current) {
         isOpenRef.current = false;
         onClose(controllerRef.current);
@@ -145,10 +155,12 @@ const GroupedTodoSwipeContainer = React.forwardRef<
   const panResponder = useMemo(() => PanResponder.create({
     onMoveShouldSetPanResponderCapture: (_event, gesture) => (
       enabled &&
-      Math.abs(gesture.dx) > 8 &&
-      Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2
+      Math.abs(gesture.dx) > GROUPED_SWIPE_DRAG_START_DISTANCE &&
+      Math.abs(gesture.dx) > Math.abs(gesture.dy) * GROUPED_SWIPE_DIRECTION_RATIO
     ),
     onPanResponderGrant: () => {
+      swipeAnimationRunRef.current += 1;
+      translateX.stopAnimation();
       onStart();
       setActionsVisible(true);
     },
@@ -160,6 +172,8 @@ const GroupedTodoSwipeContainer = React.forwardRef<
     },
     onPanResponderRelease: (_event, gesture) => {
       if (gesture.dx > LEFT_SWIPE_OPEN_DISTANCE) {
+        swipeAnimationRunRef.current += 1;
+        setActionsVisible(true);
         Animated.spring(translateX, {
           bounciness: 2,
           speed: 18,
@@ -172,11 +186,17 @@ const GroupedTodoSwipeContainer = React.forwardRef<
       }
 
       if (gesture.dx < -RIGHT_SWIPE_OPEN_DISTANCE) {
+        const runId = swipeAnimationRunRef.current + 1;
+        swipeAnimationRunRef.current = runId;
         Animated.timing(translateX, {
           duration: 90,
           toValue: 0,
           useNativeDriver: true,
         }).start(() => {
+          if (swipeAnimationRunRef.current !== runId) {
+            return;
+          }
+
           setActionsVisible(false);
           onMenu();
         });
@@ -195,9 +215,11 @@ const GroupedTodoSwipeContainer = React.forwardRef<
     }
   }, [onClose]);
 
+  const shouldRenderActions = actionsVisible || isOpenRef.current;
+
   return (
     <View style={styles.lightweightSwipeContainer}>
-      {actionsVisible ? (
+      {shouldRenderActions ? (
         <>
           <View style={styles.lightweightSwipeActionsLeft}>
             <GestureTouchableOpacity
@@ -426,6 +448,7 @@ export type TodoRowProps = {
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
   isSelected?: boolean;
   item: Todo;
+  isCompletionFeedback?: boolean;
   isMenuTarget: boolean;
   isMenuTargetHighlighted?: boolean;
   isNewlyCreated?: boolean;
@@ -451,6 +474,7 @@ function TodoRowComponent({
   dateLabelDisplayMode = 'exact',
   filterColors,
   hiddenMetaTagKinds = [],
+  isCompletionFeedback = false,
   isSelected = false,
   item,
   isMenuTarget,
@@ -522,8 +546,9 @@ function TodoRowComponent({
   const suppressChangeFill = isMenuTarget;
   const isHighlightedForCreate = isNewlyCreated && !suppressChangeFill;
   const isHighlightedForEdit =
-    (isRecentlyEdited || isHighlightedForCreate) && !suppressChangeFill;
+    (isRecentlyEdited || isHighlightedForCreate || isCompletionFeedback) && !suppressChangeFill;
   const isHighlightedForSelection = selectMode && isSelected;
+  const isVisuallyDone = item.done || isCompletionFeedback;
   const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
   const titleMeasurementKey = [
@@ -598,7 +623,7 @@ function TodoRowComponent({
   }, [isGroupedLayout]);
 
   const toggleSelection = useCallback(() => {
-    if (isPendingDelete) {
+    if (isPendingDelete || isCompletionFeedback) {
       return;
     }
 
@@ -618,29 +643,37 @@ function TodoRowComponent({
     }
 
     closeOtherOpenSwipeable();
-    onSetDone(item.id, !item.done);
+    onSetDone(item.id, !isVisuallyDone);
     triggerSubtleHaptic();
   }, [
     closeOtherOpenSwipeable,
+    isCompletionFeedback,
     isPendingDelete,
-    item.done,
     item.id,
+    isVisuallyDone,
     onSetDone,
     selectMode,
     toggleSelection,
   ]);
 
   const toggleDoneFromSwipe = useCallback(() => {
-    if (isPendingDelete) {
+    if (isPendingDelete || isCompletionFeedback) {
       return;
     }
 
-    onSetDone(item.id, !item.done);
+    onSetDone(item.id, !isVisuallyDone);
     triggerSubtleHaptic();
     requestAnimationFrame(() => {
       closeSwipeable();
     });
-  }, [closeSwipeable, isPendingDelete, item.done, item.id, onSetDone]);
+  }, [
+    closeSwipeable,
+    isCompletionFeedback,
+    isPendingDelete,
+    item.id,
+    isVisuallyDone,
+    onSetDone,
+  ]);
 
   const openTodoMenu = useCallback(() => {
     if (isPendingDelete) {
@@ -779,6 +812,21 @@ function TodoRowComponent({
     [],
   );
 
+  const handleGroupedSwipeableClose = useCallback(
+    (swipeable: TodoSwipeController) => {
+      handleSwipeableClose('left', swipeable);
+    },
+    [handleSwipeableClose],
+  );
+
+  const handleGroupedSwipeableOpen = useCallback(
+    (swipeable: TodoSwipeController) => {
+      handleSwipeableWillOpen('left');
+      handleSwipeableOpen('left', swipeable);
+    },
+    [handleSwipeableOpen, handleSwipeableWillOpen],
+  );
+
   useEffect(
     () => () => {
       if (
@@ -799,8 +847,8 @@ function TodoRowComponent({
 
       const trackRevealStyle = {
         opacity: progress.interpolate({
-          inputRange: [0, 0.35, 1],
-          outputRange: [0, 0.85, 1],
+          inputRange: [0, 0.18, 1],
+          outputRange: [0, 1, 1],
           extrapolate: 'clamp',
         }),
       };
@@ -809,14 +857,14 @@ function TodoRowComponent({
           {
             translateX: progress.interpolate({
               inputRange: [0, 1],
-              outputRange: [-10, 0],
+              outputRange: [-6, 0],
               extrapolate: 'clamp',
             }),
           },
           {
             scale: progress.interpolate({
               inputRange: [0, 1],
-              outputRange: [0.92, 1],
+              outputRange: [0.96, 1],
               extrapolate: 'clamp',
             }),
           },
@@ -827,14 +875,14 @@ function TodoRowComponent({
           {
             translateX: progress.interpolate({
               inputRange: [0, 1],
-              outputRange: [-18, 0],
+              outputRange: [-8, 0],
               extrapolate: 'clamp',
             }),
           },
           {
             scale: progress.interpolate({
               inputRange: [0, 1],
-              outputRange: [0.88, 1],
+              outputRange: [0.96, 1],
               extrapolate: 'clamp',
             }),
           },
@@ -876,14 +924,14 @@ function TodoRowComponent({
           <Animated.View style={[styles.swipeActionSlot, doneRevealStyle]}>
             <GestureTouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={item.done ? 'Mark todo active' : 'Mark todo done'}
+              accessibilityLabel={isVisuallyDone ? 'Mark todo active' : 'Mark todo done'}
               activeOpacity={0.84}
               onPress={toggleDoneFromSwipe}
               style={styles.swipeActionButton}
             >
               <Ionicons
                 color={SWIPE_DONE}
-                name={item.done ? 'arrow-undo' : 'checkmark'}
+                name={isVisuallyDone ? 'arrow-undo' : 'checkmark'}
                 size={SWIPE_ACTION_ICON_SIZE}
               />
             </GestureTouchableOpacity>
@@ -896,6 +944,7 @@ function TodoRowComponent({
       deleteTodoFromSwipe,
       isPendingDelete,
       item.done,
+      isVisuallyDone,
       swipeActionInset,
       toggleDoneFromSwipe,
     ],
@@ -909,8 +958,8 @@ function TodoRowComponent({
 
       const trackRevealStyle = {
         opacity: progress.interpolate({
-          inputRange: [0, 0.35, 1],
-          outputRange: [0, 0.85, 1],
+          inputRange: [0, 0.18, 1],
+          outputRange: [0, 1, 1],
           extrapolate: 'clamp',
         }),
       };
@@ -989,12 +1038,12 @@ function TodoRowComponent({
         style={[
           styles.row,
           isGroupedLayout && styles.rowGrouped,
-          itemBackgroundTheme && !item.done && !isPendingDelete && {
+          itemBackgroundTheme && !isVisuallyDone && !isPendingDelete && {
             backgroundColor: itemBackgroundTheme.tint,
             borderColor: itemBackgroundTheme.border,
             shadowColor: itemBackgroundTheme.accent,
           },
-          item.pinned && !item.done && !isPendingDelete && (
+          item.pinned && !isVisuallyDone && !isPendingDelete && (
             isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
           ),
           isPendingDelete && styles.rowPendingDelete,
@@ -1015,17 +1064,17 @@ function TodoRowComponent({
               styles.colorRail,
               isGroupedLayout && styles.colorRailGrouped,
               { backgroundColor: priorityRailTheme.accent },
-              item.done && styles.colorRailDone,
+              isVisuallyDone && styles.colorRailDone,
             ]}
           />
         ) : null}
         <GestureTouchableOpacity
           accessibilityRole={selectMode ? 'button' : 'checkbox'}
-          accessibilityState={selectMode ? { selected: isSelected } : { checked: item.done }}
+          accessibilityState={selectMode ? { selected: isSelected } : { checked: isVisuallyDone }}
           accessibilityLabel={
             selectMode
               ? (isSelected ? 'Deselect todo' : 'Select todo')
-              : (item.done ? 'Mark todo active' : 'Mark todo done')
+              : (isVisuallyDone ? 'Mark todo active' : 'Mark todo done')
           }
           activeOpacity={0.72}
           disabled={isPendingDelete}
@@ -1040,12 +1089,12 @@ function TodoRowComponent({
                     styles.checkboxSelectMode,
                     isSelected && styles.checkboxSelectModeSelected,
                   ]
-                : (item.done && styles.checkboxChecked),
+                : (isVisuallyDone && styles.checkboxChecked),
             ]}
           >
             {selectMode ? (
               isSelected ? <View style={styles.checkboxSelectModeDot} /> : null
-            ) : item.done ? (
+            ) : isVisuallyDone ? (
               <Ionicons color={THEME_CARD} name="checkmark" size={14} />
             ) : null}
           </View>
@@ -1077,7 +1126,7 @@ function TodoRowComponent({
                 onTextLayout={shouldMeasureTitleLines ? handleTitleTextLayout : undefined}
                 style={[
                   styles.text,
-                  item.done && styles.textDone,
+                  isVisuallyDone && styles.textDone,
                   isPendingDelete && styles.textPendingDelete,
                 ]}
               >
@@ -1090,7 +1139,7 @@ function TodoRowComponent({
                 numberOfLines={1}
                 style={[
                   styles.content,
-                  item.done && styles.contentDone,
+                  isVisuallyDone && styles.contentDone,
                   isPendingDelete && styles.contentPendingDelete,
                 ]}
               >
@@ -1105,7 +1154,7 @@ function TodoRowComponent({
                 dateLabel={rawDateStatusLabel || undefined}
                 dateLabelAnchor={item.createdAt}
                 dateLabelDisplayMode={dateLabelDisplayMode}
-                done={item.done}
+                done={isVisuallyDone}
                 filterColors={filterColors}
                 listLabel={listStatusLabel || undefined}
                 pinned={item.pinned}
@@ -1162,15 +1211,12 @@ function TodoRowComponent({
         <GroupedTodoSwipeContainer
           ref={groupedSwipeableRef}
           enabled={swipeEnabled}
-          isDone={item.done}
-          onClose={(controller) => handleSwipeableClose('left', controller)}
+          isDone={isVisuallyDone}
+          onClose={handleGroupedSwipeableClose}
           onDelete={deleteTodoFromSwipe}
           onDone={toggleDoneFromSwipe}
           onMenu={openTodoMenu}
-          onOpen={(controller) => {
-            handleSwipeableWillOpen('left');
-            handleSwipeableOpen('left', controller);
-          }}
+          onOpen={handleGroupedSwipeableOpen}
           onStart={closeOtherOpenSwipeable}
         >
           <View
@@ -1206,8 +1252,8 @@ function TodoRowComponent({
             isGroupedLayout && styles.swipeableContainerGrouped,
             { minHeight: swipeActionAreaHeight },
           ]}
-          dragOffsetFromLeftEdge={12}
-          dragOffsetFromRightEdge={12}
+          dragOffsetFromLeftEdge={SWIPE_DRAG_START_DISTANCE}
+          dragOffsetFromRightEdge={SWIPE_DRAG_START_DISTANCE}
           enabled={swipeEnabled}
           friction={1.35}
           leftThreshold={LEFT_SWIPE_OPEN_DISTANCE}
@@ -1250,6 +1296,7 @@ function TodoRowComponent({
 const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.isNewlyCreated === next.isNewlyCreated &&
   prev.isRecentlyEdited === next.isRecentlyEdited &&
+  prev.isCompletionFeedback === next.isCompletionFeedback &&
   prev.isMenuTargetHighlighted === next.isMenuTargetHighlighted &&
   prev.isMenuTarget === next.isMenuTarget &&
   prev.isSelected === next.isSelected &&
@@ -1358,10 +1405,10 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   swipeableChildrenGroupedRecentlyEdited: {
-    backgroundColor: 'transparent',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   swipeableChildrenGroupedSelected: {
-    backgroundColor: 'transparent',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   lightweightSwipeContainer: {
     alignSelf: 'stretch',
@@ -1486,7 +1533,7 @@ const styles = StyleSheet.create({
     backgroundColor: THEME_ACCENT_SOFT,
   },
   rowRecentlyEditedGrouped: {
-    backgroundColor: 'transparent',
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   rowSelected: {
     backgroundColor: THEME_ACCENT_SOFT,
@@ -1496,8 +1543,6 @@ const styles = StyleSheet.create({
   },
   rowSelectedGrouped: {
     backgroundColor: THEME_ACCENT_SOFT,
-    marginHorizontal: -16,
-    paddingHorizontal: 16,
   },
   selectModeRowPressable: {
     bottom: 0,

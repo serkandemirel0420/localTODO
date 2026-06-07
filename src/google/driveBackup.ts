@@ -24,8 +24,12 @@ import {
 } from '../metaTags';
 import {
   cloneFilterConfigUiState,
+  cloneQuickPresetNavPresetIds,
+  ensureQuickPresetDefaults,
   normalizeFilterConfigUiState,
+  normalizeQuickPresetNavPresetIds,
   type FilterConfigUiState,
+  type QuickPresetNavPresetIds,
 } from '../storage/appSettingsStore';
 import { isDevAppVariant } from '../appVariant';
 
@@ -73,6 +77,8 @@ export type BackupSettings = {
   listOrderMode: BackupListOrderMode;
   menuPresets: BackupMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
+  quickPresetDefaultsVersion: number;
+  quickPresetNavPresetIds: QuickPresetNavPresetIds;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
   todoGroupMode: BackupTodoGroupMode;
@@ -362,6 +368,8 @@ export const createBackupPayload = (
       listOrderMode: settings.listOrderMode,
       menuPresets: cloneMenuPresets(settings.menuPresets),
       metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
+      quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
+      quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
       showOverdueMetaTags: settings.showOverdueMetaTags,
       todoGroupMode: settings.todoGroupMode,
@@ -378,6 +386,13 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
 
   const todos = value.todos.map(normalizeTodo).filter((todo): todo is Todo => Boolean(todo));
   const settings = isRecord(value.settings) ? value.settings : {};
+  const quickPresetDefaults = ensureQuickPresetDefaults(
+    normalizeBackupMenuPresets(settings.menuPresets),
+    normalizeQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
+    typeof settings.quickPresetDefaultsVersion === 'number'
+      ? settings.quickPresetDefaultsVersion
+      : 0,
+  );
 
   return {
     app: 'localTODO',
@@ -398,8 +413,10 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       lastCreateTodoFilters: normalizeTodoFilters(settings.lastCreateTodoFilters),
       listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
-      menuPresets: normalizeBackupMenuPresets(settings.menuPresets),
+      menuPresets: quickPresetDefaults.menuPresets,
       metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
+      quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
+      quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
       selectedFilters: normalizeTodoFilters(settings.selectedFilters),
       showOverdueMetaTags: settings.showOverdueMetaTags !== false,
       todoGroupMode: normalizeBackupTodoGroupMode(settings.todoGroupMode),

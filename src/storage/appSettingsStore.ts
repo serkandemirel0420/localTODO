@@ -13,6 +13,7 @@ import {
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
 } from '../metaTags';
+import { REPEATING_ITEMS_FILTER_VALUE } from '../reminders';
 import {
   cloneDeletedTodos,
   cloneTodoFilters,
@@ -54,6 +55,66 @@ export type StoredMenuPreset = {
   todoSortMode: TodoSortMode;
   createdAt: number;
 };
+
+export const QUICK_PRESET_NAV_SLOT_COUNT = 5;
+export const QUICK_PRESET_DEFAULTS_VERSION = 1;
+export type QuickPresetNavPresetIds = Array<string | null>;
+
+const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
+  {
+    id: 'starter-status',
+    label: 'Status',
+    filters: { date: [], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'status',
+    todoSortMode: 'newest',
+    createdAt: 1,
+  },
+  {
+    id: 'starter-priority',
+    label: 'Priority',
+    filters: { date: [], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'priority',
+    todoSortMode: 'priority',
+    createdAt: 2,
+  },
+  {
+    id: 'starter-repeating',
+    label: 'Repeating',
+    filters: {
+      date: [],
+      list: [],
+      priority: [],
+      reminder: [REPEATING_ITEMS_FILTER_VALUE],
+    },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+    createdAt: 3,
+  },
+  {
+    id: 'starter-lists',
+    label: 'Lists',
+    filters: { date: [], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'list',
+    todoSortMode: 'date',
+    createdAt: 4,
+  },
+  {
+    id: 'starter-date',
+    label: 'Date',
+    filters: { date: [], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+    createdAt: 5,
+  },
+];
+
+export const DEFAULT_QUICK_PRESET_NAV_PRESET_IDS: QuickPresetNavPresetIds =
+  DEFAULT_QUICK_MENU_PRESETS.map((preset) => preset.id);
 
 export type FilterConfigExpandedSections = {
   lists: boolean;
@@ -120,6 +181,8 @@ export type AppSettings = {
   listOrderMode: ListOrderMode;
   menuPresets: StoredMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
+  quickPresetDefaultsVersion: number;
+  quickPresetNavPresetIds: QuickPresetNavPresetIds;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
   todoGroupMode: TodoGroupMode;
@@ -147,6 +210,59 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
     createdAt: preset.createdAt,
   }));
 
+export const normalizeQuickPresetNavPresetIds = (value: unknown): QuickPresetNavPresetIds => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return [];
+  }
+
+  return Array.from({ length: QUICK_PRESET_NAV_SLOT_COUNT }, (_, index) => {
+    const presetId = value[index];
+    return typeof presetId === 'string' && presetId.trim() ? presetId.trim() : null;
+  });
+};
+
+export const cloneQuickPresetNavPresetIds = (
+  presetIds: QuickPresetNavPresetIds,
+): QuickPresetNavPresetIds => normalizeQuickPresetNavPresetIds(presetIds);
+
+const normalizeQuickPresetDefaultsVersion = (value: unknown): number => (
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0
+);
+
+export const ensureQuickPresetDefaults = (
+  menuPresets: StoredMenuPreset[],
+  quickPresetNavPresetIds: QuickPresetNavPresetIds,
+  quickPresetDefaultsVersion: number,
+) => {
+  const normalizedVersion = normalizeQuickPresetDefaultsVersion(quickPresetDefaultsVersion);
+  if (normalizedVersion >= QUICK_PRESET_DEFAULTS_VERSION) {
+    return {
+      menuPresets: cloneMenuPresets(menuPresets),
+      quickPresetDefaultsVersion: normalizedVersion,
+      quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(quickPresetNavPresetIds),
+    };
+  }
+
+  const existingPresetIds = new Set(menuPresets.map((preset) => preset.id));
+  const missingDefaults = DEFAULT_QUICK_MENU_PRESETS.filter(
+    (preset) => !existingPresetIds.has(preset.id),
+  );
+  const existingAssignments = cloneQuickPresetNavPresetIds(quickPresetNavPresetIds);
+
+  return {
+    menuPresets: [
+      ...cloneMenuPresets(missingDefaults),
+      ...cloneMenuPresets(menuPresets),
+    ],
+    quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+    quickPresetNavPresetIds: DEFAULT_QUICK_PRESET_NAV_PRESET_IDS.map(
+      (presetId, index) => existingAssignments[index] ?? presetId,
+    ),
+  };
+};
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   collapsedTodoGroupIds: [],
   dateLabelDisplayMode: 'exact',
@@ -160,8 +276,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   lastCreateTodoFilters: cloneTodoFilters(),
   listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   listOrderMode: 'alphabetical',
-  menuPresets: [],
+  menuPresets: cloneMenuPresets(DEFAULT_QUICK_MENU_PRESETS),
   metaTagVisibility: cloneMetaTagVisibility(),
+  quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+  quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
   selectedFilters: cloneTodoFilters(),
   showOverdueMetaTags: true,
   todoGroupMode: 'none',
@@ -580,13 +698,22 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       filterColors: cloneFilterColors(),
       hideDoneTodos: false,
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
-      menuPresets: [],
+      menuPresets: cloneMenuPresets(DEFAULT_APP_SETTINGS.menuPresets),
+      quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(
+        DEFAULT_APP_SETTINGS.quickPresetNavPresetIds,
+      ),
       selectedFilters: cloneTodoFilters(),
       showOverdueMetaTags: true,
       todoGroupMode: 'none',
       todoSortMode: 'newest',
     };
   }
+
+  const quickPresetDefaults = ensureQuickPresetDefaults(
+    normalizeMenuPresets(value.menuPresets),
+    normalizeQuickPresetNavPresetIds(value.quickPresetNavPresetIds),
+    normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
+  );
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
@@ -603,8 +730,10 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
     listMenuTree: normalizeListMenuTree(value.listMenuTree),
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
-    menuPresets: normalizeMenuPresets(value.menuPresets),
+    menuPresets: quickPresetDefaults.menuPresets,
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
+    quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
+    quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
     selectedFilters: normalizeTodoFilters(value.selectedFilters),
     showOverdueMetaTags: value.showOverdueMetaTags !== false,
     todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),

@@ -1,5 +1,7 @@
 export const REMINDER_PICKER_LABEL = 'Reminder';
 export const REPEAT_PICKER_LABEL = 'Repeating';
+export const REPEATING_ITEMS_FILTER_LABEL = 'Repeating items';
+export const REPEATING_ITEMS_FILTER_VALUE = 'filter:repeating-items';
 
 export type RepeatPreset = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
@@ -38,8 +40,6 @@ export const DEFAULT_TODO_REMINDER: TodoReminder = {
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-const cloneDefaultReminderTime = (): ReminderTime => ({ ...DEFAULT_REMINDER_TIME });
-
 const normalizeReminderTime = (time: ReminderTime | null): ReminderTime | null => {
   if (!time) {
     return null;
@@ -67,7 +67,7 @@ export const normalizeTodoReminder = (reminder: TodoReminder): TodoReminder => {
   const repeat = isRepeatPreset(reminder.repeat) ? reminder.repeat : 'none';
 
   return {
-    time: time ?? (repeat === 'none' ? null : cloneDefaultReminderTime()),
+    time,
     repeat,
   };
 };
@@ -118,12 +118,16 @@ export const encodeTodoReminder = (reminder: TodoReminder): string[] => {
     return [];
   }
 
-  const base = `${pad2(normalized.time!.hours)}:${pad2(normalized.time!.minutes)}`;
-  if (normalized.repeat === 'none') {
-    return [base];
+  if (normalized.time) {
+    const base = `${pad2(normalized.time.hours)}:${pad2(normalized.time.minutes)}`;
+    if (normalized.repeat === 'none') {
+      return [base];
+    }
+
+    return [`${base}|${REPEAT_PREFIX}${normalized.repeat}`];
   }
 
-  return [`${base}|${REPEAT_PREFIX}${normalized.repeat}`];
+  return [`${REPEAT_PREFIX}${normalized.repeat}`];
 };
 
 export const decodeTodoReminder = (values: string[]): TodoReminder => {
@@ -155,6 +159,9 @@ export const hasTodoReminderTime = (values: string[]): boolean =>
 
 export const hasTodoRepeat = (values: string[]): boolean =>
   decodeTodoReminder(values).repeat !== 'none';
+
+export const hasRepeatingItemsFilter = (values: string[]): boolean =>
+  values.includes(REPEATING_ITEMS_FILTER_VALUE);
 
 export const formatReminderTimeMenuLabel = (values: string[]): string => {
   const { time } = decodeTodoReminder(values);
@@ -188,8 +195,13 @@ export const formatTodoReminderMetaLabel = (values: string[]): string | null => 
   return `${timeLabel} ${formatRepeatLabel(repeat)}`;
 };
 
-export const normalizeReminderFilterValues = (values: string[]): string[] =>
-  encodeTodoReminder(decodeTodoReminder(values));
+export const normalizeReminderFilterValues = (values: string[]): string[] => {
+  if (hasRepeatingItemsFilter(values)) {
+    return [REPEATING_ITEMS_FILTER_VALUE];
+  }
+
+  return encodeTodoReminder(decodeTodoReminder(values));
+};
 
 export const isDatePickerMenuItemSelected = (
   menuLabel: string,

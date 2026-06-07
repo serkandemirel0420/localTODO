@@ -53,16 +53,12 @@ export const metaTagVisibilityMatchesDefault = (visibility: MetaTagVisibility) =
 export const applyHiddenMetaTagKinds = (
   visibility: MetaTagVisibility,
   hiddenKinds: readonly HiddenMetaTagKind[],
-): MetaTagVisibility => {
-  const hidden = new Set(hiddenKinds);
-
-  return {
-    createdAt: visibility.createdAt && !hidden.has('created'),
-    date: visibility.date && !hidden.has('date'),
-    list: visibility.list && !hidden.has('list'),
-    priority: visibility.priority && !hidden.has('priority'),
-  };
-};
+): MetaTagVisibility => ({
+  createdAt: visibility.createdAt && !hiddenKinds.includes('created'),
+  date: visibility.date && !hiddenKinds.includes('date'),
+  list: visibility.list && !hiddenKinds.includes('list'),
+  priority: visibility.priority && !hiddenKinds.includes('priority'),
+});
 
 export const formatMetaTagVisibilitySummary = (visibility: MetaTagVisibility) => {
   const enabledLabels = META_TAG_KEYS

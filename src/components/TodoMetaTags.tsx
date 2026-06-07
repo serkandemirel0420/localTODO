@@ -44,6 +44,7 @@ type StatusIconDescriptor = {
   color: string;
   iconName: React.ComponentProps<typeof Ionicons>['name'];
   id: 'reminder' | 'repeat' | 'pin';
+  label?: string;
 };
 
 type TodoMetaTagsProps = {
@@ -138,6 +139,7 @@ function StatusIcon({
       accessible
       style={[
         styles.statusIcon,
+        descriptor.label && styles.statusIconWithLabel,
         done && styles.statusIconDone,
       ]}
     >
@@ -146,6 +148,17 @@ function StatusIcon({
         name={descriptor.iconName}
         size={12}
       />
+      {descriptor.label ? (
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.statusIconLabel,
+            { color: descriptor.color },
+          ]}
+        >
+          {descriptor.label}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -229,11 +242,13 @@ function buildStatusIcons(
   }
 
   if (repeat !== 'none') {
+    const repeatLabel = formatRepeatLabel(repeat);
     icons.push({
-      accessibilityLabel: `Repeating ${formatRepeatLabel(repeat)}`,
+      accessibilityLabel: `Repeating ${repeatLabel}`,
       color: REPEAT_STATUS_COLOR,
       iconName: 'repeat-outline',
       id: 'repeat',
+      label: repeatLabel,
     });
   }
 
@@ -342,10 +357,21 @@ const styles = StyleSheet.create({
     borderColor: '#E1E5EA',
     borderRadius: 4,
     borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
     flexShrink: 0,
+    gap: 2,
     height: 16,
     justifyContent: 'center',
     width: 16,
+  },
+  statusIconWithLabel: {
+    paddingHorizontal: 4,
+    width: 'auto',
+  },
+  statusIconLabel: {
+    fontSize: 10,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 13,
   },
   statusIconDone: {
     opacity: 0.55,

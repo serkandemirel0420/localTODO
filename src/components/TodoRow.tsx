@@ -1,14 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   type GestureResponderEvent,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   type LayoutChangeEvent,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -33,10 +32,12 @@ import {
   type HiddenMetaTagKind,
   type MetaTagVisibility,
 } from '../metaTags';
+import { triggerSubtleHaptic } from '../haptics';
 import {
   getBestOrderedFilterLabel,
   PRIORITY_MENU_ITEMS,
 } from '../todoOptions';
+import { getEffectiveTodoDateLabels } from '../todoDates';
 import { TODO_ROW_TITLE_MAX_CHARS, type Todo } from '../todos';
 
 const THEME_CARD = '#FFFFFF';
@@ -85,7 +86,176 @@ type TextLayoutEvent = {
   };
 };
 
-let openTodoSwipeable: Swipeable | null = null;
+type TodoSwipeController = {
+  close: () => void;
+};
+
+type GroupedTodoSwipeContainerProps = {
+  children: React.ReactNode;
+  enabled: boolean;
+  isDone: boolean;
+  onClose: (controller: TodoSwipeController) => void;
+  onDelete: () => void;
+  onDone: () => void;
+  onMenu: () => void;
+  onOpen: (controller: TodoSwipeController) => void;
+  onStart: () => void;
+};
+
+let openTodoSwipeable: TodoSwipeController | null = null;
+
+const GroupedTodoSwipeContainer = React.forwardRef<
+  TodoSwipeController,
+  GroupedTodoSwipeContainerProps
+>(function GroupedTodoSwipeContainer({
+  children,
+  enabled,
+  isDone,
+  onClose,
+  onDelete,
+  onDone,
+  onMenu,
+  onOpen,
+  onStart,
+}, forwardedRef) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const controllerRef = useRef<TodoSwipeController | null>(null);
+  const isOpenRef = useRef(false);
+  const [actionsVisible, setActionsVisible] = useState(false);
+
+  const close = useCallback(() => {
+    Animated.spring(translateX, {
+      bounciness: 0,
+      speed: 24,
+      toValue: 0,
+      useNativeDriver: true,
+    }).start(() => {
+      if (isOpenRef.current && controllerRef.current) {
+        isOpenRef.current = false;
+        onClose(controllerRef.current);
+      }
+      setActionsVisible(false);
+    });
+  }, [onClose, translateX]);
+
+  const controller = useMemo<TodoSwipeController>(() => ({ close }), [close]);
+  controllerRef.current = controller;
+  React.useImperativeHandle(forwardedRef, () => controller, [controller]);
+
+  const panResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponderCapture: (_event, gesture) => (
+      enabled &&
+      Math.abs(gesture.dx) > 8 &&
+      Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2
+    ),
+    onPanResponderGrant: () => {
+      onStart();
+      setActionsVisible(true);
+    },
+    onPanResponderMove: (_event, gesture) => {
+      translateX.setValue(Math.max(
+        -RIGHT_SWIPE_ACTION_WIDTH,
+        Math.min(LEFT_SWIPE_ACTION_WIDTH, gesture.dx),
+      ));
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      if (gesture.dx > LEFT_SWIPE_OPEN_DISTANCE) {
+        Animated.spring(translateX, {
+          bounciness: 2,
+          speed: 18,
+          toValue: LEFT_SWIPE_ACTION_WIDTH,
+          useNativeDriver: true,
+        }).start();
+        isOpenRef.current = true;
+        onOpen(controller);
+        return;
+      }
+
+      if (gesture.dx < -RIGHT_SWIPE_OPEN_DISTANCE) {
+        Animated.timing(translateX, {
+          duration: 90,
+          toValue: 0,
+          useNativeDriver: true,
+        }).start(() => {
+          setActionsVisible(false);
+          onMenu();
+        });
+        return;
+      }
+
+      close();
+    },
+    onPanResponderTerminate: close,
+    onPanResponderTerminationRequest: () => false,
+  }), [close, controller, enabled, onMenu, onOpen, onStart, translateX]);
+
+  useEffect(() => () => {
+    if (isOpenRef.current && controllerRef.current) {
+      onClose(controllerRef.current);
+    }
+  }, [onClose]);
+
+  return (
+    <View style={styles.lightweightSwipeContainer}>
+      {actionsVisible ? (
+        <>
+          <View style={styles.lightweightSwipeActionsLeft}>
+            <GestureTouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Delete todo"
+              activeOpacity={0.84}
+              onPress={onDelete}
+              style={styles.swipeActionButton}
+            >
+              <Ionicons
+                color={SWIPE_DELETE}
+                name="trash-outline"
+                size={SWIPE_ACTION_ICON_SIZE}
+              />
+            </GestureTouchableOpacity>
+            <GestureTouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={isDone ? 'Mark todo active' : 'Mark todo done'}
+              activeOpacity={0.84}
+              onPress={onDone}
+              style={styles.swipeActionButton}
+            >
+              <Ionicons
+                color={SWIPE_DONE}
+                name={isDone ? 'arrow-undo' : 'checkmark'}
+                size={SWIPE_ACTION_ICON_SIZE}
+              />
+            </GestureTouchableOpacity>
+          </View>
+          <View style={styles.lightweightSwipeActionsRight}>
+            <GestureTouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open todo menu"
+              activeOpacity={0.84}
+              onPress={onMenu}
+              style={styles.swipeActionButton}
+            >
+              <Ionicons
+                color={SWIPE_MENU}
+                name="menu"
+                size={SWIPE_ACTION_ICON_SIZE}
+              />
+            </GestureTouchableOpacity>
+          </View>
+        </>
+      ) : null}
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={[
+          styles.lightweightSwipeSurface,
+          { transform: [{ translateX }] },
+        ]}
+      >
+        {children}
+      </Animated.View>
+    </View>
+  );
+});
 
 const getTodoRowTextPreview = (text: string, maxLength: number) => {
   const compactText = text.trim().replace(/\s+/g, ' ');
@@ -101,13 +271,13 @@ const getTodoRowTextPreview = (text: string, maxLength: number) => {
     .trimEnd()}${TODO_ROW_PREVIEW_ELLIPSIS}`;
 };
 
-const getBestTodoDateLabel = (dateLabels: string[], createdAt: number): string => {
+const getBestTodoDateLabel = (todo: Todo): string => {
   const now = new Date();
   let bestLabel = '';
-  let bestRank = getDateFilterSortRank('', now, createdAt);
+  let bestRank = getDateFilterSortRank('', now, todo.createdAt);
 
-  dateLabels.forEach((label, index) => {
-    const rank = getDateFilterSortRank(label, now, createdAt);
+  getEffectiveTodoDateLabels(todo, now).forEach((label, index) => {
+    const rank = getDateFilterSortRank(label, now, todo.createdAt);
 
     if (rank < bestRank || (rank === bestRank && !bestLabel && index === 0)) {
       bestLabel = label;
@@ -217,6 +387,10 @@ const renderHighlightedPreview = (
   text: string,
   searchTerms: string[],
 ): React.ReactNode => {
+  if (searchTerms.length === 0) {
+    return text;
+  }
+
   const { chars, ranges } = getSearchHighlightRanges(text, searchTerms);
 
   if (ranges.length === 0) {
@@ -270,6 +444,7 @@ export type TodoRowProps = {
   sectionLabel?: string;
   selectMode?: boolean;
   showOverdueMetaTags?: boolean;
+  viewportWidth: number;
 };
 
 function TodoRowComponent({
@@ -295,18 +470,24 @@ function TodoRowComponent({
   searchHighlightQuery = '',
   selectMode = false,
   showOverdueMetaTags = true,
+  viewportWidth,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
-  const lastSelectLongPressAtRef = useRef(0);
+  const groupedSwipeableRef = useRef<TodoSwipeController | null>(null);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const [singleLineTitleMeasurementKey, setSingleLineTitleMeasurementKey] = useState('');
-  const { width: windowWidth } = useWindowDimensions();
   const isGroupedLayout = layout === 'grouped';
   const fallbackRowHeight = isGroupedLayout ? 52 : 56;
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
   const swipeActionInset = isGroupedLayout ? 2 : 0;
-  const rawDateStatusLabel = getBestTodoDateLabel(item.filters.date, item.createdAt);
+  const effectiveMetaTagVisibility = applyHiddenMetaTagKinds(
+    metaTagVisibility,
+    hiddenMetaTagKinds,
+  );
+  const rawDateStatusLabel = effectiveMetaTagVisibility.date
+    ? getBestTodoDateLabel(item)
+    : '';
   const listStatusLabel = item.filters.list[0] ?? '';
   const priorityStatusLabel = getBestOrderedFilterLabel(
     item.filters.priority,
@@ -319,10 +500,6 @@ function TodoRowComponent({
   const priorityRailTheme = priorityStatusLabel && priorityStatusLabel !== 'None'
     ? getFilterColorTheme(filterColors, 'priorityBorder', priorityStatusLabel)
     : null;
-  const effectiveMetaTagVisibility = applyHiddenMetaTagKinds(
-    metaTagVisibility,
-    hiddenMetaTagKinds,
-  );
   const content = item.content.trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
   const displayTitle = useMemo(
@@ -350,15 +527,22 @@ function TodoRowComponent({
   const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
   const titleMeasurementKey = [
-    Math.round(windowWidth),
+    Math.round(viewportWidth),
     layout,
     item.pinned ? 'pinned' : 'normal',
     priorityRailTheme ? 'priority' : 'plain',
     displayTitle,
   ].join('|');
-  const titleNumberOfLines = singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2;
+  const shouldMeasureTitleLines = !isGroupedLayout;
+  const titleNumberOfLines = shouldMeasureTitleLines
+    ? (singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2)
+    : 2;
 
   const handleTitleTextLayout = useCallback((event: TextLayoutEvent) => {
+    if (!shouldMeasureTitleLines) {
+      return;
+    }
+
     const lines = event.nativeEvent.lines ?? [];
     const visibleLineCount = lines.filter((line) => (line.text ?? '').trim()).length;
     const measuredLineCount = visibleLineCount || lines.length;
@@ -371,7 +555,7 @@ function TodoRowComponent({
 
       return currentKey === titleMeasurementKey ? '' : currentKey;
     });
-  }, [titleMeasurementKey]);
+  }, [shouldMeasureTitleLines, titleMeasurementKey]);
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -396,11 +580,14 @@ function TodoRowComponent({
 
   const closeSwipeable = useCallback(() => {
     swipeableRef.current?.close();
+    groupedSwipeableRef.current?.close();
     setIsSwipeOpen(false);
   }, []);
 
   const closeOtherOpenSwipeable = useCallback(() => {
-    const currentSwipeable = swipeableRef.current;
+    const currentSwipeable = isGroupedLayout
+      ? groupedSwipeableRef.current
+      : swipeableRef.current;
 
     if (openTodoSwipeable && openTodoSwipeable !== currentSwipeable) {
       openTodoSwipeable.close();
@@ -408,7 +595,7 @@ function TodoRowComponent({
     }
 
     return false;
-  }, []);
+  }, [isGroupedLayout]);
 
   const toggleSelection = useCallback(() => {
     if (isPendingDelete) {
@@ -417,7 +604,7 @@ function TodoRowComponent({
 
     closeOtherOpenSwipeable();
     onToggleSelect?.(item.id);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeOtherOpenSwipeable, isPendingDelete, item.id, onToggleSelect]);
 
   const toggleDoneFromCheckbox = useCallback(() => {
@@ -432,7 +619,7 @@ function TodoRowComponent({
 
     closeOtherOpenSwipeable();
     onSetDone(item.id, !item.done);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [
     closeOtherOpenSwipeable,
     isPendingDelete,
@@ -449,7 +636,7 @@ function TodoRowComponent({
     }
 
     onSetDone(item.id, !item.done);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
     requestAnimationFrame(() => {
       closeSwipeable();
     });
@@ -471,7 +658,7 @@ function TodoRowComponent({
     }
 
     closeSwipeable();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    triggerSubtleHaptic();
     requestAnimationFrame(() => onDelete(item.id));
   }, [closeSwipeable, isPendingDelete, item.id, onDelete]);
 
@@ -511,12 +698,6 @@ function TodoRowComponent({
       return;
     }
 
-    const now = Date.now();
-    if (now - lastSelectLongPressAtRef.current < 240) {
-      return;
-    }
-    lastSelectLongPressAtRef.current = now;
-
     closeOtherOpenSwipeable();
 
     if (selectMode) {
@@ -525,7 +706,7 @@ function TodoRowComponent({
     }
 
     onEnterSelectMode?.(item.id);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    triggerSubtleHaptic();
   }, [
     closeOtherOpenSwipeable,
     isPendingDelete,
@@ -552,29 +733,32 @@ function TodoRowComponent({
         return;
       }
 
-      setIsSwipeOpen(true);
-      closeOtherOpenSwipeable();
-
       if (direction === 'right') {
-        openTodoMenu();
         return;
       }
 
-      Haptics.selectionAsync().catch(() => undefined);
+      setIsSwipeOpen(true);
+      closeOtherOpenSwipeable();
+      triggerSubtleHaptic();
     },
-    [closeOtherOpenSwipeable, closeSwipeable, isPendingDelete, openTodoMenu],
+    [closeOtherOpenSwipeable, closeSwipeable, isPendingDelete],
   );
 
-  const handleSwipeableOpenStartDrag = useCallback((_direction: 'left' | 'right') => {
+  const handleSwipeableOpenStartDrag = useCallback((direction: 'left' | 'right') => {
     if (isPendingDelete) {
       return;
     }
 
+    if (direction === 'right') {
+      openTodoMenu();
+      return;
+    }
+
     closeOtherOpenSwipeable();
-  }, [closeOtherOpenSwipeable, isPendingDelete]);
+  }, [closeOtherOpenSwipeable, isPendingDelete, openTodoMenu]);
 
   const handleSwipeableOpen = useCallback(
-    (_direction: 'left' | 'right', swipeable: Swipeable) => {
+    (_direction: 'left' | 'right', swipeable: TodoSwipeController) => {
       if (openTodoSwipeable && openTodoSwipeable !== swipeable) {
         openTodoSwipeable.close();
       }
@@ -585,7 +769,7 @@ function TodoRowComponent({
   );
 
   const handleSwipeableClose = useCallback(
-    (_direction: 'left' | 'right', swipeable: Swipeable) => {
+    (_direction: 'left' | 'right', swipeable: TodoSwipeController) => {
       if (openTodoSwipeable === swipeable) {
         openTodoSwipeable = null;
       }
@@ -597,7 +781,10 @@ function TodoRowComponent({
 
   useEffect(
     () => () => {
-      if (openTodoSwipeable === swipeableRef.current) {
+      if (
+        openTodoSwipeable === swipeableRef.current ||
+        openTodoSwipeable === groupedSwipeableRef.current
+      ) {
         openTodoSwipeable = null;
       }
     },
@@ -873,9 +1060,7 @@ function TodoRowComponent({
                 : `Open todo details: ${item.text}`
           }
           activeOpacity={1}
-          delayLongPress={280}
           disabled={isPendingDelete}
-          onLongPress={enterSelectMode}
           onPress={handleTodoPress}
           style={styles.textPressable}
         >
@@ -889,7 +1074,7 @@ function TodoRowComponent({
               <Text
                 ellipsizeMode="tail"
                 numberOfLines={titleNumberOfLines}
-                onTextLayout={handleTitleTextLayout}
+                onTextLayout={shouldMeasureTitleLines ? handleTitleTextLayout : undefined}
                 style={[
                   styles.text,
                   item.done && styles.textDone,
@@ -973,6 +1158,34 @@ function TodoRowComponent({
             {rowContent}
           </View>
         </View>
+      ) : isGroupedLayout ? (
+        <GroupedTodoSwipeContainer
+          ref={groupedSwipeableRef}
+          enabled={swipeEnabled}
+          isDone={item.done}
+          onClose={(controller) => handleSwipeableClose('left', controller)}
+          onDelete={deleteTodoFromSwipe}
+          onDone={toggleDoneFromSwipe}
+          onMenu={openTodoMenu}
+          onOpen={(controller) => {
+            handleSwipeableWillOpen('left');
+            handleSwipeableOpen('left', controller);
+          }}
+          onStart={closeOtherOpenSwipeable}
+        >
+          <View
+            style={[
+              styles.swipeableChildren,
+              styles.swipeableChildrenGrouped,
+              isHighlightedForSelection &&
+                styles.swipeableChildrenGroupedSelected,
+              isHighlightedForEdit &&
+                styles.swipeableChildrenGroupedRecentlyEdited,
+            ]}
+          >
+            {rowContent}
+          </View>
+        </GroupedTodoSwipeContainer>
       ) : (
         <Swipeable
           key={isMenuTarget ? `${item.id}-menu` : item.id}
@@ -1055,6 +1268,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.onOpenMenu === next.onOpenMenu &&
   prev.onSetDone === next.onSetDone &&
   prev.searchHighlightQuery === next.searchHighlightQuery &&
+  prev.viewportWidth === next.viewportWidth &&
   prev.onEnterSelectMode === next.onEnterSelectMode &&
   prev.onTouchStart === next.onTouchStart &&
   prev.onToggleSelect === next.onToggleSelect
@@ -1148,6 +1362,39 @@ const styles = StyleSheet.create({
   },
   swipeableChildrenGroupedSelected: {
     backgroundColor: 'transparent',
+  },
+  lightweightSwipeContainer: {
+    alignSelf: 'stretch',
+    minHeight: 52,
+    overflow: 'hidden',
+    position: 'relative',
+    width: '100%',
+  },
+  lightweightSwipeSurface: {
+    alignSelf: 'stretch',
+    backgroundColor: THEME_CARD,
+    minHeight: 52,
+    width: '100%',
+  },
+  lightweightSwipeActionsLeft: {
+    alignItems: 'center',
+    bottom: 0,
+    flexDirection: 'row',
+    gap: SWIPE_ACTION_GAP,
+    justifyContent: 'center',
+    left: SWIPE_ACTION_EDGE_PADDING,
+    position: 'absolute',
+    top: 0,
+    width: LEFT_SWIPE_ACTION_WIDTH - SWIPE_ACTION_EDGE_PADDING,
+  },
+  lightweightSwipeActionsRight: {
+    alignItems: 'center',
+    bottom: 0,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: SWIPE_ACTION_EDGE_PADDING,
+    top: 0,
+    width: RIGHT_SWIPE_ACTION_WIDTH - SWIPE_ACTION_EDGE_PADDING,
   },
   swipeActionsRoot: {
     alignSelf: 'stretch',

@@ -36,6 +36,10 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
+  hasRepeatingItemsFilter,
+  REPEATING_ITEMS_FILTER_LABEL,
+} from '../reminders';
+import {
   type FilterConfigExpandedSections,
   type FilterConfigUiState,
   type TodoGroupMode,
@@ -89,6 +93,7 @@ type FilterConfigScreenProps = {
   onClose: () => void;
   onShowResults: () => void;
   onToggleFilter: (filterKey: FilterKey, value: string) => void;
+  onToggleRepeatingItemsFilter: () => void;
   onDateMenuPress: (label: string) => void;
   onRemoveFilter: (filterKey: FilterKey, value: string) => void;
   onToggleListItem: (item: FilterConfigListItem) => void;
@@ -194,6 +199,7 @@ export const FilterConfigScreen = ({
   onClose,
   onShowResults,
   onToggleFilter,
+  onToggleRepeatingItemsFilter,
   onDateMenuPress,
   onRemoveFilter,
   onToggleListItem,
@@ -217,6 +223,11 @@ export const FilterConfigScreen = ({
   );
   const getDateMenuDisplayLabel = (menuLabel: string) =>
     getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
+  const repeatingItemsFilterActive = hasRepeatingItemsFilter(filters.reminder);
+  const activeDateFilterLabels = [
+    ...filters.date.map((value) => formatActiveDateLabel(value)),
+    ...(repeatingItemsFilterActive ? [REPEATING_ITEMS_FILTER_LABEL] : []),
+  ];
   const oneHandedScrollOffset = useMemo(
     () => Math.max(
       OPTION_ROW_HEIGHT,
@@ -471,12 +482,12 @@ export const FilterConfigScreen = ({
           </AccordionSection>
 
           <AccordionSection
-            canClear={filters.date.length > 0}
+            canClear={activeDateFilterLabels.length > 0}
             expanded={expandedSections.date}
             onClear={() => onClearSection('date')}
             onToggle={() => toggleSection('date')}
             subtitle={formatSelectionSummary(
-              filters.date.map((value) => formatActiveDateLabel(value)),
+              activeDateFilterLabels,
               'Any date',
             )}
             title="Date"
@@ -542,6 +553,12 @@ export const FilterConfigScreen = ({
                 </View>
               );
             })}
+            {renderOptionRow(
+              'date-repeating-items',
+              REPEATING_ITEMS_FILTER_LABEL,
+              repeatingItemsFilterActive,
+              onToggleRepeatingItemsFilter,
+            )}
           </AccordionSection>
 
           <AccordionSection

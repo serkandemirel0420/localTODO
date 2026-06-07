@@ -1,5 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { makeRedirectUri, TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
@@ -123,16 +122,19 @@ import {
   type MetaTagKey,
   type MetaTagVisibility,
 } from './src/metaTags';
+import { triggerSubtleHaptic } from './src/haptics';
 import {
   appSettingsStore,
   clearListNodeDisplaySettings,
   cloneFilterConfigUiState,
   cloneListMenuTree,
   cloneMenuPresets,
+  cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
   DEFAULT_FILTER_CONFIG_UI_STATE,
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
+  QUICK_PRESET_DEFAULTS_VERSION,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
@@ -146,14 +148,16 @@ import {
 } from './src/storage/appSettingsStore';
 import {
   buildTodoListRows,
-  compareTodosBySortMode,
+  createTodoSortComparator,
   estimateTodoListOffsetForId,
   flattenTodoListRows,
+  TODO_GROUPED_ROW_ESTIMATE,
   TODO_LIST_CONTENT_TOP_PADDING,
   TODO_LIST_ROW_GAP,
   TODO_ROW_DIVIDER_HEIGHT,
   type VisibleTodoListRow,
 } from './src/todoListRows';
+import { getEffectiveTodoDateLabels } from './src/todoDates';
 import { advanceRepeatingTodoAfterDone } from './src/todoRecurrence';
 import {
   addTodoAlarmResponseListener,
@@ -165,13 +169,15 @@ import {
 import {
   decodeTodoReminder,
   encodeTodoReminder,
-  DEFAULT_REMINDER_TIME,
   getDatePickerMenuDisplayLabel,
+  hasRepeatingItemsFilter,
   hasTodoReminderTime,
   hasTodoRepeat,
   isDatePickerMenuItemSelected,
   isReminderPickerMenuLabel,
   REMINDER_PICKER_LABEL,
+  REPEATING_ITEMS_FILTER_LABEL,
+  REPEATING_ITEMS_FILTER_VALUE,
   REPEAT_PICKER_LABEL,
   type ReminderTime,
   type RepeatPreset,
@@ -190,6 +196,14 @@ WebBrowser.maybeCompleteAuthSession();
 
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
+
+const HOME_LIST_DISPLAY_CYCLE_MODES: Array<{
+  groupMode: TodoGroupMode;
+  sortMode: TodoSortMode;
+}> = [
+  { groupMode: 'list', sortMode: 'date' },
+  { groupMode: 'date', sortMode: 'priority' },
+];
 
 type VisibleListMenuItem = {
   depth: number;
@@ -302,6 +316,11 @@ type MenuRow =
   | {
       id: string;
       label: string;
+      type: 'updatePreset';
+    }
+  | {
+      id: string;
+      label: string;
       preset: MenuPreset;
       summary: string;
       type: 'quickApplyPreset';
@@ -363,6 +382,7 @@ const countDateMenuSelections = (
   includeReminderRows: boolean,
 ) =>
   filters.date.length +
+  (hasRepeatingItemsFilter(filters.reminder) ? 1 : 0) +
   (includeReminderRows && hasTodoReminderTime(filters.reminder) ? 1 : 0) +
   (includeReminderRows && hasTodoRepeat(filters.reminder) ? 1 : 0);
 
@@ -454,10 +474,21 @@ const EDGE_BACK_WIDTH = 28;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
 const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
-const BOTTOM_NAV_HEIGHT = 74;
-// Menu overlay sits above bottomNav; a small gap keeps the sheet off the nav bar.
+const QUICK_PRESET_NAV_HEIGHT = 36;
+const BOTTOM_NAV_PRIMARY_HEIGHT = 48;
+const BOTTOM_NAV_HEIGHT = QUICK_PRESET_NAV_HEIGHT + BOTTOM_NAV_PRIMARY_HEIGHT;
+const BOTTOM_NAV_BOTTOM_GAP = Platform.OS === 'android' ? 10 : 0;
+const BOTTOM_NAV_RESERVED_HEIGHT = BOTTOM_NAV_HEIGHT + BOTTOM_NAV_BOTTOM_GAP;
+const QUICK_PRESET_NAV_ICONS: React.ComponentProps<typeof MaterialCommunityIcons>['name'][] = [
+  'penguin',
+  'rabbit-variant',
+  'turtle',
+  'cat',
+  'owl',
+];
+// Menu overlay sits above both nav rows; a small gap keeps the sheet off the nav bar.
 const LIST_MENU_BOTTOM_OFFSET = 8;
-const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_HEIGHT;
+const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_RESERVED_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
 const MENU_DISMISS_RELEASE = 52;
@@ -481,6 +512,8 @@ const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 const GOOGLE_ANDROID_PACKAGE_NAME = isDevAppVariant ? 'com.localtodo.app.dev' : 'com.localtodo.app';
 const GOOGLE_REDIRECT_SCHEME = isDevAppVariant ? 'com.localtodo.app.dev' : 'com.localtodo.app';
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
+const GOOGLE_SIGN_IN_REQUIRED_MESSAGE = 'Google sign in is required.';
+const GOOGLE_SESSION_EXPIRED_MESSAGE = 'Google session expired. Sign in again.';
 const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
 const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
@@ -490,7 +523,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
-const TODO_GROUP_HEADER_PRESS_DELAY_MS = 120;
+const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 const AUTO_BACKUP_DEBOUNCE_MS = 2500;
 
@@ -508,18 +541,8 @@ const getTodoListItemType = (item: VisibleTodoListRow) => {
     return item.isCollapsed ? 'sectionHeaderCollapsed' : 'sectionHeaderExpanded';
   }
 
-  if (item.type === 'groupedTodo') {
-    if (item.isFirstInSection && item.isLastInSection) {
-      return 'groupedTodoSingle';
-    }
-
-    if (item.isFirstInSection) {
-      return 'groupedTodoFirst';
-    }
-
-    if (item.isLastInSection) {
-      return 'groupedTodoLast';
-    }
+  if (item.type === 'groupedTodoBatch') {
+    return 'groupedTodoBatch';
   }
 
   return item.type;
@@ -542,20 +565,30 @@ const buildActiveFilterItems = (
   filters: SelectedFilters,
   dateLabelDisplayMode: DateLabelDisplayMode,
 ): SearchFilterItem[] =>
-  FILTER_KEYS.flatMap((filterKey) =>
-    filters[filterKey].map((value) => ({
-      displayLabel: filterKey === 'date'
-        ? (
-          dateLabelDisplayMode === 'remaining'
-            ? formatDateDisplayLabel(value, 'remaining')
-            : formatDateFilterLabel(value)
-        )
-        : value,
-      filterKey,
-      id: `search-filter-${filterKey}-${value}`,
-      value,
-    })),
-  );
+  [
+    ...FILTER_KEYS.flatMap((filterKey) =>
+      filters[filterKey].map((value) => ({
+        displayLabel: filterKey === 'date'
+          ? (
+            dateLabelDisplayMode === 'remaining'
+              ? formatDateDisplayLabel(value, 'remaining')
+              : formatDateFilterLabel(value)
+          )
+          : value,
+        filterKey,
+        id: `search-filter-${filterKey}-${value}`,
+        value,
+      })),
+    ),
+    ...(hasRepeatingItemsFilter(filters.reminder)
+      ? [{
+          displayLabel: REPEATING_ITEMS_FILTER_LABEL,
+          filterKey: 'date' as const,
+          id: 'search-filter-repeating-items',
+          value: REPEATING_ITEMS_FILTER_VALUE,
+        }]
+      : []),
+  ];
 
 type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
 
@@ -732,14 +765,6 @@ const formatDeletedTodoTime = (value: number) =>
     month: 'short',
   });
 
-const triggerLightTickHaptic = () => {
-  const feedback = Platform.OS === 'android'
-    ? Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Clock_Tick)
-    : Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-  feedback.catch(() => undefined);
-};
-
 const googleAuthToStoredAuth = (auth: TokenResponse): StoredGoogleAuth => ({
   accessToken: auth.accessToken,
   expiresIn: auth.expiresIn,
@@ -761,6 +786,27 @@ const googleNativeTokenToStoredAuth = (
   scope: GOOGLE_AUTH_SCOPES.join(' '),
   tokenType: 'bearer',
 });
+
+const isGoogleAuthRecoveryError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalizedMessage = message.toLowerCase();
+
+  return (
+    message === GOOGLE_SIGN_IN_REQUIRED_MESSAGE ||
+    message === GOOGLE_SESSION_EXPIRED_MESSAGE ||
+    normalizedMessage.includes('invalid_grant') ||
+    normalizedMessage.includes('invalid credentials') ||
+    normalizedMessage.includes('invalid authentication credentials') ||
+    normalizedMessage.includes('missing required authentication credential') ||
+    normalizedMessage.includes('expected oauth 2 access token') ||
+    normalizedMessage.includes('insufficient authentication scopes') ||
+    normalizedMessage.includes('login required') ||
+    normalizedMessage.includes('unauthorized') ||
+    normalizedMessage.includes('status 401') ||
+    normalizedMessage.includes('token has been expired') ||
+    normalizedMessage.includes('expired or revoked')
+  );
+};
 
 const normalizeNativeGoogleSignInError = (error: unknown, stage = 'Google sign-in') => {
   const message = error instanceof Error ? error.message : String(error);
@@ -888,6 +934,7 @@ const formatPresetSummary = (
     filters.list.length > 0 ? formatPresetCount(filters.list.length, 'list') : null,
     filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
     filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
+    hasRepeatingItemsFilter(filters.reminder) ? REPEATING_ITEMS_FILTER_LABEL : null,
     `Sort ${TODO_SORT_LABELS[sortMode]}`,
     `Group ${TODO_GROUP_LABELS[groupMode]}`,
     orderMode === 'alphabetical' ? 'Lists A to Z' : 'Manual lists',
@@ -900,8 +947,9 @@ const todoMatchesFilters = (
   todo: Todo,
   filters: SelectedFilters,
   listMenuTree: ListMenuNode[],
-) =>
-  FILTER_KEYS.every((filterKey) => {
+  now = new Date(),
+) => {
+  const matchesStandardFilters = FILTER_KEYS.every((filterKey) => {
     const values = filters[filterKey];
     if (values.length === 0) {
       return true;
@@ -913,9 +961,9 @@ const todoMatchesFilters = (
 
     if (filterKey === 'date') {
       return todoMatchesSelectedDateFilters(
-        todo.filters.date,
+        getEffectiveTodoDateLabels(todo, now),
         values,
-        new Date(),
+        now,
         todo.createdAt,
       );
     }
@@ -923,14 +971,27 @@ const todoMatchesFilters = (
     return values.some((value) => todo.filters[filterKey].includes(value));
   });
 
+  return matchesStandardFilters && (
+    !hasRepeatingItemsFilter(filters.reminder) ||
+    hasTodoRepeat(todo.filters.reminder)
+  );
+};
+
 type MenuPresetSwipeRowProps = {
+  actionLabel: 'Apply' | 'Edit';
   label: string;
-  onApply: () => void;
   onDelete: () => void;
+  onPress: () => void;
   summary: string;
 };
 
-function MenuPresetSwipeRow({ label, onApply, onDelete, summary }: MenuPresetSwipeRowProps) {
+function MenuPresetSwipeRow({
+  actionLabel,
+  label,
+  onDelete,
+  onPress,
+  summary,
+}: MenuPresetSwipeRowProps) {
   const renderRightActions = useCallback(
     () => (
       <View style={styles.listMenuPresetSwipeActions}>
@@ -960,8 +1021,14 @@ function MenuPresetSwipeRow({ label, onApply, onDelete, summary }: MenuPresetSwi
       >
         <GHTouchableOpacity
           accessibilityRole="button"
+          accessibilityHint={
+            actionLabel === 'Edit'
+              ? 'Opens this preset in the filter menu for editing'
+              : 'Applies this preset to the selected item'
+          }
+          accessibilityLabel={`${actionLabel} preset ${label}`}
           activeOpacity={1}
-          onPress={onApply}
+          onPress={onPress}
           style={styles.listMenuPresetRow}
         >
           <View style={styles.listMenuRowTextStack}>
@@ -970,7 +1037,7 @@ function MenuPresetSwipeRow({ label, onApply, onDelete, summary }: MenuPresetSwi
               {summary}
             </Text>
           </View>
-          <Text style={styles.listMenuApplyText}>Apply</Text>
+          <Text style={styles.listMenuApplyText}>{actionLabel}</Text>
         </GHTouchableOpacity>
       </Swipeable>
     </View>
@@ -1173,6 +1240,7 @@ export default function App() {
   const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
   const [presetSaveName, setPresetSaveName] = useState('');
+  const [editingMenuPresetId, setEditingMenuPresetId] = useState<string | null>(null);
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
@@ -1180,6 +1248,7 @@ export default function App() {
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
   const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
+  const [settingsNavbarPresetsExpanded, setSettingsNavbarPresetsExpanded] = useState(false);
   const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
@@ -1203,6 +1272,7 @@ export default function App() {
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
+  const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1213,6 +1283,7 @@ export default function App() {
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [collapseAllTodoSectionsRequest, setCollapseAllTodoSectionsRequest] = useState(0);
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
   const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
     () => cloneMetaTagVisibility(),
@@ -1224,7 +1295,6 @@ export default function App() {
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
   );
-  const deferredSelectedFilters = useDeferredValue(selectedFilters);
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
   const suppressHeaderSearchFocusRef = useRef(false);
@@ -1273,6 +1343,11 @@ export default function App() {
   const todoRowTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const lastHomeNavTapRef = useRef(0);
+  const lastFilterNavTapRef = useRef(0);
+  const handledCollapseAllTodoSectionsRequestRef = useRef(0);
+  const lastQuickPresetNavTapRef = useRef({ presetId: '', timestamp: 0 });
+  const quickPresetNavPressInRef = useRef<string | null>(null);
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
   const todoSelectMode = selectedTodoIds.size > 0;
@@ -1375,6 +1450,7 @@ export default function App() {
         setListMenuTree(settings.listMenuTree);
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
+        setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
         setTodoGroupMode(settings.todoGroupMode);
         setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
         setTodoSortMode(settings.todoSortMode);
@@ -1418,6 +1494,8 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+    quickPresetNavPresetIds,
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
@@ -1438,6 +1516,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    quickPresetNavPresetIds,
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
@@ -1771,6 +1850,7 @@ export default function App() {
   const closeListMenuState = useCallback(() => {
     clearTodoMenuHighlightRequest();
     setMenuMode(null);
+    setEditingMenuPresetId(null);
     setActiveTodoMenuId(null);
     setActiveTodoMenuHighlightId(null);
     flushPendingMenuEditedTodoHighlights();
@@ -1787,7 +1867,7 @@ export default function App() {
 
   const closeListMenu = useCallback(() => {
     closeListMenuState();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeListMenuState]);
 
   const exitTodoSelectMode = useCallback(() => {
@@ -1840,17 +1920,17 @@ export default function App() {
     setActiveTodoDetailDraftText('');
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [suppressNextHeaderSearchFocus]);
 
   const closeDeletedTodoDetailModal = useCallback(() => {
     setActiveDeletedTodoDetailId(null);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const openDeletedTodoDetailModal = useCallback((id: string) => {
     setActiveDeletedTodoDetailId(id);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const openTodoDetailModal = useCallback((id: string) => {
@@ -1873,7 +1953,7 @@ export default function App() {
     setActiveTodoDetailDraftText(todo?.text ?? '');
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [
     closeListMenu,
     exitTodoSelectMode,
@@ -1920,7 +2000,7 @@ export default function App() {
     }
 
     animateMenuDismissReset();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
     return true;
   }, [animateMenuDismissReset]);
 
@@ -1975,7 +2055,7 @@ export default function App() {
 
       if (damped > MENU_DISMISS_RELEASE && menuDismissHapticRef.current === 0) {
         menuDismissHapticRef.current = 1;
-        triggerLightTickHaptic();
+        triggerSubtleHaptic();
       }
     },
     [dampMenuPullDistance, menuPullAnim],
@@ -2096,13 +2176,13 @@ export default function App() {
     searchInputRef.current?.blur();
     setSettingsModalVisible(false);
     setNavTab((current) => (current === 'settings' ? null : current));
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const closeFilterConfigModal = useCallback(() => {
     setFilterConfigModalVisible(false);
     setNavTab((current) => (current === 'calendar' ? null : current));
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const openFilterConfigModal = useCallback(() => {
@@ -2110,7 +2190,7 @@ export default function App() {
     closeListMenuState();
     setSettingsModalVisible(false);
     setFilterConfigModalVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeListMenuState]);
 
   const closePresetSaveModal = useCallback(() => {
@@ -2220,7 +2300,7 @@ export default function App() {
 
     if (todoSelectMode) {
       exitTodoSelectMode();
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return true;
     }
 
@@ -2263,13 +2343,13 @@ export default function App() {
 
     if (menuMode === 'presetsQuickApply') {
       setMenuMode('presets');
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return true;
     }
 
     if (submenuOpen) {
       setMenuMode('main');
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return true;
     }
 
@@ -2351,16 +2431,22 @@ export default function App() {
         .map((id) => todosById.get(id))
         .filter((todo): todo is Todo => Boolean(todo))
       : todos;
+    const now = new Date();
 
     return matchedTodos
       .filter((todo) => !hideDoneTodos || !todo.done)
-      .filter((todo) => todoMatchesFilters(todo, deferredSelectedFilters, listMenuTree));
+      .filter((todo) => todoMatchesFilters(
+        todo,
+        selectedFilters,
+        listMenuTree,
+        now,
+      ));
   }, [
-    deferredSelectedFilters,
     hideDoneTodos,
     listMenuTree,
     searchQuery,
     searchResultIds,
+    selectedFilters,
     todos,
     todosById,
   ]);
@@ -2389,7 +2475,7 @@ export default function App() {
     );
     Keyboard.dismiss();
     setCreateDrawerVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeListMenu, exitTodoSelectMode, listMenuOpen, resetCreateDrawerState, todoTextMaxLength]);
 
   useEffect(() => {
@@ -2475,9 +2561,7 @@ export default function App() {
     setCreateDrawerVisible(false);
     setCreateDrawerPicker(null);
     resetCreateDrawerState(nextLastCreateTodoFilters);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
-      () => undefined,
-    );
+    triggerSubtleHaptic();
   }, [
     closeCreateDrawer,
     createDraftContent,
@@ -2500,7 +2584,7 @@ export default function App() {
   const handleCreateDrawerTrailingPress = useCallback(() => {
     if (createDrawerPicker) {
       backToCreateDrawerInput();
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return;
     }
 
@@ -2527,7 +2611,7 @@ export default function App() {
         filterKey === 'priority' && label === 'None' ? [] : [normalizedLabel],
     }));
     setCreateDrawerPicker(null);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
@@ -2536,7 +2620,7 @@ export default function App() {
     reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(picker);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const createDrawerPickerItems = useMemo(() => {
@@ -2581,7 +2665,7 @@ export default function App() {
 
   const toggleCreateDraftPinned = useCallback(() => {
     setCreateDraftPinned((current) => !current);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const deleteTodo = useCallback((id: string) => {
@@ -2615,7 +2699,7 @@ export default function App() {
       next.delete(id);
       return next;
     });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    triggerSubtleHaptic();
   }, [clearEditedTodoHighlights, pendingDeleteIds, todos]);
 
   const restoreDeletedTodo = useCallback((id: string) => {
@@ -2649,7 +2733,7 @@ export default function App() {
     ).catch(() => undefined);
     localTodoStore.upsert(restoredTodo).catch(() => undefined);
     syncTodoAlarm(restoredTodo).catch(() => undefined);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    triggerSubtleHaptic();
   }, [createSettingsSnapshot, deletedTodos, todos]);
 
   const deleteDeletedTodoPermanently = useCallback((id: string) => {
@@ -2674,9 +2758,7 @@ export default function App() {
             appSettingsStore.save(
               createSettingsSnapshot({ deletedTodos: nextDeletedTodos }),
             ).catch(() => undefined);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(
-              () => undefined,
-            );
+            triggerSubtleHaptic();
           },
         },
       ],
@@ -2734,9 +2816,7 @@ export default function App() {
           onPress: () => {
             ids.forEach((id) => deleteTodo(id));
             exitTodoSelectMode();
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
-              () => undefined,
-            );
+            triggerSubtleHaptic();
           },
         },
       ],
@@ -2746,7 +2826,7 @@ export default function App() {
   const markSelectedTodosDone = useCallback((done: boolean) => {
     selectedTodoIds.forEach((id) => setTodoDone(id, done));
     exitTodoSelectMode();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [exitTodoSelectMode, selectedTodoIds, setTodoDone]);
 
   const selectedTodosAllDone = useMemo(() => {
@@ -2854,7 +2934,7 @@ export default function App() {
     updateTodoPinnedForIds(targetIds, !targetTodos.every((todo) => todo.pinned));
     closeListMenuState();
     exitTodoSelectMode();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [
     closeListMenuState,
     exitTodoSelectMode,
@@ -2895,7 +2975,7 @@ export default function App() {
     }
 
     closeDatePicker();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeDatePicker, updateCurrentTodoTargetFilters]);
 
   const clearPickedDate = useCallback(() => {
@@ -2911,7 +2991,7 @@ export default function App() {
     }
 
     closeDatePicker();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeDatePicker, updateCurrentTodoTargetFilters]);
 
   const clearCreateDraftDate = useCallback(() => {
@@ -2919,7 +2999,7 @@ export default function App() {
       ...current,
       date: [],
     }));
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const clearCreateDraftDateOptions = useCallback(() => {
@@ -2932,7 +3012,7 @@ export default function App() {
     reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setRepeatDraft('none');
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const clearCreateDraftList = useCallback((closePicker = false) => {
@@ -2943,7 +3023,7 @@ export default function App() {
     if (closePicker) {
       setCreateDrawerPicker(null);
     }
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const clearCreateDraftPriority = useCallback(() => {
@@ -2952,7 +3032,7 @@ export default function App() {
       ...current,
       priority: [],
     }));
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const handleCreateDrawerCalendarPress = useCallback(() => {
@@ -2963,7 +3043,7 @@ export default function App() {
       }
 
       backToCreateDrawerInput();
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return;
     }
 
@@ -2984,7 +3064,7 @@ export default function App() {
       }
 
       backToCreateDrawerInput();
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return;
     }
 
@@ -3005,7 +3085,7 @@ export default function App() {
       }
 
       backToCreateDrawerInput();
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
       return;
     }
 
@@ -3032,7 +3112,7 @@ export default function App() {
       source: 'create',
       value: decodeTodoReminder(createDraftFilters.reminder).time,
     });
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [createDraftFilters.reminder]);
 
   const confirmReminderTime = useCallback((
@@ -3063,14 +3143,14 @@ export default function App() {
       }
     }
 
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const openCreateRepeatModal = useCallback(() => {
     repeatReminderApplyRef.current = 'create';
     setRepeatDraft(decodeTodoReminder(createDraftFilters.reminder).repeat);
     setRepeatReminderModalVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [createDraftFilters.reminder]);
 
   const closeCreateRepeatModal = useCallback(() => {
@@ -3081,13 +3161,10 @@ export default function App() {
     if (repeatReminderApplyRef.current === 'create') {
       setCreateDraftFilters((draft) => {
         const current = decodeTodoReminder(draft.reminder);
-        const nextTime = repeat === 'none'
-          ? current.time
-          : current.time ?? { ...DEFAULT_REMINDER_TIME };
 
         return {
           ...draft,
-          reminder: encodeTodoReminder({ time: nextTime, repeat }),
+          reminder: encodeTodoReminder({ time: current.time, repeat }),
         };
       });
     } else {
@@ -3096,29 +3173,30 @@ export default function App() {
       if (targetIds.length > 0) {
         updateTodoFiltersForIds(targetIds, (filters) => {
           const current = decodeTodoReminder(filters.reminder);
-          const nextTime = repeat === 'none'
-            ? current.time
-            : current.time ?? { ...DEFAULT_REMINDER_TIME };
 
           return {
             ...filters,
-            reminder: encodeTodoReminder({ time: nextTime, repeat }),
+            reminder: encodeTodoReminder({ time: current.time, repeat }),
           };
         });
       }
     }
 
     setRepeatReminderModalVisible(false);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const clearCreateReminderTime = useCallback(() => {
-    setCreateDraftFilters((draft) => ({
-      ...draft,
-      reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
-    }));
+    setCreateDraftFilters((draft) => {
+      const current = decodeTodoReminder(draft.reminder);
+
+      return {
+        ...draft,
+        reminder: encodeTodoReminder({ time: null, repeat: current.repeat }),
+      };
+    });
     reminderTimeModalRef.current?.close();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const clearCreateRepeat = useCallback(() => {
@@ -3130,7 +3208,7 @@ export default function App() {
         reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
       };
     });
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const openActiveTodoReminderModal = useCallback(() => {
@@ -3146,7 +3224,7 @@ export default function App() {
       source: 'activeTodo',
       value: decodeTodoReminder(reminderValues).time,
     });
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, todos]);
 
   const openActiveTodoRepeatModal = useCallback(() => {
@@ -3161,7 +3239,7 @@ export default function App() {
     repeatReminderApplyRef.current = 'activeTodo';
     setRepeatDraft(decodeTodoReminder(reminderValues).repeat);
     setRepeatReminderModalVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, todos]);
 
   const clearActiveTodoReminderTime = useCallback(() => {
@@ -3171,12 +3249,16 @@ export default function App() {
       return;
     }
 
-    updateTodoFiltersForIds(targetIds, (filters) => ({
-      ...filters,
-      reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
-    }));
+    updateTodoFiltersForIds(targetIds, (filters) => {
+      const current = decodeTodoReminder(filters.reminder);
+
+      return {
+        ...filters,
+        reminder: encodeTodoReminder({ time: null, repeat: current.repeat }),
+      };
+    });
     reminderTimeModalRef.current?.close();
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const clearActiveTodoRepeat = useCallback(() => {
@@ -3194,7 +3276,7 @@ export default function App() {
         reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
       };
     });
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const handleCreateDrawerDatePress = useCallback((label: string) => {
@@ -3254,7 +3336,7 @@ export default function App() {
         Keyboard.dismiss();
         setActiveTodoMenuId(null);
         setMenuMode('main');
-        Haptics.selectionAsync().catch(() => undefined);
+        triggerSubtleHaptic();
         return true;
       }
 
@@ -3305,7 +3387,7 @@ export default function App() {
         if (!startedOnTodoRow) {
           lastListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
           exitTodoSelectMode();
-          Haptics.selectionAsync().catch(() => undefined);
+          triggerSubtleHaptic();
         }
 
         return;
@@ -3385,9 +3467,17 @@ export default function App() {
     () => buildVisibleListMenuItems(orderedListMenuTree, true),
     [orderedListMenuTree],
   );
-  const orderedListLabels = useMemo(
-    () => collectListNodeLabels(orderedListMenuTree),
-    [orderedListMenuTree],
+  const todoListOrderedListMenuTree = useMemo(
+    () => (
+      listOrderMode === 'alphabetical'
+        ? sortListMenuTree(listMenuTree)
+        : listMenuTree
+    ),
+    [listMenuTree, listOrderMode],
+  );
+  const todoListOrderedListLabels = useMemo(
+    () => collectListNodeLabels(todoListOrderedListMenuTree),
+    [todoListOrderedListMenuTree],
   );
   const settingsListColorLabels = useMemo(
     () => collectListNodeLabels(listMenuTree),
@@ -3466,11 +3556,16 @@ export default function App() {
   const todoListDisplay = useMemo(
     () => resolveListDisplaySettings(
       listMenuTree,
-      deferredSelectedFilters.list,
+      selectedFilters.list,
       todoSortMode,
       todoGroupMode,
     ),
-    [deferredSelectedFilters.list, listMenuTree, todoGroupMode, todoSortMode],
+    [
+      listMenuTree,
+      selectedFilters.list,
+      todoGroupMode,
+      todoSortMode,
+    ],
   );
   const todoListSortMode = todoListDisplay.sortMode;
   const todoListGroupMode = todoListDisplay.groupMode;
@@ -3494,33 +3589,61 @@ export default function App() {
     menuPresets,
     selectedFilters,
   ]);
+  const menuPresetById = useMemo(
+    () => new Map(menuPresets.map((preset) => [preset.id, preset])),
+    [menuPresets],
+  );
+  const quickPresetNavUsesAutomaticSlots = quickPresetNavPresetIds.length === 0;
+  const quickPresetNavItems = useMemo(
+    () => QUICK_PRESET_NAV_ICONS.map((iconName, index) => {
+      const presetId = quickPresetNavUsesAutomaticSlots
+        ? menuPresets[index]?.id ?? null
+        : quickPresetNavPresetIds[index] ?? null;
+
+      return {
+        iconName,
+        id: `quick-preset-slot-${index + 1}`,
+        preset: presetId ? menuPresetById.get(presetId) ?? null : null,
+        presetId,
+        slotNumber: index + 1,
+      };
+    }),
+    [
+      menuPresetById,
+      menuPresets,
+      quickPresetNavPresetIds,
+      quickPresetNavUsesAutomaticSlots,
+    ],
+  );
+  const assignedQuickPresetNavCount = quickPresetNavItems.filter((item) => item.preset).length;
+  const quickPresetNavSettingsSummary = menuPresets.length === 0
+    ? 'No saved presets'
+    : quickPresetNavUsesAutomaticSlots
+      ? 'Auto first saved presets'
+      : `${assignedQuickPresetNavCount} assigned · ${menuPresets.length} saved`;
   const todoListUseSubsectionLayout =
     todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
   const sortedTodos = useMemo(
-    () => [...filteredTodos].sort((first, second) => (
-      compareTodosBySortMode(first, second, todoListSortMode)
-    )),
+    () => [...filteredTodos].sort(createTodoSortComparator(todoListSortMode)),
     [filteredTodos, todoListSortMode],
   );
   const todoListRows = useMemo(
     () => buildTodoListRows(
       sortedTodos,
       todoListGroupMode,
-      todoListSortMode,
-      orderedListLabels,
+      todoListOrderedListLabels,
       listMenuTree,
-      deferredSelectedFilters.list,
+      selectedFilters.list,
       todoListUseSubsectionLayout,
       dateLabelDisplayMode,
     ),
     [
       dateLabelDisplayMode,
-      deferredSelectedFilters.list,
       listMenuTree,
-      orderedListLabels,
+      selectedFilters.list,
       sortedTodos,
       todoListGroupMode,
-      todoListSortMode,
+      todoListOrderedListLabels,
       todoListUseSubsectionLayout,
     ],
   );
@@ -3528,6 +3651,38 @@ export default function App() {
     () => flattenTodoListRows(todoListRows, collapsedTodoGroupIds),
     [collapsedTodoGroupIds, todoListRows],
   );
+  useEffect(() => {
+    if (
+      collapseAllTodoSectionsRequest === 0 ||
+      handledCollapseAllTodoSectionsRequestRef.current === collapseAllTodoSectionsRequest
+    ) {
+      return;
+    }
+
+    handledCollapseAllTodoSectionsRequestRef.current = collapseAllTodoSectionsRequest;
+    const sectionIds = todoListRows.flatMap((row) => (
+      row.type === 'section' ? [row.id] : []
+    ));
+
+    if (sectionIds.length === 0) {
+      return;
+    }
+
+    todoListRef.current?.clearLayoutCacheOnUpdate();
+    setCollapsedTodoGroupIds((current) => {
+      const next = new Set(current);
+      let changed = false;
+
+      sectionIds.forEach((sectionId) => {
+        if (!next.has(sectionId)) {
+          next.add(sectionId);
+          changed = true;
+        }
+      });
+
+      return changed ? next : current;
+    });
+  }, [collapseAllTodoSectionsRequest, todoListRows]);
   const pendingDeleteKey = useMemo(
     () => [...pendingDeleteIds].sort().join('|'),
     [pendingDeleteIds],
@@ -3544,7 +3699,6 @@ export default function App() {
     () => ({
       activeTodoMenuHighlightId,
       activeTodoMenuId,
-      menuMode,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       recentlyEditedTodoKey,
@@ -3553,7 +3707,6 @@ export default function App() {
     [
       activeTodoMenuHighlightId,
       activeTodoMenuId,
-      menuMode,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       recentlyEditedTodoKey,
@@ -3716,9 +3869,7 @@ export default function App() {
     setActiveTodoDetailDraftText('');
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
-      () => undefined,
-    );
+    triggerSubtleHaptic();
   }, [
     activeTodoDetail,
     activeTodoDetailCanEdit,
@@ -3753,6 +3904,9 @@ export default function App() {
     effectiveGroupMode,
     listOrderMode,
   );
+  const editingMenuPreset = editingMenuPresetId
+    ? menuPresetById.get(editingMenuPresetId) ?? null
+    : null;
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
     if (menuMode === 'lists') {
       return visibleListMenuItems;
@@ -3763,7 +3917,7 @@ export default function App() {
         filterKey: 'priority',
         id: `priority-${label}`,
         label,
-        type: 'value',
+        type: 'value' as const,
       }));
     }
 
@@ -3772,22 +3926,41 @@ export default function App() {
         ? DATE_PICKER_MENU_ITEMS
         : DATE_MENU_ITEMS;
 
-      return dateMenuItems.map((label) => ({
-        filterKey: 'date',
-        id: `date-${label}`,
-        label,
-        type: 'value',
-      }));
+      return [
+        ...dateMenuItems.map((label) => ({
+          filterKey: 'date' as const,
+          id: `date-${label}`,
+          label,
+          type: 'value' as const,
+        })),
+        ...(!includeActiveTodoReminderRows
+          ? [{
+              filterKey: 'date' as const,
+              id: 'date-repeating-items',
+              label: REPEATING_ITEMS_FILTER_VALUE,
+              type: 'value' as const,
+            }]
+          : []),
+      ];
     }
 
     if (menuMode === 'filters') {
-      return FILTER_KEYS
-        .flatMap((filterKey) => menuFilters[filterKey].map((label) => ({
+      return [
+        ...FILTER_KEYS.flatMap((filterKey) => menuFilters[filterKey].map((label) => ({
           filterKey,
           id: `filter-${filterKey}-${label}`,
           label,
-          type: 'filter',
-        })));
+          type: 'filter' as const,
+        }))),
+        ...(hasRepeatingItemsFilter(menuFilters.reminder)
+          ? [{
+              filterKey: 'date' as const,
+              id: 'filter-repeating-items',
+              label: REPEATING_ITEMS_FILTER_VALUE,
+              type: 'filter' as const,
+            }]
+          : []),
+      ];
     }
 
     if (menuMode === 'sort') {
@@ -3920,6 +4093,13 @@ export default function App() {
     }
 
     const rows: MenuRow[] = [
+      ...(editingMenuPreset
+        ? [{
+            id: 'main-update-preset',
+            label: `Update ${editingMenuPreset.label}`,
+            type: 'updatePreset' as const,
+          }]
+        : []),
       {
         count: menuPresets.length || undefined,
         id: 'main-presets',
@@ -3999,6 +4179,7 @@ export default function App() {
     activeFilterCount,
     activeMenuPreset,
     currentPresetSummary,
+    editingMenuPreset,
     hasTodoEditTargets,
     includeActiveTodoReminderRows,
     latestMenuPreset,
@@ -4104,14 +4285,29 @@ export default function App() {
     };
 
     updateCurrentTodoTargetFilters(toggleValue);
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [
     hasTodoEditTargets,
     menuSelectionFilters,
     updateCurrentTodoTargetFilters,
   ]);
 
+  const toggleRepeatingItemsFilter = useCallback(() => {
+    setSelectedFilters((current) => ({
+      ...current,
+      reminder: hasRepeatingItemsFilter(current.reminder)
+        ? []
+        : [REPEATING_ITEMS_FILTER_VALUE],
+    }));
+    triggerSubtleHaptic();
+  }, []);
+
   const handleDateMenuLabelPress = useCallback((label: string) => {
+    if (label === REPEATING_ITEMS_FILTER_VALUE) {
+      toggleRepeatingItemsFilter();
+      return;
+    }
+
     if (label === REMINDER_PICKER_LABEL) {
       openActiveTodoReminderModal();
       return;
@@ -4134,6 +4330,7 @@ export default function App() {
     openActiveTodoRepeatModal,
     openDatePicker,
     toggleFilterValue,
+    toggleRepeatingItemsFilter,
   ]);
 
   const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
@@ -4180,7 +4377,7 @@ export default function App() {
 
     updateCurrentTodoTargetFilters(toggleValue);
 
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [hasTodoEditTargets, listMenuTree, updateCurrentTodoTargetFilters]);
 
   const removeListMenuItem = useCallback((item: VisibleListMenuItem) => {
@@ -4203,11 +4400,15 @@ export default function App() {
     };
 
     updateCurrentTodoTargetFilters(removeValue);
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [listMenuTree, updateCurrentTodoTargetFilters]);
 
   const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
     const removeValue = (current: SelectedFilters) => {
+      if (value === REPEATING_ITEMS_FILTER_VALUE) {
+        return { ...current, reminder: [] };
+      }
+
       const formattedValue = filterKey === 'date'
         ? formatDateFilterValue(value)
         : value;
@@ -4227,7 +4428,7 @@ export default function App() {
     };
 
     updateCurrentTodoTargetFilters(removeValue);
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [updateCurrentTodoTargetFilters]);
 
   const clearAppliedMenuPreset = useCallback(() => {
@@ -4244,7 +4445,7 @@ export default function App() {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     setNavTab(null);
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [
     closeListMenuState,
     hasTodoEditTargets,
@@ -4293,7 +4494,7 @@ export default function App() {
         },
       };
     });
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, []);
 
   const selectTodoSortMode = useCallback((sortMode: TodoSortMode) => {
@@ -4315,10 +4516,11 @@ export default function App() {
       setTodoSortMode(sortMode);
     }
 
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
+    triggerSubtleHaptic();
     setCollapsedTodoGroupIds((current) => {
       const next = new Set(current);
 
@@ -4327,7 +4529,6 @@ export default function App() {
         return next;
       }
 
-      todoListRef.current?.clearLayoutCacheOnUpdate();
       next.add(groupId);
       return next;
     });
@@ -4338,24 +4539,24 @@ export default function App() {
       ...current,
       [key]: !current[key],
     }));
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, []);
 
   const toggleHideDoneTodos = useCallback(() => {
     setHideDoneTodos((current) => !current);
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, []);
 
   const toggleDateLabelDisplayMode = useCallback(() => {
     setDateLabelDisplayMode((current) => (
       current === 'remaining' ? 'exact' : 'remaining'
     ));
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, []);
 
   const toggleShowOverdueMetaTags = useCallback(() => {
     setShowOverdueMetaTags((current) => !current);
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, []);
 
   const getDateMenuDisplayLabel = useCallback(
@@ -4383,7 +4584,7 @@ export default function App() {
       setTodoGroupMode(groupMode);
     }
 
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
 
   const clearMenuSection = useCallback((section: MenuMode) => {
@@ -4396,7 +4597,7 @@ export default function App() {
           [filterKey]: [],
         };
 
-        if (filterKey === 'date' && hasTodoEditTargets) {
+        if (filterKey === 'date') {
           nextFilters.reminder = [];
         }
 
@@ -4404,7 +4605,7 @@ export default function App() {
       };
 
       updateCurrentTodoTargetFilters(clearKey);
-      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+      triggerSubtleHaptic();
       return;
     }
 
@@ -4437,7 +4638,7 @@ export default function App() {
         setTodoSortMode('newest');
       }
 
-      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+      triggerSubtleHaptic();
       return;
     }
 
@@ -4460,13 +4661,13 @@ export default function App() {
         setTodoGroupMode('none');
       }
 
-      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+      triggerSubtleHaptic();
       return;
     }
 
     if (section === 'metaTags') {
       setMetaTagVisibility(cloneMetaTagVisibility(DEFAULT_META_TAG_VISIBILITY));
-      requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+      triggerSubtleHaptic();
     }
   }, [
     clearAppliedMenuPreset,
@@ -4501,7 +4702,7 @@ export default function App() {
       },
     ]);
     closePresetSaveModal();
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [closePresetSaveModal, listOrderMode, menuFilters, todoGroupMode, todoSortMode]);
 
   const focusPresetSaveInput = useCallback(() => {
@@ -4514,7 +4715,7 @@ export default function App() {
     searchInputRef.current?.blur();
     setPresetSaveName(`Preset ${menuPresets.length + 1}`);
     setPresetSaveModalVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [menuPresets.length]);
 
   useEffect(() => {
@@ -4527,25 +4728,152 @@ export default function App() {
     return () => clearTimeout(focusTimer);
   }, [focusPresetSaveInput, presetSaveModalVisible]);
 
-  const applyMenuPreset = useCallback((preset: MenuPreset) => {
+  const applyMenuPreset = useCallback((
+    preset: MenuPreset,
+    options?: { closeMenu?: boolean; haptic?: boolean },
+  ) => {
     const nextFilters = cloneTodoFilters(preset.filters);
 
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
     } else {
-      setSelectedFilters(nextFilters);
+      setSelectedFilters((current) => (
+        filtersEqual(current, nextFilters) ? current : nextFilters
+      ));
       setListOrderMode(preset.listOrderMode);
       setTodoGroupMode(preset.todoGroupMode);
       setTodoSortMode(preset.todoSortMode);
     }
 
-    closeListMenuState();
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    if (options?.closeMenu !== false) {
+      closeListMenuState();
+    }
+
+    if (options?.haptic ?? true) {
+      triggerSubtleHaptic();
+    }
   }, [
     closeListMenuState,
     hasTodoEditTargets,
     updateCurrentTodoTargetFilters,
   ]);
+
+  const openMenuPresetEditor = useCallback((preset: MenuPreset) => {
+    applyMenuPreset(preset, {
+      closeMenu: false,
+      haptic: false,
+    });
+    setEditingMenuPresetId(preset.id);
+    setMenuMode('main');
+    triggerSubtleHaptic();
+  }, [applyMenuPreset]);
+
+  const updateEditingMenuPreset = useCallback(() => {
+    if (!editingMenuPresetId) {
+      return;
+    }
+
+    setMenuPresets((current) => current.map((preset) => (
+      preset.id === editingMenuPresetId
+        ? {
+            ...preset,
+            filters: cloneTodoFilters(menuFilters),
+            listOrderMode,
+            todoGroupMode: effectiveGroupMode,
+            todoSortMode: effectiveSortMode,
+          }
+        : preset
+    )));
+    setEditingMenuPresetId(null);
+    setMenuMode('presets');
+    triggerSubtleHaptic();
+  }, [
+    editingMenuPresetId,
+    effectiveGroupMode,
+    effectiveSortMode,
+    listOrderMode,
+    menuFilters,
+  ]);
+
+  const applyQuickPresetNavPreset = useCallback((
+    preset: MenuPreset | null,
+    timestamp: number,
+  ) => {
+    if (!preset) {
+      return;
+    }
+
+    const lastTap = lastQuickPresetNavTapRef.current;
+    const elapsed = timestamp - lastTap.timestamp;
+    const isDoubleTap =
+      lastTap.presetId === preset.id &&
+      elapsed >= 0 &&
+      elapsed < QUICK_PRESET_NAV_DOUBLE_TAP_MS;
+
+    lastQuickPresetNavTapRef.current = isDoubleTap
+      ? { presetId: '', timestamp: 0 }
+      : { presetId: preset.id, timestamp };
+    triggerSubtleHaptic();
+    setFilterConfigModalVisible(false);
+    setSettingsModalVisible(false);
+    setNavTab(null);
+    applyMenuPreset(preset, {
+      closeMenu: listMenuOpenRef.current,
+      haptic: false,
+    });
+
+    if (isDoubleTap) {
+      setCollapseAllTodoSectionsRequest((current) => current + 1);
+    }
+
+    requestAnimationFrame(() => {
+      searchInputRef.current?.blur();
+      Keyboard.dismiss();
+    });
+  }, [
+    applyMenuPreset,
+  ]);
+
+  const handleQuickPresetNavPress = useCallback((
+    preset: MenuPreset | null,
+    event: GestureResponderEvent,
+    phase: 'press' | 'pressIn',
+  ) => {
+    if (!preset) {
+      return;
+    }
+
+    if (phase === 'pressIn') {
+      quickPresetNavPressInRef.current = preset.id;
+    } else if (quickPresetNavPressInRef.current === preset.id) {
+      quickPresetNavPressInRef.current = null;
+      return;
+    }
+
+    applyQuickPresetNavPreset(preset, event.nativeEvent.timestamp || Date.now());
+  }, [
+    applyQuickPresetNavPreset,
+  ]);
+
+  const assignQuickPresetNavSlot = useCallback((slotIndex: number, presetId: string | null) => {
+    const nextPresetId = presetId && menuPresets.some((preset) => preset.id === presetId)
+      ? presetId
+      : null;
+
+    setQuickPresetNavPresetIds((current) => {
+      const next = QUICK_PRESET_NAV_ICONS.map((_, index) => (
+        current.length > 0 ? current[index] ?? null : menuPresets[index]?.id ?? null
+      ));
+      next[slotIndex] = nextPresetId;
+      return next;
+    });
+    triggerSubtleHaptic();
+  }, [menuPresets]);
+
+  const resetQuickPresetNavSlots = useCallback(() => {
+    setQuickPresetNavPresetIds([]);
+    triggerSubtleHaptic();
+  }, []);
 
   const removeMenuPreset = useCallback((id: string) => {
     const removed = menuPresets.find((preset) => preset.id === id);
@@ -4562,13 +4890,18 @@ export default function App() {
     );
 
     setMenuPresets((current) => current.filter((preset) => preset.id !== id));
+    setQuickPresetNavPresetIds((current) => (
+      current.length === 0
+        ? current
+        : current.map((presetId) => (presetId === id ? null : presetId))
+    ));
 
     if (shouldResetView) {
       clearAppliedMenuPreset();
       return;
     }
 
-    requestAnimationFrame(() => Haptics.selectionAsync().catch(() => undefined));
+    triggerSubtleHaptic();
   }, [
     activeTodoMenuId,
     clearAppliedMenuPreset,
@@ -4597,7 +4930,7 @@ export default function App() {
       return [...current, { label }];
     });
     setNewListName('');
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [newListName]);
 
   const moveSettingsList = useCallback((index: number, direction: -1 | 1) => {
@@ -4612,7 +4945,7 @@ export default function App() {
       [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
       return next;
     });
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const addSettingsListSubsection = useCallback((parentIndex: number) => {
@@ -4642,7 +4975,7 @@ export default function App() {
     });
     setNewSubsectionName('');
     setSubsectionParentIndex(null);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [newSubsectionName]);
 
   const removeSettingsListSubsection = useCallback((parentIndex: number, childIndex: number) => {
@@ -4687,7 +5020,7 @@ export default function App() {
           : item
       ));
     });
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [pendingDeleteIds]);
 
   const removeSettingsList = useCallback((index: number) => {
@@ -4728,7 +5061,7 @@ export default function App() {
 
       return current.filter((_, itemIndex) => itemIndex !== index);
     });
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [pendingDeleteIds]);
 
   const openSettingsModal = useCallback(() => {
@@ -4743,8 +5076,9 @@ export default function App() {
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
     setSettingsListsExpanded(false);
+    setSettingsNavbarPresetsExpanded(false);
     setSettingsModalVisible(true);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeListMenuState, exitTodoSelectMode]);
 
   const appHeaderTitle = useMemo(() => {
@@ -4775,17 +5109,17 @@ export default function App() {
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [closeListMenuState]);
 
   const closeHeaderSearch = useCallback(() => {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     setNavTab(null);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
-  const showTodoItems = useCallback(() => {
+  const showTodoItems = useCallback((options: { haptic?: boolean } = {}) => {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     closeListMenuState();
@@ -4794,10 +5128,87 @@ export default function App() {
     setFilterConfigModalVisible(false);
     setNavTab(null);
     setQuery('');
-    Haptics.selectionAsync().catch(() => undefined);
+
+    if (options.haptic ?? true) {
+      triggerSubtleHaptic();
+    }
   }, [closeListMenuState, exitTodoSelectMode]);
 
+  const applyHomeListDisplayMode = useCallback((
+    mode: (typeof HOME_LIST_DISPLAY_CYCLE_MODES)[number],
+  ) => {
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    closeListMenuState();
+    exitTodoSelectMode();
+    setSettingsModalVisible(false);
+    setFilterConfigModalVisible(false);
+    setNavTab(null);
+    setQuery('');
+
+    if (activeListDisplay.listLabel) {
+      setListMenuTree((current) => updateListNodeDisplaySettings(
+        current,
+        activeListDisplay.listLabel!,
+        activeListDisplay.isSubsectionView,
+        mode,
+      ));
+    } else {
+      setTodoGroupMode(mode.groupMode);
+      setTodoSortMode(mode.sortMode);
+    }
+
+    triggerSubtleHaptic();
+  }, [
+    activeListDisplay.isSubsectionView,
+    activeListDisplay.listLabel,
+    closeListMenuState,
+    exitTodoSelectMode,
+  ]);
+
+  const cycleHomeListDisplayMode = useCallback(() => {
+    const activeModeIndex = HOME_LIST_DISPLAY_CYCLE_MODES.findIndex((mode) => (
+      mode.groupMode === effectiveGroupMode &&
+      mode.sortMode === effectiveSortMode
+    ));
+    const nextMode =
+      HOME_LIST_DISPLAY_CYCLE_MODES[(activeModeIndex + 1) % HOME_LIST_DISPLAY_CYCLE_MODES.length];
+
+    applyHomeListDisplayMode(nextMode);
+    return true;
+  }, [applyHomeListDisplayMode, effectiveGroupMode, effectiveSortMode]);
+
+  const homeNavSelected =
+    navTab === null &&
+    !listMenuOpen &&
+    !settingsModalVisible &&
+    !filterConfigModalVisible;
+  const homeNavIdle = homeNavSelected && query.length === 0 && !todoSelectMode;
+
+  const handleHomeNavPress = useCallback((event: GestureResponderEvent) => {
+    const timestamp = event.nativeEvent.timestamp || Date.now();
+    const sinceLastTap = timestamp - lastHomeNavTapRef.current;
+
+    if (sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
+      lastHomeNavTapRef.current = 0;
+
+      if (cycleHomeListDisplayMode()) {
+        return;
+      }
+    }
+
+    lastHomeNavTapRef.current = timestamp;
+
+    if (!homeNavIdle) {
+      showTodoItems({ haptic: false });
+    }
+  }, [cycleHomeListDisplayMode, homeNavIdle, showTodoItems]);
+
   const handleNavTabPress = useCallback((tab: NavTab) => {
+    lastHomeNavTapRef.current = 0;
+    if (tab !== 'calendar') {
+      lastFilterNavTapRef.current = 0;
+    }
     const shouldKeepSelection = todoSelectMode && (tab === 'menu' || tab === 'calendar');
 
     setActiveTodoMenuId(null);
@@ -4878,7 +5289,7 @@ export default function App() {
         break;
     }
 
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, [
     closeHeaderSearch,
     closeFilterConfigModal,
@@ -4896,6 +5307,24 @@ export default function App() {
     todoSelectMode,
   ]);
 
+  const handleFilterNavPress = useCallback((event: GestureResponderEvent) => {
+    const timestamp = event.nativeEvent.timestamp || Date.now();
+    const sinceLastTap = timestamp - lastFilterNavTapRef.current;
+
+    if (!todoSelectMode && sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
+      lastFilterNavTapRef.current = 0;
+      setSelectedFilters(cloneTodoFilters());
+      setTodoSortMode('newest');
+      setTodoGroupMode('none');
+      setListOrderMode('alphabetical');
+      triggerSubtleHaptic();
+      return;
+    }
+
+    lastFilterNavTapRef.current = timestamp;
+    handleNavTabPress('calendar');
+  }, [handleNavTabPress, todoSelectMode]);
+
   useEffect(() => {
     if (!listMenuOpen && navTab === 'menu') {
       setNavTab(null);
@@ -4904,7 +5333,7 @@ export default function App() {
 
   const toggleGoogleDriveBackup = useCallback(() => {
     setGoogleDriveBackupEnabled((current) => !current);
-    Haptics.selectionAsync().catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const disconnectGoogleDrive = useCallback(async () => {
@@ -4923,9 +5352,61 @@ export default function App() {
       await googleAuthStore.clear();
       setGoogleAuth(null);
       setGoogleDriveBackupStatus('Google Drive disconnected');
-      Haptics.selectionAsync().catch(() => undefined);
+      triggerSubtleHaptic();
     } finally {
       setGoogleDriveBusy(false);
+    }
+  }, []);
+
+  const refreshAndroidGoogleAccessToken = useCallback(async (storedAuth: StoredGoogleAuth) => {
+    if (Platform.OS !== 'android') {
+      return null;
+    }
+
+    let nativeGoogleSignIn: NativeGoogleSignIn;
+
+    try {
+      assertNativeGoogleSignInAvailable();
+      nativeGoogleSignIn = await import('@react-native-google-signin/google-signin');
+    } catch {
+      return null;
+    }
+
+    const { GoogleSignin } = nativeGoogleSignIn;
+
+    try {
+      GoogleSignin.configure({
+        scopes: GOOGLE_AUTH_SCOPES,
+      });
+
+      setGoogleDriveBackupStatus('Refreshing Google Drive access...');
+
+      const hasPlayServices = await GoogleSignin.hasPlayServices({
+        showPlayServicesUpdateDialog: true,
+      });
+      if (!hasPlayServices || !GoogleSignin.hasPreviousSignIn()) {
+        return null;
+      }
+
+      await GoogleSignin.clearCachedAccessToken(storedAuth.accessToken).catch(() => undefined);
+
+      const silentResult = await GoogleSignin.signInSilently();
+      if (silentResult.type !== 'success') {
+        return null;
+      }
+
+      const tokens = await GoogleSignin.getTokens();
+      if (!tokens.accessToken) {
+        return null;
+      }
+
+      const nextAuth = googleNativeTokenToStoredAuth(tokens.accessToken, tokens.idToken);
+      setGoogleAuth(nextAuth);
+      await googleAuthStore.save(nextAuth);
+
+      return nextAuth.accessToken;
+    } catch {
+      return null;
     }
   }, []);
 
@@ -4937,7 +5418,7 @@ export default function App() {
 
     const storedAuth = authOverride ?? googleAuth ?? await googleAuthStore.load();
     if (!storedAuth) {
-      throw new Error('Google sign in is required.');
+      throw new Error(GOOGLE_SIGN_IN_REQUIRED_MESSAGE);
     }
 
     const token = new TokenResponse({
@@ -4955,9 +5436,14 @@ export default function App() {
     }
 
     if (!storedAuth.refreshToken) {
+      const refreshedAndroidToken = await refreshAndroidGoogleAccessToken(storedAuth);
+      if (refreshedAndroidToken) {
+        return refreshedAndroidToken;
+      }
+
       await googleAuthStore.clear();
       setGoogleAuth(null);
-      throw new Error('Google session expired. Sign in again.');
+      throw new Error(GOOGLE_SESSION_EXPIRED_MESSAGE);
     }
 
     const refreshedToken = await token.refreshAsync(
@@ -4975,7 +5461,7 @@ export default function App() {
     await googleAuthStore.save(nextAuth);
 
     return nextAuth.accessToken;
-  }, [googleAuth]);
+  }, [googleAuth, refreshAndroidGoogleAccessToken]);
 
   const handleGoogleDriveError = useCallback((
     error: unknown,
@@ -4984,7 +5470,7 @@ export default function App() {
   ) => {
     setGoogleDriveBackupStatus(error instanceof Error ? error.message : fallbackMessage);
     if (notify) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      triggerSubtleHaptic();
     }
   }, []);
 
@@ -5069,6 +5555,8 @@ export default function App() {
       listMenuTree,
       listOrderMode,
       menuPresets,
+      quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+      quickPresetNavPresetIds,
       selectedFilters,
       showOverdueMetaTags,
       todoGroupMode,
@@ -5081,7 +5569,7 @@ export default function App() {
       `Backed up ${backupTodos.length} items · ${formatBackupTime(payload.exportedAt)}`,
     );
     if (options.notify !== false) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      triggerSubtleHaptic();
     }
   }, [
     collapsedTodoGroupIds,
@@ -5146,6 +5634,9 @@ export default function App() {
     setListMenuTree(restoredListMenuTree);
     setListOrderMode(backup.payload.settings.listOrderMode);
     setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
+    setQuickPresetNavPresetIds(
+      cloneQuickPresetNavPresetIds(backup.payload.settings.quickPresetNavPresetIds),
+    );
     setTodoGroupMode(backup.payload.settings.todoGroupMode);
     setCollapsedTodoGroupIds(new Set(backup.payload.settings.collapsedTodoGroupIds));
     setTodoSortMode(backup.payload.settings.todoSortMode);
@@ -5158,7 +5649,7 @@ export default function App() {
     setGoogleDriveBackupStatus(
       `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
     );
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    triggerSubtleHaptic();
   }, []);
 
   const runGoogleDriveAction = useCallback(async (
@@ -5178,7 +5669,7 @@ export default function App() {
   const authenticateAndRunGoogleDriveAction = useCallback(async (action: GoogleDriveAction) => {
     if (!googleOAuthConfigured) {
       setGoogleDriveBackupStatus('Google sign-in is not configured for this build.');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      triggerSubtleHaptic();
       return;
     }
 
@@ -5245,12 +5736,9 @@ export default function App() {
     try {
       await runGoogleDriveAction(action);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      const shouldSignInAgain =
-        message === 'Google session expired. Sign in again.' ||
-        message === 'Google sign in is required.';
-
-      if (shouldSignInAgain) {
+      if (isGoogleAuthRecoveryError(error)) {
+        await googleAuthStore.clear();
+        setGoogleAuth(null);
         setGoogleDriveBusy(false);
         await authenticateAndRunGoogleDriveAction(action);
         return;
@@ -5325,6 +5813,13 @@ export default function App() {
         })
         .catch((error: unknown) => {
           autoBackupFailedStateKeyRef.current = stateKey;
+          if (isGoogleAuthRecoveryError(error)) {
+            googleAuthStore.clear().catch(() => undefined);
+            setGoogleAuth(null);
+            setGoogleDriveBackupStatus('Google session expired. Sign in to back up again.');
+            return;
+          }
+
           handleGoogleDriveError(error, 'Google Drive auto backup failed', false);
         })
         .finally(() => {
@@ -5359,8 +5854,8 @@ export default function App() {
         return row.todo.id === id;
       }
 
-      if (row.type === 'groupedTodo') {
-        return row.todo.id === id;
+      if (row.type === 'groupedTodoBatch') {
+        return row.todos.some((todo) => todo.id === id);
       }
 
       return false;
@@ -5371,6 +5866,20 @@ export default function App() {
     }
 
     const getTargetOffset = () => {
+      const targetRow = visibleTodoListRows[index];
+
+      if (targetRow.type === 'groupedTodoBatch') {
+        const itemOffset = estimateTodoListOffsetForId(
+          todoListRows,
+          id,
+          collapsedTodoGroupIds,
+        );
+
+        return itemOffset === null
+          ? null
+          : itemOffset + todoListOneHandedOffset - TODO_MENU_TARGET_TOP_OFFSET;
+      }
+
       const firstItemOffset = list.getFirstItemOffset();
       const layout = list.getLayout(index);
 
@@ -5423,8 +5932,11 @@ export default function App() {
 
     const highlightedId = newlyCreatedTodoHighlightId;
     const isVisible = visibleTodoListRows.some((row) => (
-      (row.type === 'todo' || row.type === 'groupedTodo') &&
-      row.todo.id === highlightedId
+      (row.type === 'todo' && row.todo.id === highlightedId) ||
+      (
+        row.type === 'groupedTodoBatch' &&
+        row.todos.some((todo) => todo.id === highlightedId)
+      )
     ));
 
     if (!isVisible) {
@@ -5493,7 +6005,7 @@ export default function App() {
       return undefined;
     }
 
-    return requestTodoMenuTargetScroll(activeTodoMenuId);
+    return requestTodoMenuTargetScroll(activeTodoMenuId, { revealHighlight: true });
   }, [
     activeTodoMenuId,
     collapsedTodoGroupIds,
@@ -5512,10 +6024,9 @@ export default function App() {
     setActiveTodoMenuHighlightId(null);
     Keyboard.dismiss();
     setMenuMode('main');
-    requestTodoMenuTargetScroll(id, { revealHighlight: true });
 
-    Haptics.selectionAsync().catch(() => undefined);
-  }, [pendingDeleteIds, requestTodoMenuTargetScroll]);
+    triggerSubtleHaptic();
+  }, [pendingDeleteIds]);
 
   const groupedHiddenMetaTagKinds = useMemo((): HiddenMetaTagKind[] => {
     if (todoListGroupMode === 'date') return ['date'];
@@ -5549,12 +6060,10 @@ export default function App() {
                 accessibilityState={{ expanded: isExpanded }}
                 accessibilityLabel={`${item.label}, ${item.count} items`}
                 collapsable={false}
-                unstable_pressDelay={TODO_GROUP_HEADER_PRESS_DELAY_MS}
-                {...getInstantPressHandlers(
-                  `todo-group:${item.id}`,
-                  () => toggleTodoGroupCollapsed(item.id),
-                  { stopPropagation: true },
-                )}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  toggleTodoGroupCollapsed(item.id);
+                }}
                 style={({ pressed }) => [
                   styles.todoSectionCard,
                   isExpanded && styles.todoSectionCardExpanded,
@@ -5579,71 +6088,79 @@ export default function App() {
         );
       }
 
-      if (item.type === 'groupedTodo') {
-        const isPendingDelete = pendingDeleteIds.has(item.todo.id);
-        const isTodoMenuTarget =
-          !isPendingDelete &&
-          menuMode !== null &&
-          activeTodoMenuId === item.todo.id;
-        const isTodoMenuTargetHighlighted =
-          isTodoMenuTarget &&
-          activeTodoMenuHighlightId === item.todo.id;
-        const isSelected = selectedTodoIds.has(item.todo.id);
-        const isNewlyCreatedTodo =
-          newlyCreatedTodoHighlightId === item.todo.id;
-        const isRecentlyEditedTodo = recentlyEditedTodoIds.has(item.todo.id);
-
+      if (item.type === 'groupedTodoBatch') {
         return (
           <View style={styles.todoListItem}>
             {renderVisibleTodoRowGap(item.gapBefore)}
-            <View
-              style={[
-                styles.todoSectionGroupedShell,
-                (isRecentlyEditedTodo || isNewlyCreatedTodo) &&
-                  !isTodoMenuTarget &&
-                  styles.todoSectionGroupedShellRecentlyEdited,
-                todoSelectMode &&
-                  isSelected &&
-                  styles.todoSectionGroupedShellSelected,
-                item.isLastInSection && styles.todoSectionGroupedShellLast,
-              ]}
-            >
-              {!item.isFirstInSection ? (
+            {item.todos.map((todo, batchIndex) => {
+              const sectionIndex = item.sectionStartIndex + batchIndex;
+              const isFirstInSection = sectionIndex === 0;
+              const isLastInSection = sectionIndex === item.sectionTodoCount - 1;
+              const isPendingDelete = pendingDeleteIds.has(todo.id);
+              const isTodoMenuTarget =
+                !isPendingDelete &&
+                activeTodoMenuId === todo.id;
+              const isTodoMenuTargetHighlighted =
+                isTodoMenuTarget &&
+                activeTodoMenuHighlightId === todo.id;
+              const isSelected = selectedTodoIds.has(todo.id);
+              const isNewlyCreatedTodo =
+                newlyCreatedTodoHighlightId === todo.id;
+              const isRecentlyEditedTodo = recentlyEditedTodoIds.has(todo.id);
+
+              return (
                 <View
+                  key={todo.id}
                   style={[
-                    styles.todoRowDivider,
+                    styles.todoSectionGroupedShell,
+                    (isRecentlyEditedTodo || isNewlyCreatedTodo) &&
+                      !isTodoMenuTarget &&
+                      styles.todoSectionGroupedShellRecentlyEdited,
                     todoSelectMode &&
                       isSelected &&
-                      styles.todoRowDividerSelected,
+                      styles.todoSectionGroupedShellSelected,
+                    isLastInSection && styles.todoSectionGroupedShellLast,
                   ]}
-                />
-              ) : null}
-              <TodoRow
-                dateLabelDisplayMode={dateLabelDisplayMode}
-                filterColors={deferredFilterColors}
-                hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
-                isSelected={isSelected}
-                item={item.todo}
-                isMenuTarget={isTodoMenuTarget}
-                isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
-                isNewlyCreated={isNewlyCreatedTodo}
-                isRecentlyEdited={isRecentlyEditedTodo}
-                isPendingDelete={isPendingDelete}
-                layout="grouped"
-                metaTagVisibility={metaTagVisibility}
-                onDelete={deleteTodo}
-                onEnterSelectMode={enterTodoSelectMode}
-                onOpenDetail={openTodoDetailModal}
-                onOpenMenu={openMenuForTodoAction}
-                onSetDone={setTodoDone}
-                onTouchStart={markTodoRowTouchStart}
-                onToggleSelect={toggleTodoSelection}
-                searchHighlightQuery={searchQuery}
-                selectMode={todoSelectMode}
-                sectionLabel={item.sectionLabel}
-                showOverdueMetaTags={showOverdueMetaTags}
-              />
-            </View>
+                >
+                  {!isFirstInSection ? (
+                    <View
+                      style={[
+                        styles.todoRowDivider,
+                        todoSelectMode &&
+                          isSelected &&
+                          styles.todoRowDividerSelected,
+                      ]}
+                    />
+                  ) : null}
+                  <TodoRow
+                    dateLabelDisplayMode={dateLabelDisplayMode}
+                    filterColors={deferredFilterColors}
+                    hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
+                    isSelected={isSelected}
+                    item={todo}
+                    isMenuTarget={isTodoMenuTarget}
+                    isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
+                    isNewlyCreated={isNewlyCreatedTodo}
+                    isRecentlyEdited={isRecentlyEditedTodo}
+                    isPendingDelete={isPendingDelete}
+                    layout="grouped"
+                    metaTagVisibility={metaTagVisibility}
+                    onDelete={deleteTodo}
+                    onEnterSelectMode={enterTodoSelectMode}
+                    onOpenDetail={openTodoDetailModal}
+                    onOpenMenu={openMenuForTodoAction}
+                    onSetDone={setTodoDone}
+                    onTouchStart={markTodoRowTouchStart}
+                    onToggleSelect={toggleTodoSelection}
+                    searchHighlightQuery={searchQuery}
+                    selectMode={todoSelectMode}
+                    sectionLabel={item.sectionLabel}
+                    showOverdueMetaTags={showOverdueMetaTags}
+                    viewportWidth={windowWidth}
+                  />
+                </View>
+              );
+            })}
           </View>
         );
       }
@@ -5651,7 +6168,6 @@ export default function App() {
       const isPendingDelete = pendingDeleteIds.has(item.todo.id);
       const isTodoMenuTarget =
         !isPendingDelete &&
-        menuMode !== null &&
         activeTodoMenuId === item.todo.id;
       const isTodoMenuTargetHighlighted =
         isTodoMenuTarget &&
@@ -5685,6 +6201,7 @@ export default function App() {
             searchHighlightQuery={searchQuery}
             selectMode={todoSelectMode}
             showOverdueMetaTags={showOverdueMetaTags}
+            viewportWidth={windowWidth}
           />
         </View>
       );
@@ -5696,9 +6213,7 @@ export default function App() {
       deleteTodo,
       deferredFilterColors,
       enterTodoSelectMode,
-      getInstantPressHandlers,
       groupedHiddenMetaTagKinds,
-      menuMode,
       metaTagVisibility,
       markTodoRowTouchStart,
       newlyCreatedTodoHighlightId,
@@ -5714,6 +6229,7 @@ export default function App() {
       toggleTodoGroupCollapsed,
       toggleTodoSelection,
       todoSelectMode,
+      windowWidth,
     ],
   );
 
@@ -5729,7 +6245,7 @@ export default function App() {
               accessibilityLabel="Cancel selection"
               onPress={() => {
                 exitTodoSelectMode();
-                Haptics.selectionAsync().catch(() => undefined);
+                triggerSubtleHaptic();
               }}
               style={({ pressed }) => [
                 styles.appHeaderSideButton,
@@ -5920,6 +6436,7 @@ export default function App() {
                   ]}
                   contentOffset={todoListContentOffset}
                   data={visibleTodoListRows}
+                  drawDistance={TODO_GROUPED_ROW_ESTIMATE}
                   extraData={todoListExtraData}
                   getItemType={getTodoListItemType}
                   keyboardDismissMode="on-drag"
@@ -5978,6 +6495,44 @@ export default function App() {
           styles.bottomNav,
           (settingsModalVisible || filterConfigModalVisible) && styles.bottomNavFlat,
         ]}>
+          <View style={styles.quickPresetNav}>
+            {quickPresetNavItems.map((item) => {
+              const selected = Boolean(item.preset && activeMenuPreset?.id === item.preset.id);
+              const iconColor = item.preset
+                ? selected ? NAV_ACCENT : NAV_ICON_INACTIVE
+                : THEME_TEXT_TERTIARY;
+
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityHint={
+                    item.preset
+                      ? 'Applies this saved preset'
+                      : 'No preset assigned'
+                  }
+                  accessibilityLabel={
+                    item.preset
+                      ? `Apply preset ${item.preset.label}`
+                      : `Preset slot ${item.slotNumber}`
+                  }
+                  accessibilityState={{ disabled: !item.preset, selected }}
+                  disabled={!item.preset}
+                  key={item.id}
+                  onPress={(event) => handleQuickPresetNavPress(item.preset, event, 'press')}
+                  onPressIn={(event) => handleQuickPresetNavPress(item.preset, event, 'pressIn')}
+                  style={({ pressed }) => [
+                    styles.quickPresetNavItem,
+                    selected && styles.quickPresetNavItemSelected,
+                    !item.preset && styles.quickPresetNavItemEmpty,
+                    pressed && styles.bottomNavItemPressed,
+                  ]}
+                >
+                  <MaterialCommunityIcons color={iconColor} name={item.iconName} size={20} />
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={styles.bottomNavPrimary}>
           <Pressable
             accessibilityRole="button"
             accessibilityHint="Opens the new todo drawer"
@@ -5988,13 +6543,19 @@ export default function App() {
               pressed && styles.bottomNavItemPressed,
             ]}
           >
-            <Ionicons color={NAV_ACCENT} name="add-circle-outline" size={30} />
+            <Ionicons
+              color={NAV_ACCENT}
+              name="add-circle-outline"
+              size={27}
+              style={styles.bottomNavAddIcon}
+            />
           </Pressable>
           <Pressable
             accessibilityRole="button"
+            accessibilityHint="Opens filters; quick second tap clears selected filters"
             accessibilityLabel="Filters"
             accessibilityState={{ selected: filterConfigModalVisible }}
-            onPress={() => handleNavTabPress('calendar')}
+            onPress={handleFilterNavPress}
             style={({ pressed }) => [
               styles.bottomNavItem,
               pressed && styles.bottomNavItemPressed,
@@ -6003,14 +6564,17 @@ export default function App() {
             <Ionicons
               color={filterConfigModalVisible ? NAV_ACCENT : NAV_ICON_INACTIVE}
               name="funnel-outline"
-              size={25}
+              size={23}
             />
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open filter menu"
             accessibilityState={{ selected: navTab === 'menu' || menuMode === 'main' }}
-            onPress={() => handleNavTabPress('menu')}
+            {...getInstantPressHandlers(
+              'bottom-nav:menu',
+              () => handleNavTabPress('menu'),
+            )}
             style={({ pressed }) => [
               styles.bottomNavItem,
               pressed && styles.bottomNavItemPressed,
@@ -6019,7 +6583,7 @@ export default function App() {
             <Ionicons
               color={navTab === 'menu' || menuMode === 'main' ? NAV_ACCENT : NAV_ICON_INACTIVE}
               name="options-outline"
-              size={25}
+              size={23}
             />
           </Pressable>
           <Pressable
@@ -6035,39 +6599,27 @@ export default function App() {
             <Ionicons
               color={navTab === 'search' ? NAV_ACCENT : NAV_ICON_INACTIVE}
               name="search-outline"
-              size={25}
+              size={23}
             />
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityHint="Shows the todo items list"
+            accessibilityHint="Shows the todo items list; quick second tap cycles list sections"
             accessibilityLabel="Show items"
-            accessibilityState={{
-              selected:
-                navTab === null
-                && !listMenuOpen
-                && !settingsModalVisible
-                && !filterConfigModalVisible,
-            }}
-            onPress={showTodoItems}
+            accessibilityState={{ selected: homeNavSelected }}
+            onPress={handleHomeNavPress}
             style={({ pressed }) => [
               styles.bottomNavItem,
               pressed && styles.bottomNavItemPressed,
             ]}
           >
             <Ionicons
-              color={
-                navTab === null
-                && !listMenuOpen
-                && !settingsModalVisible
-                && !filterConfigModalVisible
-                  ? NAV_ACCENT
-                  : NAV_ICON_INACTIVE
-              }
+              color={homeNavSelected ? NAV_ACCENT : NAV_ICON_INACTIVE}
               name="home-outline"
-              size={25}
+              size={23}
             />
           </Pressable>
+          </View>
         </View>
 
 
@@ -6235,13 +6787,15 @@ export default function App() {
 
                             if (item.type === 'filter') {
                               const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
-                              const displayLabel = item.filterKey === 'date'
-                                ? (
-                                  dateLabelDisplayMode === 'remaining'
-                                    ? formatDateDisplayLabel(item.label, 'remaining')
-                                    : formatDateFilterLabel(item.label)
-                                )
-                                : item.label;
+                              const displayLabel = item.label === REPEATING_ITEMS_FILTER_VALUE
+                                ? REPEATING_ITEMS_FILTER_LABEL
+                                : item.filterKey === 'date'
+                                  ? (
+                                    dateLabelDisplayMode === 'remaining'
+                                      ? formatDateDisplayLabel(item.label, 'remaining')
+                                      : formatDateFilterLabel(item.label)
+                                  )
+                                  : item.label;
 
                               return (
                                 <View style={styles.listMenuRow}>
@@ -6378,6 +6932,25 @@ export default function App() {
   	                            );
   	                          }
 
+                            if (item.type === 'updatePreset') {
+                              return (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel={item.label}
+                                  onPress={updateEditingMenuPreset}
+                                  style={({ pressed }) => [
+                                    styles.listMenuRow,
+                                    pressed && styles.listMenuRowPressed,
+                                  ]}
+                                >
+                                  <View style={styles.listMenuRowTextWrap}>
+                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                  </View>
+                                  <Ionicons color={THEME_ACCENT} name="checkmark" size={21} />
+                                </Pressable>
+                              );
+                            }
+
   	                          if (item.type === 'quickApplyPreset') {
   	                            return (
   	                              <Pressable
@@ -6402,9 +6975,14 @@ export default function App() {
   	                          if (item.type === 'preset') {
   	                            return (
   	                              <MemoizedMenuPresetSwipeRow
+                                    actionLabel={hasTodoEditTargets ? 'Apply' : 'Edit'}
   	                                label={item.label}
-  	                                onApply={() => applyMenuPreset(item.preset)}
   	                                onDelete={() => removeMenuPreset(item.preset.id)}
+                                    onPress={() => (
+                                      hasTodoEditTargets
+                                        ? applyMenuPreset(item.preset)
+                                        : openMenuPresetEditor(item.preset)
+                                    )}
   	                                summary={item.summary}
   	                              />
   	                            );
@@ -6507,24 +7085,32 @@ export default function App() {
                             }
 
                             const isDateValue = item.filterKey === 'date';
+                            const isRepeatingItemsValue =
+                              isDateValue && item.label === REPEATING_ITEMS_FILTER_VALUE;
                             const isReminderValue =
-                              isDateValue && isReminderPickerMenuLabel(item.label);
-                            const isSelected = isDateValue
-                              ? isDatePickerMenuItemSelected(
-                                item.label,
-                                menuSelectionFilters.date,
-                                menuSelectionFilters.reminder,
-                                isDateMenuItemSelected,
-                              )
-                              : menuSelectionFilters[item.filterKey].includes(item.label);
-                            const displayLabel = isDateValue
-                              ? getDatePickerMenuDisplayLabel(
-                                item.label,
-                                menuFilters.date,
-                                menuFilters.reminder,
-                                getDateMenuDisplayLabel,
-                              )
-                              : item.label;
+                              isDateValue && (
+                                isReminderPickerMenuLabel(item.label) || isRepeatingItemsValue
+                              );
+                            const isSelected = isRepeatingItemsValue
+                              ? hasRepeatingItemsFilter(menuSelectionFilters.reminder)
+                              : isDateValue
+                                ? isDatePickerMenuItemSelected(
+                                  item.label,
+                                  menuSelectionFilters.date,
+                                  menuSelectionFilters.reminder,
+                                  isDateMenuItemSelected,
+                                )
+                                : menuSelectionFilters[item.filterKey].includes(item.label);
+                            const displayLabel = isRepeatingItemsValue
+                              ? REPEATING_ITEMS_FILTER_LABEL
+                              : isDateValue
+                                ? getDatePickerMenuDisplayLabel(
+                                  item.label,
+                                  menuFilters.date,
+                                  menuFilters.reminder,
+                                  getDateMenuDisplayLabel,
+                                )
+                                : item.label;
                             const colorLookupValue = isDateValue && !isReminderValue
                               ? getDateMenuColorLookupValue(item.label, menuFilters.date)
                               : item.label;
@@ -6542,6 +7128,8 @@ export default function App() {
                               ? 'Clear reminder time'
                               : item.label === REPEAT_PICKER_LABEL
                                 ? 'Clear repeating'
+                                : isRepeatingItemsValue
+                                  ? `Clear ${REPEATING_ITEMS_FILTER_LABEL}`
                                 : `Clear ${displayLabel}`;
 
                             return (
@@ -6587,6 +7175,11 @@ export default function App() {
 
                                     if (item.label === REPEAT_PICKER_LABEL) {
                                       clearActiveTodoRepeat();
+                                      return;
+                                    }
+
+                                    if (isRepeatingItemsValue) {
+                                      removeFilter(item.filterKey, item.label);
                                       return;
                                     }
 
@@ -7326,6 +7919,7 @@ export default function App() {
           onSelectSort={selectTodoSortMode}
           onShowResults={showTodoItems}
           onToggleFilter={toggleFilterValue}
+          onToggleRepeatingItemsFilter={toggleRepeatingItemsFilter}
           onToggleListItem={toggleListMenuItem}
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
           onToggleMetaTag={toggleMetaTagVisibility}
@@ -7448,6 +8042,160 @@ export default function App() {
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Navbar presets</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {quickPresetNavSettingsSummary}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsNavbarPresetsExpanded ? 'Collapse' : 'Expand'} Navbar presets section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsNavbarPresetsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsNavbarPresetsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsNavbarPresetsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsNavbarPresetsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    {menuPresets.length === 0 ? (
+                      <Text style={styles.settingsEmptyText}>No saved presets</Text>
+                    ) : (
+                      <>
+                        {!quickPresetNavUsesAutomaticSlots ? (
+                          <Pressable
+                            accessibilityLabel="Use first saved presets in navbar"
+                            accessibilityRole="button"
+                            onPress={resetQuickPresetNavSlots}
+                            style={({ pressed }) => [
+                              styles.settingsNavbarPresetAutoRow,
+                              pressed && styles.settingsOptionRowPressed,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="refresh-outline" size={18} />
+                            <Text style={styles.settingsNavbarPresetAutoText}>
+                              Auto first saved presets
+                            </Text>
+                          </Pressable>
+                        ) : null}
+
+                        {quickPresetNavItems.map((item, index) => {
+                          const slotHasPresetId = Boolean(item.presetId);
+                          const slotValueLabel = item.preset
+                            ? item.preset.label
+                            : slotHasPresetId
+                              ? 'Missing preset'
+                              : 'No preset assigned';
+
+                          return (
+                            <View
+                              key={`settings-${item.id}`}
+                              style={[
+                                styles.settingsNavbarPresetSlot,
+                                index === 0 &&
+                                  quickPresetNavUsesAutomaticSlots &&
+                                  styles.settingsNavbarPresetSlotFirst,
+                              ]}
+                            >
+                              <View style={styles.settingsNavbarPresetSlotHeader}>
+                                <View style={styles.settingsNavbarPresetSlotIcon}>
+                                  <MaterialCommunityIcons
+                                    color={NAV_ICON_INACTIVE}
+                                    name={item.iconName}
+                                    size={18}
+                                  />
+                                </View>
+                                <View style={styles.settingsNavbarPresetSlotTextWrap}>
+                                  <Text style={styles.settingsNavbarPresetSlotTitle}>
+                                    Slot {item.slotNumber}
+                                  </Text>
+                                  <Text
+                                    numberOfLines={1}
+                                    style={styles.settingsNavbarPresetSlotValue}
+                                  >
+                                    {slotValueLabel}
+                                  </Text>
+                                </View>
+                                <Pressable
+                                  accessibilityLabel={`Clear navbar preset slot ${item.slotNumber}`}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ disabled: !slotHasPresetId }}
+                                  disabled={!slotHasPresetId}
+                                  onPress={() => assignQuickPresetNavSlot(index, null)}
+                                  style={({ pressed }) => [
+                                    styles.settingsIconButton,
+                                    !slotHasPresetId && styles.settingsButtonDisabled,
+                                    pressed && styles.settingsOptionRowPressed,
+                                  ]}
+                                >
+                                  <Ionicons
+                                    color={slotHasPresetId ? '#8F877F' : '#C9C0B8'}
+                                    name="close"
+                                    size={18}
+                                  />
+                                </Pressable>
+                              </View>
+
+                              <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.settingsNavbarPresetChoicesScroll}
+                                contentContainerStyle={styles.settingsNavbarPresetChoices}
+                              >
+                                {menuPresets.map((preset) => {
+                                  const selected = item.presetId === preset.id;
+
+                                  return (
+                                    <Pressable
+                                      accessibilityLabel={`Assign ${preset.label} to navbar preset slot ${item.slotNumber}`}
+                                      accessibilityRole="button"
+                                      accessibilityState={{ selected }}
+                                      key={`${item.id}-${preset.id}`}
+                                      onPress={() => assignQuickPresetNavSlot(index, preset.id)}
+                                      style={({ pressed }) => [
+                                        styles.settingsNavbarPresetChoiceButton,
+                                        selected && styles.settingsNavbarPresetChoiceButtonSelected,
+                                        pressed && styles.settingsOptionRowPressed,
+                                      ]}
+                                    >
+                                      <Text
+                                        numberOfLines={1}
+                                        style={[
+                                          styles.settingsNavbarPresetChoiceText,
+                                          selected && styles.settingsNavbarPresetChoiceTextSelected,
+                                        ]}
+                                      >
+                                        {preset.label}
+                                      </Text>
+                                    </Pressable>
+                                  );
+                                })}
+                              </ScrollView>
+                            </View>
+                          );
+                        })}
+                      </>
+                    )}
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Backup</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       Google Drive · {googleConnected ? 'Connected' : 'Not signed in'}
@@ -7481,7 +8229,7 @@ export default function App() {
                       <View style={styles.settingsRowTextWrap}>
                         <Text style={styles.settingsRowTitle}>Backup all data</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          {activeTodoCount} items · {selectedFilters.list.length + selectedFilters.priority.length + selectedFilters.date.length} filters
+                          {activeTodoCount} items · {countFilters(selectedFilters)} filters
                         </Text>
                       </View>
                       <View
@@ -8780,6 +9528,97 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
   },
+  settingsNavbarPresetAutoRow: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 38,
+    paddingHorizontal: 12,
+  },
+  settingsNavbarPresetAutoText: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 17,
+  },
+  settingsNavbarPresetSlot: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 14,
+    paddingTop: 14,
+  },
+  settingsNavbarPresetSlotFirst: {
+    borderTopWidth: 0,
+    marginTop: 0,
+    paddingTop: 0,
+  },
+  settingsNavbarPresetSlotHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 42,
+  },
+  settingsNavbarPresetSlotIcon: {
+    alignItems: 'center',
+    backgroundColor: '#F3EEE7',
+    borderRadius: 17,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  settingsNavbarPresetSlotTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsNavbarPresetSlotTitle: {
+    color: THEME_TEXT,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
+  settingsNavbarPresetSlotValue: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  settingsNavbarPresetChoicesScroll: {
+    marginTop: 10,
+  },
+  settingsNavbarPresetChoices: {
+    alignItems: 'center',
+    gap: 8,
+    paddingRight: 2,
+  },
+  settingsNavbarPresetChoiceButton: {
+    alignItems: 'center',
+    backgroundColor: '#F7F3EE',
+    borderColor: '#E8E2DA',
+    borderRadius: 13,
+    borderWidth: StyleSheet.hairlineWidth,
+    justifyContent: 'center',
+    maxWidth: 148,
+    minHeight: 34,
+    paddingHorizontal: 12,
+  },
+  settingsNavbarPresetChoiceButtonSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT,
+  },
+  settingsNavbarPresetChoiceText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 17,
+    maxWidth: 124,
+  },
+  settingsNavbarPresetChoiceTextSelected: {
+    color: THEME_ACCENT,
+  },
   settingsColorGroup: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#F2EBE3',
@@ -9108,11 +9947,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopColor: '#E5E5EA',
     borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    height: BOTTOM_NAV_HEIGHT,
-    justifyContent: 'space-around',
+    flexDirection: 'column',
+    height: BOTTOM_NAV_RESERVED_HEIGHT,
+    justifyContent: 'flex-start',
     paddingBottom: 0,
-    paddingTop: 18,
+    paddingTop: 0,
     shadowColor: '#000000',
     shadowOpacity: 0.04,
     shadowRadius: 8,
@@ -9127,12 +9966,42 @@ const styles = StyleSheet.create({
     shadowOpacity: 0,
     shadowRadius: 0,
   },
+  quickPresetNav: {
+    alignItems: 'center',
+    borderBottomColor: '#F2F2F7',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    height: QUICK_PRESET_NAV_HEIGHT,
+    justifyContent: 'space-around',
+    paddingHorizontal: 12,
+  },
+  quickPresetNavItem: {
+    alignItems: 'center',
+    flex: 1,
+    height: '100%',
+    justifyContent: 'center',
+  },
+  quickPresetNavItemSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  quickPresetNavItemEmpty: {
+    opacity: 0.68,
+  },
+  bottomNavPrimary: {
+    alignItems: 'stretch',
+    flexDirection: 'row',
+    height: BOTTOM_NAV_PRIMARY_HEIGHT,
+    justifyContent: 'space-around',
+  },
   bottomNavItem: {
     alignItems: 'center',
     flex: 1,
     height: '100%',
-    justifyContent: 'flex-start',
-    paddingTop: 2,
+    justifyContent: 'center',
+    paddingTop: 0,
+  },
+  bottomNavAddIcon: {
+    transform: [{ translateY: -3 }],
   },
   bottomNavItemPressed: {
     opacity: 0.72,

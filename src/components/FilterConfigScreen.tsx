@@ -20,6 +20,7 @@ import {
   formatDateFilterLabel,
   getDateMenuClearValue,
   getDateMenuColorLookupValue,
+  getDateMenuItemsForDateLabels,
   getDateMenuItemDisplayLabel,
   isDateMenuItemSelected,
   type DateLabelDisplayMode,
@@ -513,7 +514,7 @@ export const FilterConfigScreen = ({
                 {dateLabelDisplayMode === 'remaining' ? 'On' : 'Off'}
               </Text>
             </Pressable>
-            {DATE_MENU_ITEMS.map((label) => {
+            {getDateMenuItemsForDateLabels(DATE_MENU_ITEMS, filters.date).map((label) => {
               const selected = isDateMenuItemSelected(label, filters.date);
               const displayLabel = getDateMenuDisplayLabel(label);
               const colorLookupValue = getDateMenuColorLookupValue(label, filters.date);

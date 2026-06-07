@@ -65,6 +65,7 @@ import {
   formatRemainingDaysLabel,
   getDateMenuClearValue,
   getDateMenuColorLookupValue,
+  getDateMenuItemsForDateLabels,
   getDateMenuItemDisplayLabel,
   getInitialDatePickerValue,
   getSelectedCustomDateLabel,
@@ -2880,7 +2881,7 @@ export default function App() {
     }
 
     if (createDrawerPicker === 'date') {
-      return DATE_PICKER_MENU_ITEMS;
+      return getDateMenuItemsForDateLabels(DATE_PICKER_MENU_ITEMS, createDraftFilters.date);
     }
 
     if (createDrawerPicker === 'priority') {
@@ -2888,7 +2889,7 @@ export default function App() {
     }
 
     return [];
-  }, [createDrawerPicker, listMenuTree, listOrderMode]);
+  }, [createDrawerPicker, createDraftFilters.date, listMenuTree, listOrderMode]);
 
   const createDrawerDateLabel = useMemo(
     () => formatCreateDrawerDateLabel(createDraftFilters.date, dateLabelDisplayMode),
@@ -4197,7 +4198,7 @@ export default function App() {
 
     if (menuMode === 'date') {
       const dateMenuItems = includeActiveTodoReminderRows
-        ? DATE_PICKER_MENU_ITEMS
+        ? getDateMenuItemsForDateLabels(DATE_PICKER_MENU_ITEMS, menuFilters.date)
         : DATE_MENU_ITEMS;
 
       return [

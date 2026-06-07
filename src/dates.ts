@@ -116,6 +116,7 @@ const EXACT_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
   today: 0,
   tomorrow: 1,
 };
+const EXACT_DATE_MENU_SHORTCUT_LABELS = new Set(['Today', 'Tomorrow']);
 
 export type DateLabelAnchor = Date | number | null | undefined;
 
@@ -408,6 +409,17 @@ export const isSameCalendarDay = (a: Date, b: Date): boolean =>
   && a.getMonth() === b.getMonth()
   && a.getDate() === b.getDate();
 
+const dateFilterValuesResolveToSameDay = (
+  firstLabel: string,
+  secondLabel: string,
+  now = new Date(),
+): boolean => {
+  const firstDate = resolveDateFilterValueDate(firstLabel, now);
+  const secondDate = resolveDateFilterValueDate(secondLabel, now);
+
+  return Boolean(firstDate && secondDate && isSameCalendarDay(firstDate, secondDate));
+};
+
 const getExactDateFilterValueDate = (
   label: string,
   now = new Date(),
@@ -504,7 +516,17 @@ export const isDateMenuItemSelected = (menuLabel: string, dateLabels: string[]):
     return true;
   }
 
-  return formattedMenuLabel === CUSTOM_DATE_LABEL && dateLabels.some(isCustomDateLabel);
+  if (formattedMenuLabel === CUSTOM_DATE_LABEL) {
+    return dateLabels.some(isCustomDateLabel);
+  }
+
+  if (!EXACT_DATE_MENU_SHORTCUT_LABELS.has(formattedMenuLabel)) {
+    return false;
+  }
+
+  return dateLabels.some((label) =>
+    dateFilterValuesResolveToSameDay(formattedMenuLabel, label),
+  );
 };
 
 export const getDateMenuItemDisplayLabel = (
@@ -521,6 +543,11 @@ export const getDateMenuItemDisplayLabel = (
         if (remainingLabel) {
           return remainingLabel;
         }
+      }
+
+      const compactLabel = formatCompactDateFilterLabel(customDate, now);
+      if (compactLabel === 'Today' || compactLabel === 'Tomorrow' || compactLabel === 'Yesterday') {
+        return compactLabel;
       }
 
       return formatDateFilterLabel(customDate);
@@ -544,7 +571,13 @@ export const getDateMenuClearValue = (menuLabel: string, dateLabels: string[]): 
     return getSelectedCustomDateLabel(dateLabels);
   }
 
-  return dateLabels.find((label) => formatDateFilterValue(label) === formattedMenuLabel) ?? null;
+  return dateLabels.find((label) =>
+    formatDateFilterValue(label) === formattedMenuLabel ||
+    (
+      EXACT_DATE_MENU_SHORTCUT_LABELS.has(formattedMenuLabel) &&
+      dateFilterValuesResolveToSameDay(formattedMenuLabel, label)
+    ),
+  ) ?? null;
 };
 
 export const getDateMenuColorLookupValue = (menuLabel: string, dateLabels: string[]): string => {
@@ -554,6 +587,29 @@ export const getDateMenuColorLookupValue = (menuLabel: string, dateLabels: strin
   }
 
   return formattedMenuLabel;
+};
+
+export const getDateMenuItemsForDateLabels = (
+  menuLabels: string[],
+  dateLabels: string[],
+  now = new Date(),
+): string[] => {
+  const customDate = getSelectedCustomDateLabel(dateLabels);
+  if (!customDate) {
+    return menuLabels;
+  }
+
+  const matchingShortcut = menuLabels.some((label) => {
+    const formattedLabel = formatDateFilterValue(label);
+    return (
+      EXACT_DATE_MENU_SHORTCUT_LABELS.has(formattedLabel) &&
+      dateFilterValuesResolveToSameDay(formattedLabel, customDate, now)
+    );
+  });
+
+  return matchingShortcut
+    ? menuLabels.filter((label) => formatDateFilterValue(label) !== CUSTOM_DATE_LABEL)
+    : menuLabels;
 };
 
 const addCalendarDays = (date: Date, days: number): Date => {

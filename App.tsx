@@ -4306,10 +4306,10 @@ export default function App() {
   const openMenuPreset = openMenuPresetId
     ? menuPresetById.get(openMenuPresetId) ?? null
     : null;
-  const canUpdateOpenQuickPresetIcon = Boolean(
+  const openMenuPresetHasChanges = Boolean(
     openMenuPreset &&
-      openQuickPresetNavSlotNumber &&
       !hasTodoEditTargets &&
+      !editingMenuPreset &&
       !menuPresetMatchesState(
         openMenuPreset,
         selectedFilters,
@@ -4583,10 +4583,10 @@ export default function App() {
         label: 'Settings',
         type: 'settings',
       },
-      ...(canUpdateOpenQuickPresetIcon && openMenuPreset
+      ...(openMenuPresetHasChanges && openMenuPreset
         ? [{
             id: `main-update-open-icon-${openMenuPreset.id}`,
-            label: 'Update this icon',
+            label: openQuickPresetNavSlotNumber ? 'Update this icon' : `Update ${openMenuPreset.label}`,
             preset: openMenuPreset,
             type: 'saveOpenPreset' as const,
           }]
@@ -4597,7 +4597,6 @@ export default function App() {
   }, [
     activeFilterCount,
     activeMenuPreset,
-    canUpdateOpenQuickPresetIcon,
     currentPresetSummary,
     editingMenuPreset,
     hasTodoEditTargets,
@@ -4608,6 +4607,7 @@ export default function App() {
     menuMode,
     menuPresets,
     openMenuPreset,
+    openMenuPresetHasChanges,
     openQuickPresetNavSlotNumber,
     effectiveGroupMode,
     effectiveSortMode,

@@ -3320,10 +3320,17 @@ export default function App() {
       return;
     }
 
-    const applyDate = (current: SelectedFilters) => ({
-      ...current,
-      date: source === 'create' ? [isoDate] : [...current.date, isoDate],
-    });
+    const applyDate = (current: SelectedFilters) => {
+      const addingFirstDateFilter = source !== 'create' && current.date.length === 0;
+
+      return {
+        ...current,
+        date: source === 'create' ? [isoDate] : [...current.date, isoDate],
+        reminder: addingFirstDateFilter
+          ? removeRepeatingItemsFilter(current.reminder)
+          : current.reminder,
+      };
+    };
 
     if (source === 'create') {
       setCreateDraftFilters(applyDate);
@@ -4690,8 +4697,17 @@ export default function App() {
         };
       }
 
+      const addingFirstDateFilter =
+        filterKey === 'date' &&
+        !hasValue &&
+        current.date.length === 0 &&
+        formattedValue !== REPEATING_ITEMS_FILTER_VALUE;
+
       return {
         ...current,
+        reminder: addingFirstDateFilter
+          ? removeRepeatingItemsFilter(current.reminder)
+          : current.reminder,
         [filterKey]: hasValue
           ? currentValues.filter((item) => (
             filterKey === 'date'

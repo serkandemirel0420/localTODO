@@ -24,11 +24,14 @@ import {
 } from '../metaTags';
 import {
   cloneFilterConfigUiState,
+  cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   ensureQuickPresetDefaults,
   normalizeFilterConfigUiState,
+  normalizeQuickPresetNavIconNames,
   normalizeQuickPresetNavPresetIds,
   type FilterConfigUiState,
+  type QuickPresetNavIconNames,
   type QuickPresetNavPresetIds,
 } from '../storage/appSettingsStore';
 import { isDevAppVariant } from '../appVariant';
@@ -78,6 +81,7 @@ export type BackupSettings = {
   menuPresets: BackupMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
   quickPresetDefaultsVersion: number;
+  quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
@@ -369,6 +373,7 @@ export const createBackupPayload = (
       menuPresets: cloneMenuPresets(settings.menuPresets),
       metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
       quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
+      quickPresetNavIconNames: cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames),
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
       showOverdueMetaTags: settings.showOverdueMetaTags,
@@ -386,9 +391,16 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
 
   const todos = value.todos.map(normalizeTodo).filter((todo): todo is Todo => Boolean(todo));
   const settings = isRecord(value.settings) ? value.settings : {};
+  const normalizedQuickPresetNavPresetIds = normalizeQuickPresetNavPresetIds(
+    settings.quickPresetNavPresetIds,
+  );
   const quickPresetDefaults = ensureQuickPresetDefaults(
     normalizeBackupMenuPresets(settings.menuPresets),
-    normalizeQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
+    normalizedQuickPresetNavPresetIds,
+    normalizeQuickPresetNavIconNames(
+      settings.quickPresetNavIconNames,
+      normalizedQuickPresetNavPresetIds.length || undefined,
+    ),
     typeof settings.quickPresetDefaultsVersion === 'number'
       ? settings.quickPresetDefaultsVersion
       : 0,
@@ -416,6 +428,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       menuPresets: quickPresetDefaults.menuPresets,
       metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
       quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
+      quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
       quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
       selectedFilters: normalizeTodoFilters(settings.selectedFilters),
       showOverdueMetaTags: settings.showOverdueMetaTags !== false,

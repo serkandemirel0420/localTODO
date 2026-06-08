@@ -72,6 +72,7 @@ import {
   isCustomDateLabel,
   isDateFilterOverdue,
   isDateMenuItemSelected,
+  resolveDateFilterValueDate,
   startOfDay,
   toISODateString,
   todoMatchesSelectedDateFilters,
@@ -130,12 +131,15 @@ import {
   cloneFilterConfigUiState,
   cloneListMenuTree,
   cloneMenuPresets,
+  cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
+  DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
   DEFAULT_FILTER_CONFIG_UI_STATE,
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
   QUICK_PRESET_DEFAULTS_VERSION,
+  QUICK_PRESET_NAV_MAX_SLOT_COUNT,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
@@ -480,18 +484,27 @@ const EDGE_BACK_WIDTH = 28;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
 const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
-const QUICK_PRESET_NAV_HEIGHT = 36;
+const QUICK_PRESET_NAV_ICON_ROW_HEIGHT = 40;
+const QUICK_PRESET_NAV_HEIGHT = QUICK_PRESET_NAV_ICON_ROW_HEIGHT;
+const QUICK_PRESET_NAV_ITEM_WIDTH = 52;
 const BOTTOM_NAV_PRIMARY_HEIGHT = 48;
 const BOTTOM_NAV_HEIGHT = QUICK_PRESET_NAV_HEIGHT + BOTTOM_NAV_PRIMARY_HEIGHT;
 const BOTTOM_NAV_BOTTOM_GAP = Platform.OS === 'android' ? 10 : 0;
 const BOTTOM_NAV_RESERVED_HEIGHT = BOTTOM_NAV_HEIGHT + BOTTOM_NAV_BOTTOM_GAP;
-const QUICK_PRESET_NAV_ICONS: React.ComponentProps<typeof MaterialCommunityIcons>['name'][] = [
-  'penguin',
-  'rabbit-variant',
-  'turtle',
-  'cat',
-  'owl',
-];
+const HEADER_SEARCH_ROW_HEIGHT = 64;
+type MaterialCommunityIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+const toMaterialCommunityIconName = (iconName: string): MaterialCommunityIconName => (
+  iconName as MaterialCommunityIconName
+);
+const QUICK_PRESET_NAV_ICON_CHOICES = [
+  ...DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
+  'snail',
+  'duck',
+  'fish',
+  'paw',
+  'flower-outline',
+  'horse-variant',
+].map(toMaterialCommunityIconName);
 // Menu overlay sits above both nav rows; a small gap keeps the sheet off the nav bar.
 const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_RESERVED_HEIGHT;
@@ -532,8 +545,10 @@ const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
 const COMPLETION_UNDO_DURATION_MS = 3000;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
+const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 const AUTO_BACKUP_DEBOUNCE_MS = 2500;
+const EMPTY_VISIBLE_TODO_LIST_ROWS: VisibleTodoListRow[] = [];
 
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
   if (item.type === 'sectionHeader') {
@@ -875,6 +890,27 @@ const filterValueListsEqual = (first: string[], second: string[]) => {
   return firstValues.every((value, index) => value === secondValues[index]);
 };
 
+const dateFilterValuesIncludeExactDay = (
+  dateLabels: string[],
+  date: Date,
+  now = new Date(),
+): boolean => {
+  const targetDay = startOfDay(date).getTime();
+
+  return dateLabels.some((label) => {
+    const formattedLabel = formatDateFilterValue(label);
+    const isExactDayLabel =
+      isCustomDateLabel(formattedLabel) ||
+      formattedLabel === 'Today' ||
+      formattedLabel === 'Tomorrow';
+
+    return (
+      isExactDayLabel &&
+      resolveDateFilterValueDate(formattedLabel, now)?.getTime() === targetDay
+    );
+  });
+};
+
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
 
@@ -951,6 +987,33 @@ const formatPresetSummary = (
   ].filter((part): part is string => Boolean(part));
 
   return parts.join(' · ');
+};
+
+const getQuickPresetNavDetail = (
+  preset: MenuPreset,
+  dateLabelDisplayMode: DateLabelDisplayMode,
+) => {
+  const activeFilterItems = buildActiveFilterItems(preset.filters, dateLabelDisplayMode);
+  const filterParts = FILTER_KEYS.flatMap((filterKey) => {
+    const labels = activeFilterItems
+      .filter((item) => item.filterKey === filterKey)
+      .map((item) => item.displayLabel);
+
+    return labels.length > 0
+      ? [`${FILTER_KIND_LABELS[filterKey]} (${labels.join(', ')})`]
+      : [];
+  });
+  const viewParts = [
+    preset.todoGroupMode !== 'none' ? `Group (${TODO_GROUP_LABELS[preset.todoGroupMode]})` : null,
+    `Sort (${TODO_SORT_LABELS[preset.todoSortMode]})`,
+    preset.listOrderMode === 'manual' ? 'Lists (Manual)' : null,
+  ].filter((part): part is string => Boolean(part));
+  const detailParts = [...filterParts, ...viewParts];
+
+  return {
+    details: detailParts,
+    title: preset.label,
+  };
 };
 
 const todoMatchesDateFilterGroup = (
@@ -1271,6 +1334,7 @@ export default function App() {
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [datePickerValue, setDatePickerValue] = useState(() => startOfDay(new Date()));
   const datePickerApplyRef = useRef<'create' | 'filters'>('filters');
+  const datePickerDateLabelsRef = useRef<string[]>([]);
   const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
   const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
   const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
@@ -1305,6 +1369,9 @@ export default function App() {
   const [openQuickPresetNavSlotNumber, setOpenQuickPresetNavSlotNumber] = useState<number | null>(
     null,
   );
+  const [heldQuickPresetNavSlotNumber, setHeldQuickPresetNavSlotNumber] = useState<number | null>(
+    null,
+  );
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
@@ -1336,6 +1403,7 @@ export default function App() {
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
+  const [quickPresetNavIconNames, setQuickPresetNavIconNames] = useState<string[]>([]);
   const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
     () => new Set(),
@@ -1520,6 +1588,7 @@ export default function App() {
         setListMenuTree(settings.listMenuTree);
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
+        setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
         setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
         setTodoGroupMode(settings.todoGroupMode);
         setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
@@ -1565,6 +1634,7 @@ export default function App() {
     menuPresets,
     metaTagVisibility,
     quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+    quickPresetNavIconNames,
     quickPresetNavPresetIds,
     selectedFilters,
     showOverdueMetaTags,
@@ -1586,6 +1656,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    quickPresetNavIconNames,
     quickPresetNavPresetIds,
     selectedFilters,
     showOverdueMetaTags,
@@ -3235,12 +3306,26 @@ export default function App() {
 
   const applyPickedDate = useCallback((date: Date) => {
     const isoDate = toISODateString(date);
+    const source = datePickerApplyRef.current;
+
+    if (
+      source === 'filters' &&
+      dateFilterValuesIncludeExactDay(datePickerDateLabelsRef.current, date)
+    ) {
+      Alert.alert(
+        'Date already selected',
+        `${formatDateFilterLabel(isoDate)} is already selected.`,
+      );
+      triggerSubtleHaptic();
+      return;
+    }
+
     const applyDate = (current: SelectedFilters) => ({
       ...current,
-      date: [isoDate],
+      date: source === 'create' ? [isoDate] : [...current.date, isoDate],
     });
 
-    if (datePickerApplyRef.current === 'create') {
+    if (source === 'create') {
       setCreateDraftFilters(applyDate);
     } else {
       updateCurrentTodoTargetFilters(applyDate);
@@ -3375,6 +3460,7 @@ export default function App() {
     dateLabels: string[],
   ) => {
     datePickerApplyRef.current = source;
+    datePickerDateLabelsRef.current = [...dateLabels];
     setDatePickerValue(getInitialDatePickerValue(dateLabels));
     setDatePickerVisible(true);
   }, []);
@@ -3838,34 +3924,82 @@ export default function App() {
     () => new Map(menuPresets.map((preset) => [preset.id, preset])),
     [menuPresets],
   );
-  const quickPresetNavUsesAutomaticSlots = quickPresetNavPresetIds.length === 0;
+  const quickPresetNavSlotLimit = Math.min(
+    Math.max(
+      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
+      menuPresets.length,
+      quickPresetNavIconNames.length,
+      quickPresetNavPresetIds.length,
+    ),
+    QUICK_PRESET_NAV_MAX_SLOT_COUNT,
+  );
+  const quickPresetNavUsesAutomaticSlots =
+    quickPresetNavPresetIds.length === 0 && quickPresetNavIconNames.length === 0;
   const quickPresetNavItems = useMemo(
-    () => QUICK_PRESET_NAV_ICONS.map((iconName, index) => {
-      const presetId = quickPresetNavUsesAutomaticSlots
-        ? menuPresets[index]?.id ?? null
-        : quickPresetNavPresetIds[index] ?? null;
+    () => {
+      const automaticSlotCount = Math.min(
+        Math.max(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length, menuPresets.length),
+        quickPresetNavSlotLimit,
+      );
+      const explicitSlotCount = Math.min(
+        Math.max(quickPresetNavPresetIds.length, quickPresetNavIconNames.length, 1),
+        quickPresetNavSlotLimit,
+      );
+      const slotCount = quickPresetNavUsesAutomaticSlots
+        ? automaticSlotCount
+        : explicitSlotCount;
 
-      return {
-        iconName,
-        id: `quick-preset-slot-${index + 1}`,
-        preset: presetId ? menuPresetById.get(presetId) ?? null : null,
-        presetId,
-        slotNumber: index + 1,
-      };
-    }),
+      return Array.from({ length: slotCount }, (_, index) => {
+        const iconName = quickPresetNavUsesAutomaticSlots
+          ? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[index] ?? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[0]
+          : quickPresetNavIconNames[index] ??
+            DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+              index % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+            ];
+        const presetId = quickPresetNavUsesAutomaticSlots
+          ? menuPresets[index]?.id ?? null
+          : quickPresetNavPresetIds[index] ?? null;
+
+        return {
+          iconName: toMaterialCommunityIconName(iconName),
+          id: `quick-preset-slot-${index + 1}`,
+          preset: presetId ? menuPresetById.get(presetId) ?? null : null,
+          presetId,
+          slotNumber: index + 1,
+        };
+      });
+    },
     [
+      quickPresetNavIconNames,
+      quickPresetNavSlotLimit,
       menuPresetById,
       menuPresets,
       quickPresetNavPresetIds,
       quickPresetNavUsesAutomaticSlots,
     ],
   );
+  const heldQuickPresetNavPreset = heldQuickPresetNavSlotNumber
+    ? quickPresetNavItems.find((item) => item.slotNumber === heldQuickPresetNavSlotNumber)?.preset
+      ?? null
+    : null;
+  const heldQuickPresetNavDetail = heldQuickPresetNavPreset
+    ? getQuickPresetNavDetail(heldQuickPresetNavPreset, dateLabelDisplayMode)
+    : null;
   const assignedQuickPresetNavCount = quickPresetNavItems.filter((item) => item.preset).length;
   const quickPresetNavSettingsSummary = menuPresets.length === 0
     ? 'No saved presets'
     : quickPresetNavUsesAutomaticSlots
       ? 'Auto first saved presets'
-      : `${assignedQuickPresetNavCount} assigned · ${menuPresets.length} saved`;
+      : `${assignedQuickPresetNavCount}/${quickPresetNavItems.length} assigned · ${menuPresets.length} saved`;
+  const quickPresetNavCanAddSlot = quickPresetNavItems.length < quickPresetNavSlotLimit;
+  const getExplicitQuickPresetNavPresetIds = useCallback(
+    () => quickPresetNavItems.map((item) => item.presetId ?? null),
+    [quickPresetNavItems],
+  );
+  const getExplicitQuickPresetNavIconNames = useCallback(
+    () => quickPresetNavItems.map((item) => String(item.iconName)),
+    [quickPresetNavItems],
+  );
   const todoListUseSubsectionLayout =
     todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
   const sortedTodos = useMemo(
@@ -3988,9 +4122,11 @@ export default function App() {
       ) * LIST_MENU_ROW_HEIGHT,
     );
   }, [todoListFrameHeight, visibleTodoListRows.length, windowHeight]);
+  const todoListSearchOffset = todoListOneHandedOffset;
+  const todoListRestingOffset = todoListOneHandedOffset + HEADER_SEARCH_ROW_HEIGHT;
   const todoListContentOffset = useMemo(
-    () => ({ x: 0, y: todoListOneHandedOffset }),
-    [todoListOneHandedOffset],
+    () => ({ x: 0, y: todoListRestingOffset }),
+    [todoListRestingOffset],
   );
   const selectedTodosForBulk = useMemo(
     () => todos.filter((todo) => (
@@ -4502,33 +4638,29 @@ export default function App() {
     }
 
     didApplyTodoListInitialOffsetRef.current = true;
-    scrollOffsetY.current = todoListOneHandedOffset;
-    actualScrollOffsetY.current = todoListOneHandedOffset;
+    scrollOffsetY.current = todoListRestingOffset;
+    actualScrollOffsetY.current = todoListRestingOffset;
 
     const frame = requestAnimationFrame(() => {
       todoListRef.current?.scrollToOffset({
         animated: false,
-        offset: todoListOneHandedOffset,
+        offset: todoListRestingOffset,
       });
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [todoListOneHandedOffset]);
+  }, [todoListOneHandedOffset, todoListRestingOffset]);
 
   const alignTodoListForSearchFocus = useCallback(() => {
-    if (todoListOneHandedOffset <= 1) {
-      return;
-    }
-
-    scrollOffsetY.current = todoListOneHandedOffset;
+    scrollOffsetY.current = todoListSearchOffset;
 
     requestAnimationFrame(() => {
       todoListRef.current?.scrollToOffset({
         animated: true,
-        offset: todoListOneHandedOffset,
+        offset: todoListSearchOffset,
       });
     });
-  }, [todoListOneHandedOffset]);
+  }, [todoListSearchOffset]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -5181,17 +5313,127 @@ export default function App() {
       ? presetId
       : null;
 
-    setQuickPresetNavPresetIds((current) => {
-      const next = QUICK_PRESET_NAV_ICONS.map((_, index) => (
-        current.length > 0 ? current[index] ?? null : menuPresets[index]?.id ?? null
-      ));
-      next[slotIndex] = nextPresetId;
-      return next;
+    const nextPresetIds = getExplicitQuickPresetNavPresetIds();
+    nextPresetIds[slotIndex] = nextPresetId;
+    setQuickPresetNavPresetIds(nextPresetIds);
+    setQuickPresetNavIconNames(getExplicitQuickPresetNavIconNames());
+    triggerSubtleHaptic();
+  }, [
+    getExplicitQuickPresetNavIconNames,
+    getExplicitQuickPresetNavPresetIds,
+    menuPresets,
+  ]);
+
+  const addQuickPresetNavSlot = useCallback(() => {
+    if (!quickPresetNavCanAddSlot) {
+      return;
+    }
+
+    const assignedPresetIds = new Set(
+      quickPresetNavItems.map((item) => item.presetId).filter(Boolean),
+    );
+    const nextPreset = menuPresets.find((preset) => !assignedPresetIds.has(preset.id)) ?? null;
+    const nextIndex = quickPresetNavItems.length;
+    setQuickPresetNavPresetIds([
+      ...getExplicitQuickPresetNavPresetIds(),
+      nextPreset?.id ?? null,
+    ]);
+    setQuickPresetNavIconNames([
+      ...getExplicitQuickPresetNavIconNames(),
+      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+        nextIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+      ] ?? 'star-four-points',
+    ]);
+    triggerSubtleHaptic();
+  }, [
+    getExplicitQuickPresetNavIconNames,
+    getExplicitQuickPresetNavPresetIds,
+    menuPresets,
+    quickPresetNavCanAddSlot,
+    quickPresetNavItems,
+  ]);
+
+  const removeQuickPresetNavSlot = useCallback((slotIndex: number) => {
+    const nextPresetIds = getExplicitQuickPresetNavPresetIds().filter((_, index) => (
+      index !== slotIndex
+    ));
+    const nextIconNames = getExplicitQuickPresetNavIconNames().filter((_, index) => (
+      index !== slotIndex
+    ));
+
+    setQuickPresetNavPresetIds(nextPresetIds);
+    setQuickPresetNavIconNames(nextIconNames);
+    setOpenQuickPresetNavSlotNumber((current) => {
+      if (current === null) {
+        return current;
+      }
+      if (current === slotIndex + 1) {
+        return null;
+      }
+      return current > slotIndex + 1 ? current - 1 : current;
     });
     triggerSubtleHaptic();
-  }, [menuPresets]);
+  }, [
+    getExplicitQuickPresetNavIconNames,
+    getExplicitQuickPresetNavPresetIds,
+  ]);
+
+  const changeQuickPresetNavSlotIcon = useCallback((slotIndex: number, iconName: string) => {
+    const nextIconNames = getExplicitQuickPresetNavIconNames();
+    nextIconNames[slotIndex] = iconName;
+    setQuickPresetNavIconNames(nextIconNames);
+    setQuickPresetNavPresetIds(getExplicitQuickPresetNavPresetIds());
+    triggerSubtleHaptic();
+  }, [
+    getExplicitQuickPresetNavIconNames,
+    getExplicitQuickPresetNavPresetIds,
+  ]);
+
+  const moveQuickPresetNavSlot = useCallback((slotIndex: number, direction: -1 | 1) => {
+    const targetIndex = slotIndex + direction;
+    if (targetIndex < 0 || targetIndex >= quickPresetNavItems.length) {
+      return;
+    }
+
+    const nextPresetIds = getExplicitQuickPresetNavPresetIds();
+    const nextIconNames = getExplicitQuickPresetNavIconNames();
+    [nextPresetIds[slotIndex], nextPresetIds[targetIndex]] = [
+      nextPresetIds[targetIndex] ?? null,
+      nextPresetIds[slotIndex] ?? null,
+    ];
+    [nextIconNames[slotIndex], nextIconNames[targetIndex]] = [
+      nextIconNames[targetIndex] ??
+        DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+          targetIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+        ] ??
+        'star-four-points',
+      nextIconNames[slotIndex] ??
+        DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+          slotIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+        ] ??
+        'star-four-points',
+    ];
+
+    setQuickPresetNavPresetIds(nextPresetIds);
+    setQuickPresetNavIconNames(nextIconNames);
+    setOpenQuickPresetNavSlotNumber((current) => {
+      if (current === slotIndex + 1) {
+        return targetIndex + 1;
+      }
+      if (current === targetIndex + 1) {
+        return slotIndex + 1;
+      }
+      return current;
+    });
+    triggerSubtleHaptic();
+  }, [
+    getExplicitQuickPresetNavIconNames,
+    getExplicitQuickPresetNavPresetIds,
+    quickPresetNavItems.length,
+  ]);
 
   const resetQuickPresetNavSlots = useCallback(() => {
+    setQuickPresetNavIconNames([]);
     setQuickPresetNavPresetIds([]);
     triggerSubtleHaptic();
   }, []);
@@ -5432,11 +5674,12 @@ export default function App() {
   const focusHeaderSearch = useCallback(() => {
     setNavTab('search');
     closeListMenuState();
+    alignTodoListForSearchFocus();
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
     triggerSubtleHaptic();
-  }, [closeListMenuState]);
+  }, [alignTodoListForSearchFocus, closeListMenuState]);
 
   const closeHeaderSearch = useCallback(() => {
     Keyboard.dismiss();
@@ -5813,6 +6056,7 @@ export default function App() {
       listOrderMode,
       menuPresets,
       quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+      quickPresetNavIconNames,
       quickPresetNavPresetIds,
       selectedFilters,
       showOverdueMetaTags,
@@ -5844,6 +6088,8 @@ export default function App() {
     menuPresets,
     metaTagVisibility,
     pendingDeleteIds,
+    quickPresetNavIconNames,
+    quickPresetNavPresetIds,
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
@@ -5891,6 +6137,9 @@ export default function App() {
     setListMenuTree(restoredListMenuTree);
     setListOrderMode(backup.payload.settings.listOrderMode);
     setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
+    setQuickPresetNavIconNames(
+      cloneQuickPresetNavIconNames(backup.payload.settings.quickPresetNavIconNames),
+    );
     setQuickPresetNavPresetIds(
       cloneQuickPresetNavPresetIds(backup.payload.settings.quickPresetNavPresetIds),
     );
@@ -6134,7 +6383,7 @@ export default function App() {
 
         return itemOffset === null
           ? null
-          : itemOffset + todoListOneHandedOffset - TODO_MENU_TARGET_TOP_OFFSET;
+          : itemOffset + todoListRestingOffset - TODO_MENU_TARGET_TOP_OFFSET;
       }
 
       const firstItemOffset = list.getFirstItemOffset();
@@ -6154,7 +6403,7 @@ export default function App() {
         return null;
       }
 
-      return itemOffset + todoListOneHandedOffset - TODO_MENU_TARGET_TOP_OFFSET;
+      return itemOffset + todoListRestingOffset - TODO_MENU_TARGET_TOP_OFFSET;
     };
 
     const targetOffset = getTargetOffset();
@@ -6178,7 +6427,7 @@ export default function App() {
   }, [
     collapsedTodoGroupIds,
     todoListRows,
-    todoListOneHandedOffset,
+    todoListRestingOffset,
     visibleTodoListRows,
   ]);
 
@@ -6583,54 +6832,6 @@ export default function App() {
           )}
         </View>
 
-        <View style={styles.headerSearchRow}>
-          <View style={styles.searchBox}>
-            <Ionicons
-              color={THEME_TEXT_SECONDARY}
-              name="search"
-              size={18}
-              style={styles.navSearchIcon}
-            />
-            <TextInput
-              ref={searchInputRef}
-              autoCapitalize="sentences"
-              autoCorrect
-              clearButtonMode="while-editing"
-              onBlur={() => {
-                setNavTab((current) => (current === 'search' ? null : current));
-              }}
-              onChangeText={setQuery}
-              onFocus={() => {
-                if (suppressHeaderSearchFocusRef.current) {
-                  suppressHeaderSearchFocusRef.current = false;
-
-                  if (suppressHeaderSearchFocusTimerRef.current) {
-                    clearTimeout(suppressHeaderSearchFocusTimerRef.current);
-                    suppressHeaderSearchFocusTimerRef.current = null;
-                  }
-
-                  setNavTab((current) => (current === 'search' ? null : current));
-                  requestAnimationFrame(() => {
-                    searchInputRef.current?.blur();
-                    Keyboard.dismiss();
-                  });
-                  return;
-                }
-
-                setNavTab('search');
-                alignTodoListForSearchFocus();
-              }}
-              placeholder="Search todos…"
-              placeholderTextColor={THEME_TEXT_SECONDARY}
-              returnKeyType="search"
-              selectionColor={NAV_ACCENT}
-              style={styles.searchInput}
-              textAlignVertical="center"
-              value={query}
-            />
-          </View>
-        </View>
-
         <KeyboardAvoidingView
           behavior={
             Platform.OS === 'ios' && !createDrawerVisible ? 'padding' : undefined
@@ -6649,73 +6850,31 @@ export default function App() {
               onLayout={handleTodoListFrameLayout}
               style={styles.todoListFrame}
             >
-              {showSearchFiltersPanel ? (
-                <ScrollView
-                  contentContainerStyle={styles.searchFiltersContent}
-                  keyboardShouldPersistTaps="handled"
-                  showsVerticalScrollIndicator={false}
-                  style={styles.searchFiltersPanel}
-                >
-                  {searchFilterItems.length === 0 ? (
-                    <View style={styles.searchFiltersEmpty}>
-                      <Text style={styles.searchFiltersEmptyTitle}>No active filters</Text>
-                      <Text style={styles.searchFiltersEmptyText}>
-                        Type in the search field to find todos.
-                      </Text>
-                    </View>
-                  ) : (
-                    searchFilterItems.map((item) => {
-                      const colorTheme = getFilterColorTheme(
-                        filterColors,
-                        item.filterKey,
-                        item.value,
-                      );
-
-                      return (
-                        <View key={item.id} style={styles.searchFilterRow}>
-                          <View
-                            style={[
-                              styles.listMenuColorDot,
-                              colorTheme
-                                ? { backgroundColor: colorTheme.accent }
-                                : styles.listMenuColorDotNoColor,
-                            ]}
-                          />
-                          <View style={styles.searchFilterRowText}>
-                            <Text style={styles.searchFilterLabel}>{item.displayLabel}</Text>
-                            <Text style={styles.filterTypeText}>
-                              {FILTER_KIND_LABELS[item.filterKey]}
-                            </Text>
-                          </View>
-                        </View>
-                      );
-                    })
-                  )}
-                  <Text style={styles.searchFiltersMeta}>{searchContextSummary}</Text>
-                </ScrollView>
-              ) : (
-                <FlashList
-                  ref={todoListRef}
-                  alwaysBounceVertical={false}
-                  bounces={false}
-                  contentContainerStyle={[
-                    styles.listContent,
-                    hasTodoEditTargets &&
-                      listMenuOpen && {
-                        paddingBottom: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 104,
-                      },
-                    filteredTodos.length === 0 && styles.emptyListContent,
-                  ]}
-                  contentOffset={todoListContentOffset}
-                  data={visibleTodoListRows}
-                  drawDistance={TODO_GROUPED_ROW_ESTIMATE}
-                  extraData={todoListExtraData}
-                  getItemType={getTodoListItemType}
-                  keyboardDismissMode="on-drag"
-                  keyboardShouldPersistTaps="handled"
-                  keyExtractor={getTodoListItemKey}
-                  maintainVisibleContentPosition={TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION}
-                  ListEmptyComponent={
+              <FlashList
+                ref={todoListRef}
+                alwaysBounceVertical={false}
+                bounces={false}
+                contentContainerStyle={[
+                  styles.listContent,
+                  hasTodoEditTargets &&
+                    listMenuOpen && {
+                      paddingBottom: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 104,
+                    },
+                  !showSearchFiltersPanel &&
+                    filteredTodos.length === 0 &&
+                    styles.emptyListContent,
+                ]}
+                contentOffset={todoListContentOffset}
+                data={showSearchFiltersPanel ? EMPTY_VISIBLE_TODO_LIST_ROWS : visibleTodoListRows}
+                drawDistance={TODO_GROUPED_ROW_ESTIMATE}
+                extraData={todoListExtraData}
+                getItemType={getTodoListItemType}
+                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="handled"
+                keyExtractor={getTodoListItemKey}
+                maintainVisibleContentPosition={TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION}
+                ListEmptyComponent={
+                  showSearchFiltersPanel ? null : (
                     <View style={styles.emptyState}>
                       <Text style={styles.emptyIcon}>
                         {query.trim() ? '⌕' : '✎'}
@@ -6735,29 +6894,119 @@ export default function App() {
                             : 'Tap + in the bar below to add a todo.'}
                       </Text>
                     </View>
-                  }
-                  ListFooterComponent={
-                    todoListOneHandedOffset > 0 ? (
+                  )
+                }
+                ListFooterComponent={
+                  !showSearchFiltersPanel && todoListOneHandedOffset > 0 ? (
+                    <View
+                      pointerEvents="none"
+                      style={{ height: todoListOneHandedOffset }}
+                    />
+                  ) : null
+                }
+                ListHeaderComponent={
+                  <View>
+                    {todoListOneHandedOffset > 0 ? (
                       <View
                         pointerEvents="none"
                         style={{ height: todoListOneHandedOffset }}
                       />
-                    ) : null
-                  }
-                  ListHeaderComponent={
-                    todoListOneHandedOffset > 0 ? (
-                      <View
-                        pointerEvents="none"
-                        style={{ height: todoListOneHandedOffset }}
-                      />
-                    ) : null
-                  }
-                  onScroll={handleListScroll}
-                  renderItem={renderTodoItem}
-                  scrollEventThrottle={16}
-                  showsVerticalScrollIndicator={false}
-                />
-              )}
+                    ) : null}
+                    <View style={styles.headerSearchRow}>
+                      <View style={styles.searchBox}>
+                        <Ionicons
+                          color={THEME_TEXT_SECONDARY}
+                          name="search"
+                          size={18}
+                          style={styles.navSearchIcon}
+                        />
+                        <TextInput
+                          ref={searchInputRef}
+                          autoCapitalize="sentences"
+                          autoCorrect
+                          clearButtonMode="while-editing"
+                          onBlur={() => {
+                            setNavTab((current) => (current === 'search' ? null : current));
+                          }}
+                          onChangeText={setQuery}
+                          onFocus={() => {
+                            if (suppressHeaderSearchFocusRef.current) {
+                              suppressHeaderSearchFocusRef.current = false;
+
+                              if (suppressHeaderSearchFocusTimerRef.current) {
+                                clearTimeout(suppressHeaderSearchFocusTimerRef.current);
+                                suppressHeaderSearchFocusTimerRef.current = null;
+                              }
+
+                              setNavTab((current) => (current === 'search' ? null : current));
+                              requestAnimationFrame(() => {
+                                searchInputRef.current?.blur();
+                                Keyboard.dismiss();
+                              });
+                              return;
+                            }
+
+                            setNavTab('search');
+                            alignTodoListForSearchFocus();
+                          }}
+                          placeholder="Search todos…"
+                          placeholderTextColor={THEME_TEXT_SECONDARY}
+                          returnKeyType="search"
+                          selectionColor={NAV_ACCENT}
+                          style={styles.searchInput}
+                          textAlignVertical="center"
+                          value={query}
+                        />
+                      </View>
+                    </View>
+                    {showSearchFiltersPanel ? (
+                      <View style={styles.searchFiltersContent}>
+                        {searchFilterItems.length === 0 ? (
+                          <View style={styles.searchFiltersEmpty}>
+                            <Text style={styles.searchFiltersEmptyTitle}>No active filters</Text>
+                            <Text style={styles.searchFiltersEmptyText}>
+                              Type in the search field to find todos.
+                            </Text>
+                          </View>
+                        ) : (
+                          searchFilterItems.map((item) => {
+                            const colorTheme = getFilterColorTheme(
+                              filterColors,
+                              item.filterKey,
+                              item.value,
+                            );
+
+                            return (
+                              <View key={item.id} style={styles.searchFilterRow}>
+                                <View
+                                  style={[
+                                    styles.listMenuColorDot,
+                                    colorTheme
+                                      ? { backgroundColor: colorTheme.accent }
+                                      : styles.listMenuColorDotNoColor,
+                                  ]}
+                                />
+                                <View style={styles.searchFilterRowText}>
+                                  <Text style={styles.searchFilterLabel}>{item.displayLabel}</Text>
+                                  <Text style={styles.filterTypeText}>
+                                    {FILTER_KIND_LABELS[item.filterKey]}
+                                  </Text>
+                                </View>
+                              </View>
+                            );
+                          })
+                        )}
+                        <Text style={styles.searchFiltersMeta}>{searchContextSummary}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                }
+                ListHeaderComponentStyle={styles.todoListHeaderChrome}
+                onScroll={handleListScroll}
+                renderItem={renderTodoItem}
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator={false}
+              />
             </View>
           </View>
 
@@ -6780,61 +7029,99 @@ export default function App() {
           </View>
         ) : null}
 
+        {heldQuickPresetNavDetail ? (
+          <View pointerEvents="none" style={styles.quickPresetNavHoldDetailLayer}>
+            <View style={styles.quickPresetNavHoldDetail}>
+              <Text style={styles.quickPresetNavHoldDetailTitle}>
+                {heldQuickPresetNavDetail.title}
+              </Text>
+              <View style={styles.quickPresetNavHoldDetailLines}>
+                {heldQuickPresetNavDetail.details.map((line) => (
+                  <Text key={line} style={styles.quickPresetNavHoldDetailText}>
+                    {line}
+                  </Text>
+                ))}
+              </View>
+            </View>
+          </View>
+        ) : null}
+
         <View style={[
           styles.bottomNav,
           (settingsModalVisible || filterConfigModalVisible) && styles.bottomNavFlat,
         ]}>
           <View style={styles.quickPresetNav}>
-            {quickPresetNavItems.map((item) => {
-              const openedFromThisSlot = Boolean(
-                item.preset &&
-                  openQuickPresetNavSlotNumber === item.slotNumber &&
-                  openMenuPresetId === item.preset.id,
-              );
-              const selected = Boolean(
-                item.preset &&
-                  (
-                    openedFromThisSlot ||
-                    (!openQuickPresetNavSlotNumber && activeMenuPreset?.id === item.preset.id)
-                  ),
-              );
-              const iconColor = item.preset
-                ? selected ? NAV_ACCENT : NAV_ICON_INACTIVE
-                : THEME_TEXT_TERTIARY;
+            <ScrollView
+              alwaysBounceHorizontal={false}
+              bounces={false}
+              contentContainerStyle={styles.quickPresetNavItems}
+              horizontal
+              keyboardShouldPersistTaps="handled"
+              showsHorizontalScrollIndicator={false}
+              style={styles.quickPresetNavScroll}
+            >
+              {quickPresetNavItems.map((item) => {
+                const openedFromThisSlot = Boolean(
+                  item.preset &&
+                    openQuickPresetNavSlotNumber === item.slotNumber &&
+                    openMenuPresetId === item.preset.id,
+                );
+                const selected = Boolean(
+                  item.preset &&
+                    (
+                      openedFromThisSlot ||
+                      (!openQuickPresetNavSlotNumber && activeMenuPreset?.id === item.preset.id)
+                    ),
+                );
+                const iconColor = item.preset
+                  ? selected ? NAV_ACCENT : NAV_ICON_INACTIVE
+                  : THEME_TEXT_TERTIARY;
 
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityHint={
-                    item.preset
-                      ? 'Applies this saved preset'
-                      : 'No preset assigned'
-                  }
-                  accessibilityLabel={
-                    item.preset
-                      ? `Apply preset ${item.preset.label}`
-                      : `Preset slot ${item.slotNumber}`
-                  }
-                  accessibilityState={{ disabled: !item.preset, selected }}
-                  disabled={!item.preset}
-                  key={item.id}
-                  onPress={(event) => (
-                    handleQuickPresetNavPress(item.preset, item.slotNumber, event, 'press')
-                  )}
-                  onPressIn={(event) => (
-                    handleQuickPresetNavPress(item.preset, item.slotNumber, event, 'pressIn')
-                  )}
-                  style={({ pressed }) => [
-                    styles.quickPresetNavItem,
-                    selected && styles.quickPresetNavItemSelected,
-                    !item.preset && styles.quickPresetNavItemEmpty,
-                    pressed && styles.bottomNavItemPressed,
-                  ]}
-                >
-                  <MaterialCommunityIcons color={iconColor} name={item.iconName} size={20} />
-                </Pressable>
-              );
-            })}
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityHint={
+                      item.preset
+                        ? 'Applies this saved preset. Long press shows details'
+                        : 'No preset assigned'
+                    }
+                    accessibilityLabel={
+                      item.preset
+                        ? `Apply preset ${item.preset.label}`
+                        : `Preset slot ${item.slotNumber}`
+                    }
+                    accessibilityState={{ disabled: !item.preset, selected }}
+                    disabled={!item.preset}
+                    key={item.id}
+                    unstable_pressDelay={QUICK_PRESET_NAV_PRESS_DELAY_MS}
+                    onLongPress={() => {
+                      if (item.preset) {
+                        setHeldQuickPresetNavSlotNumber(item.slotNumber);
+                      }
+                    }}
+                    onPress={(event) => (
+                      handleQuickPresetNavPress(item.preset, item.slotNumber, event, 'press')
+                    )}
+                    onPressIn={(event) => (
+                      handleQuickPresetNavPress(item.preset, item.slotNumber, event, 'pressIn')
+                    )}
+                    onPressOut={() => {
+                      setHeldQuickPresetNavSlotNumber((current) => (
+                        current === item.slotNumber ? null : current
+                      ));
+                    }}
+                    style={({ pressed }) => [
+                      styles.quickPresetNavItem,
+                      selected && styles.quickPresetNavItemSelected,
+                      !item.preset && styles.quickPresetNavItemEmpty,
+                      pressed && styles.bottomNavItemPressed,
+                    ]}
+                  >
+                    <MaterialCommunityIcons color={iconColor} name={item.iconName} size={20} />
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
           <View style={styles.bottomNavPrimary}>
             <Pressable
@@ -8417,6 +8704,24 @@ export default function App() {
                           </Pressable>
                         ) : null}
 
+                        <View style={styles.settingsNavbarPresetToolbar}>
+                          <Pressable
+                            accessibilityLabel="Add navbar preset icon"
+                            accessibilityRole="button"
+                            accessibilityState={{ disabled: !quickPresetNavCanAddSlot }}
+                            disabled={!quickPresetNavCanAddSlot}
+                            onPress={addQuickPresetNavSlot}
+                            style={({ pressed }) => [
+                              styles.settingsNavbarPresetAddButton,
+                              !quickPresetNavCanAddSlot && styles.settingsButtonDisabled,
+                              pressed && styles.settingsOptionRowPressed,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="add" size={17} />
+                            <Text style={styles.settingsNavbarPresetAddButtonText}>Add icon</Text>
+                          </Pressable>
+                        </View>
+
                         {quickPresetNavItems.map((item, index) => {
                           const slotHasPresetId = Boolean(item.presetId);
                           const slotValueLabel = item.preset
@@ -8424,18 +8729,34 @@ export default function App() {
                             : slotHasPresetId
                               ? 'Missing preset'
                               : 'No preset assigned';
+                          const removeSlotDisabled = quickPresetNavItems.length <= 1;
 
                           return (
                             <View
                               key={`settings-${item.id}`}
                               style={[
                                 styles.settingsNavbarPresetSlot,
-                                index === 0 &&
-                                  quickPresetNavUsesAutomaticSlots &&
-                                  styles.settingsNavbarPresetSlotFirst,
+                                index === 0 && styles.settingsNavbarPresetSlotFirst,
                               ]}
                             >
                               <View style={styles.settingsNavbarPresetSlotHeader}>
+                                <PanGestureHandler
+                                  activeOffsetY={[-6, 6]}
+                                  failOffsetX={[-18, 18]}
+                                  onHandlerStateChange={(event) => {
+                                    const { state, translationY } = event.nativeEvent;
+                                    if (state === State.END && Math.abs(translationY) > 18) {
+                                      moveQuickPresetNavSlot(index, translationY > 0 ? 1 : -1);
+                                    }
+                                  }}
+                                >
+                                  <View
+                                    collapsable={false}
+                                    style={styles.settingsNavbarPresetDragZone}
+                                  >
+                                    <Text style={styles.settingsNavbarPresetDragHandle}>☰</Text>
+                                  </View>
+                                </PanGestureHandler>
                                 <View style={styles.settingsNavbarPresetSlotIcon}>
                                   <MaterialCommunityIcons
                                     color={NAV_ICON_INACTIVE}
@@ -8472,7 +8793,57 @@ export default function App() {
                                     size={18}
                                   />
                                 </Pressable>
+                                <Pressable
+                                  accessibilityLabel={`Remove navbar preset slot ${item.slotNumber}`}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ disabled: removeSlotDisabled }}
+                                  disabled={removeSlotDisabled}
+                                  onPress={() => removeQuickPresetNavSlot(index)}
+                                  style={({ pressed }) => [
+                                    styles.settingsIconButton,
+                                    removeSlotDisabled && styles.settingsButtonDisabled,
+                                    pressed && styles.settingsOptionRowPressed,
+                                  ]}
+                                >
+                                  <Ionicons
+                                    color={removeSlotDisabled ? '#C9C0B8' : '#8F877F'}
+                                    name="trash-outline"
+                                    size={17}
+                                  />
+                                </Pressable>
                               </View>
+
+                              <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.settingsNavbarPresetChoicesScroll}
+                                contentContainerStyle={styles.settingsNavbarPresetIconChoices}
+                              >
+                                {QUICK_PRESET_NAV_ICON_CHOICES.map((iconName) => {
+                                  const selected = item.iconName === iconName;
+
+                                  return (
+                                    <Pressable
+                                      accessibilityLabel={`Use ${iconName} icon for navbar preset slot ${item.slotNumber}`}
+                                      accessibilityRole="button"
+                                      accessibilityState={{ selected }}
+                                      key={`${item.id}-icon-${iconName}`}
+                                      onPress={() => changeQuickPresetNavSlotIcon(index, iconName)}
+                                      style={({ pressed }) => [
+                                        styles.settingsNavbarPresetIconChoiceButton,
+                                        selected && styles.settingsNavbarPresetIconChoiceButtonSelected,
+                                        pressed && styles.settingsOptionRowPressed,
+                                      ]}
+                                    >
+                                      <MaterialCommunityIcons
+                                        color={selected ? NAV_ACCENT : NAV_ICON_INACTIVE}
+                                        name={iconName}
+                                        size={18}
+                                      />
+                                    </Pressable>
+                                  );
+                                })}
+                              </ScrollView>
 
                               <ScrollView
                                 horizontal
@@ -9870,6 +10241,30 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 17,
   },
+  settingsNavbarPresetToolbar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    marginTop: 10,
+  },
+  settingsNavbarPresetAddButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#F7F3EE',
+    borderColor: '#E8E2DA',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 34,
+    paddingHorizontal: 11,
+  },
+  settingsNavbarPresetAddButtonText: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 17,
+  },
   settingsNavbarPresetSlot: {
     borderTopColor: '#F2EBE3',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -9886,6 +10281,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     minHeight: 42,
+  },
+  settingsNavbarPresetDragZone: {
+    alignItems: 'center',
+    height: 38,
+    justifyContent: 'center',
+    width: 24,
+  },
+  settingsNavbarPresetDragHandle: {
+    color: THEME_TEXT_TERTIARY,
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
   },
   settingsNavbarPresetSlotIcon: {
     alignItems: 'center',
@@ -9919,6 +10326,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingRight: 2,
+  },
+  settingsNavbarPresetIconChoices: {
+    alignItems: 'center',
+    gap: 7,
+    paddingRight: 2,
+  },
+  settingsNavbarPresetIconChoiceButton: {
+    alignItems: 'center',
+    backgroundColor: '#F7F3EE',
+    borderColor: '#E8E2DA',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 34,
+    justifyContent: 'center',
+    width: 38,
+  },
+  settingsNavbarPresetIconChoiceButtonSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT,
   },
   settingsNavbarPresetChoiceButton: {
     alignItems: 'center',
@@ -10261,6 +10687,7 @@ const styles = StyleSheet.create({
   },
   headerSearchRow: {
     backgroundColor: THEME_BG,
+    height: HEADER_SEARCH_ROW_HEIGHT,
     paddingBottom: 12,
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingTop: 4,
@@ -10329,19 +10756,69 @@ const styles = StyleSheet.create({
     shadowRadius: 0,
   },
   quickPresetNav: {
-    alignItems: 'center',
+    alignItems: 'stretch',
     borderBottomColor: '#F2F2F7',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
+    flexDirection: 'column',
     height: QUICK_PRESET_NAV_HEIGHT,
-    justifyContent: 'space-around',
-    paddingHorizontal: 12,
+    justifyContent: 'flex-start',
+  },
+  quickPresetNavHoldDetailLayer: {
+    alignItems: 'center',
+    bottom: BOTTOM_NAV_RESERVED_HEIGHT + 8,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    zIndex: 18,
+    elevation: 7,
+  },
+  quickPresetNavHoldDetail: {
+    backgroundColor: '#FFFFFF',
+    borderColor: THEME_BORDER,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 340,
+    minWidth: 210,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+  },
+  quickPresetNavHoldDetailTitle: {
+    color: NAV_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  quickPresetNavHoldDetailLines: {
+    gap: 5,
+    marginTop: 8,
+  },
+  quickPresetNavHoldDetailText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  quickPresetNavScroll: {
+    flexGrow: 0,
+    height: QUICK_PRESET_NAV_ICON_ROW_HEIGHT,
+  },
+  quickPresetNavItems: {
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: HORIZONTAL_PADDING,
   },
   quickPresetNavItem: {
     alignItems: 'center',
-    flex: 1,
-    height: '100%',
+    borderRadius: 8,
+    height: 32,
     justifyContent: 'center',
+    width: QUICK_PRESET_NAV_ITEM_WIDTH,
   },
   quickPresetNavItemSelected: {
     backgroundColor: THEME_ACCENT_SOFT,
@@ -10899,6 +11376,9 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
     paddingTop: TODO_LIST_CONTENT_TOP_PADDING,
   },
+  todoListHeaderChrome: {
+    marginHorizontal: -HORIZONTAL_PADDING,
+  },
   todoListItem: {
     alignSelf: 'stretch',
     width: '100%',
@@ -11003,9 +11483,6 @@ const styles = StyleSheet.create({
   },
   todoRowDividerHighlighted: {
     backgroundColor: THEME_ACCENT_SOFT,
-  },
-  searchFiltersPanel: {
-    flex: 1,
   },
   searchFiltersContent: {
     flexGrow: 1,

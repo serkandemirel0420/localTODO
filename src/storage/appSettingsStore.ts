@@ -56,9 +56,24 @@ export type StoredMenuPreset = {
   createdAt: number;
 };
 
-export const QUICK_PRESET_NAV_SLOT_COUNT = 5;
-export const QUICK_PRESET_DEFAULTS_VERSION = 1;
+export const QUICK_PRESET_NAV_SLOT_COUNT = 10;
+export const QUICK_PRESET_NAV_MAX_SLOT_COUNT = 50;
+export const QUICK_PRESET_DEFAULTS_VERSION = 2;
 export type QuickPresetNavPresetIds = Array<string | null>;
+export type QuickPresetNavIconNames = string[];
+
+export const DEFAULT_QUICK_PRESET_NAV_ICON_NAMES: QuickPresetNavIconNames = [
+  'penguin',
+  'rabbit-variant',
+  'turtle',
+  'cat',
+  'owl',
+  'butterfly-outline',
+  'bee',
+  'ladybug',
+  'dog-side',
+  'star-four-points',
+];
 
 const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
   {
@@ -110,6 +125,51 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     todoGroupMode: 'date',
     todoSortMode: 'date',
     createdAt: 5,
+  },
+  {
+    id: 'starter-today',
+    label: 'Today',
+    filters: { date: ['Today'], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+    createdAt: 6,
+  },
+  {
+    id: 'starter-tomorrow',
+    label: 'Tomorrow',
+    filters: { date: ['Tomorrow'], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+    createdAt: 7,
+  },
+  {
+    id: 'starter-high',
+    label: 'High',
+    filters: { date: [], list: [], priority: ['High'], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'priority',
+    todoSortMode: 'priority',
+    createdAt: 8,
+  },
+  {
+    id: 'starter-later',
+    label: 'Later',
+    filters: { date: ['Later'], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+    createdAt: 9,
+  },
+  {
+    id: 'starter-newest',
+    label: 'Newest',
+    filters: { date: [], list: [], priority: [], reminder: [] },
+    listOrderMode: 'alphabetical',
+    todoGroupMode: 'none',
+    todoSortMode: 'newest',
+    createdAt: 10,
   },
 ];
 
@@ -182,6 +242,7 @@ export type AppSettings = {
   menuPresets: StoredMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
   quickPresetDefaultsVersion: number;
+  quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
@@ -215,7 +276,9 @@ export const normalizeQuickPresetNavPresetIds = (value: unknown): QuickPresetNav
     return [];
   }
 
-  return Array.from({ length: QUICK_PRESET_NAV_SLOT_COUNT }, (_, index) => {
+  const slotCount = Math.min(value.length, QUICK_PRESET_NAV_MAX_SLOT_COUNT);
+
+  return Array.from({ length: slotCount }, (_, index) => {
     const presetId = value[index];
     return typeof presetId === 'string' && presetId.trim() ? presetId.trim() : null;
   });
@@ -224,6 +287,44 @@ export const normalizeQuickPresetNavPresetIds = (value: unknown): QuickPresetNav
 export const cloneQuickPresetNavPresetIds = (
   presetIds: QuickPresetNavPresetIds,
 ): QuickPresetNavPresetIds => normalizeQuickPresetNavPresetIds(presetIds);
+
+const QUICK_PRESET_NAV_ICON_NAME_PATTERN = /^[a-z0-9-]+$/i;
+
+const normalizeQuickPresetNavIconName = (value: unknown, index: number): string => {
+  if (
+    typeof value === 'string' &&
+    QUICK_PRESET_NAV_ICON_NAME_PATTERN.test(value.trim())
+  ) {
+    return value.trim();
+  }
+
+  return DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+    index % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+  ] ?? 'star-four-points';
+};
+
+export const normalizeQuickPresetNavIconNames = (
+  value: unknown,
+  expectedLength?: number,
+): QuickPresetNavIconNames => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return [];
+  }
+
+  const slotCount = Math.min(
+    expectedLength ?? value.length,
+    QUICK_PRESET_NAV_MAX_SLOT_COUNT,
+  );
+
+  return Array.from({ length: slotCount }, (_, index) => (
+    normalizeQuickPresetNavIconName(value[index], index)
+  ));
+};
+
+export const cloneQuickPresetNavIconNames = (
+  iconNames: QuickPresetNavIconNames,
+  expectedLength?: number,
+): QuickPresetNavIconNames => normalizeQuickPresetNavIconNames(iconNames, expectedLength);
 
 const normalizeQuickPresetDefaultsVersion = (value: unknown): number => (
   typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -234,6 +335,7 @@ const normalizeQuickPresetDefaultsVersion = (value: unknown): number => (
 export const ensureQuickPresetDefaults = (
   menuPresets: StoredMenuPreset[],
   quickPresetNavPresetIds: QuickPresetNavPresetIds,
+  quickPresetNavIconNames: QuickPresetNavIconNames,
   quickPresetDefaultsVersion: number,
 ) => {
   const normalizedVersion = normalizeQuickPresetDefaultsVersion(quickPresetDefaultsVersion);
@@ -241,6 +343,10 @@ export const ensureQuickPresetDefaults = (
     return {
       menuPresets: cloneMenuPresets(menuPresets),
       quickPresetDefaultsVersion: normalizedVersion,
+      quickPresetNavIconNames: cloneQuickPresetNavIconNames(
+        quickPresetNavIconNames,
+        quickPresetNavPresetIds.length || undefined,
+      ),
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(quickPresetNavPresetIds),
     };
   }
@@ -250,6 +356,10 @@ export const ensureQuickPresetDefaults = (
     (preset) => !existingPresetIds.has(preset.id),
   );
   const existingAssignments = cloneQuickPresetNavPresetIds(quickPresetNavPresetIds);
+  const existingIconNames = cloneQuickPresetNavIconNames(
+    quickPresetNavIconNames,
+    DEFAULT_QUICK_PRESET_NAV_PRESET_IDS.length,
+  );
 
   return {
     menuPresets: [
@@ -257,6 +367,9 @@ export const ensureQuickPresetDefaults = (
       ...cloneMenuPresets(menuPresets),
     ],
     quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+    quickPresetNavIconNames: DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.map(
+      (iconName, index) => existingIconNames[index] ?? iconName,
+    ),
     quickPresetNavPresetIds: DEFAULT_QUICK_PRESET_NAV_PRESET_IDS.map(
       (presetId, index) => existingAssignments[index] ?? presetId,
     ),
@@ -279,6 +392,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   menuPresets: cloneMenuPresets(DEFAULT_QUICK_MENU_PRESETS),
   metaTagVisibility: cloneMetaTagVisibility(),
   quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
+  quickPresetNavIconNames: cloneQuickPresetNavIconNames(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES),
   quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
   selectedFilters: cloneTodoFilters(),
   showOverdueMetaTags: true,
@@ -699,6 +813,9 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       hideDoneTodos: false,
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
       menuPresets: cloneMenuPresets(DEFAULT_APP_SETTINGS.menuPresets),
+      quickPresetNavIconNames: cloneQuickPresetNavIconNames(
+        DEFAULT_APP_SETTINGS.quickPresetNavIconNames,
+      ),
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(
         DEFAULT_APP_SETTINGS.quickPresetNavPresetIds,
       ),
@@ -709,9 +826,16 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     };
   }
 
+  const normalizedQuickPresetNavPresetIds = normalizeQuickPresetNavPresetIds(
+    value.quickPresetNavPresetIds,
+  );
   const quickPresetDefaults = ensureQuickPresetDefaults(
     normalizeMenuPresets(value.menuPresets),
-    normalizeQuickPresetNavPresetIds(value.quickPresetNavPresetIds),
+    normalizedQuickPresetNavPresetIds,
+    normalizeQuickPresetNavIconNames(
+      value.quickPresetNavIconNames,
+      normalizedQuickPresetNavPresetIds.length || undefined,
+    ),
     normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
   );
 
@@ -733,6 +857,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     menuPresets: quickPresetDefaults.menuPresets,
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
     quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
+    quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
     quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
     selectedFilters: normalizeTodoFilters(value.selectedFilters),
     showOverdueMetaTags: value.showOverdueMetaTags !== false,

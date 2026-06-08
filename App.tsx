@@ -1029,11 +1029,11 @@ const todoMatchesDateFilterGroup = (
   }
 
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
-  if (hasRepeatingFilter && todoRepeats) {
-    return true;
+  if (todoRepeats) {
+    return hasRepeatingFilter;
   }
 
-  if (!hasDateFilters || todoRepeats) {
+  if (!hasDateFilters) {
     return false;
   }
 
@@ -3320,17 +3320,10 @@ export default function App() {
       return;
     }
 
-    const applyDate = (current: SelectedFilters) => {
-      const addingFirstDateFilter = source !== 'create' && current.date.length === 0;
-
-      return {
-        ...current,
-        date: source === 'create' ? [isoDate] : [...current.date, isoDate],
-        reminder: addingFirstDateFilter
-          ? removeRepeatingItemsFilter(current.reminder)
-          : current.reminder,
-      };
-    };
+    const applyDate = (current: SelectedFilters) => ({
+      ...current,
+      date: source === 'create' ? [isoDate] : [...current.date, isoDate],
+    });
 
     if (source === 'create') {
       setCreateDraftFilters(applyDate);
@@ -4697,17 +4690,8 @@ export default function App() {
         };
       }
 
-      const addingFirstDateFilter =
-        filterKey === 'date' &&
-        !hasValue &&
-        current.date.length === 0 &&
-        formattedValue !== REPEATING_ITEMS_FILTER_VALUE;
-
       return {
         ...current,
-        reminder: addingFirstDateFilter
-          ? removeRepeatingItemsFilter(current.reminder)
-          : current.reminder,
         [filterKey]: hasValue
           ? currentValues.filter((item) => (
             filterKey === 'date'

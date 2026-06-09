@@ -74,6 +74,10 @@ const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
 const TODO_ROW_TITLE_ESTIMATED_CHAR_WIDTH = 8.8;
+const TODO_ROW_CHECKBOX_LONG_PRESS_WIDTH = 56;
+const TODO_ROW_GROUPED_CHECKBOX_LONG_PRESS_WIDTH = 52;
+const TODO_ROW_PRIORITY_RAIL_LONG_PRESS_OFFSET = 17;
+const TODO_ROW_GROUPED_PRIORITY_RAIL_LONG_PRESS_OFFSET = 14;
 const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
 const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
 const ZERO_WIDTH_SPACER_PATTERN = /[\u200B\uFEFF]/g;
@@ -93,6 +97,31 @@ type TextLayoutEvent = {
   nativeEvent: {
     lines?: TextLayoutLine[];
   };
+};
+
+const isCheckboxLongPress = (
+  event: LongPressGestureHandlerStateChangeEvent,
+  options: {
+    grouped: boolean;
+    hasPriorityRail: boolean;
+  },
+) => {
+  const localX = event.nativeEvent.x;
+
+  if (!Number.isFinite(localX)) {
+    return false;
+  }
+
+  const baseWidth = options.grouped
+    ? TODO_ROW_GROUPED_CHECKBOX_LONG_PRESS_WIDTH
+    : TODO_ROW_CHECKBOX_LONG_PRESS_WIDTH;
+  const railOffset = options.hasPriorityRail
+    ? options.grouped
+      ? TODO_ROW_GROUPED_PRIORITY_RAIL_LONG_PRESS_OFFSET
+      : TODO_ROW_PRIORITY_RAIL_LONG_PRESS_OFFSET
+    : 0;
+
+  return localX <= baseWidth + railOffset;
 };
 
 type TodoSwipeController = {
@@ -463,6 +492,9 @@ export type TodoRowProps = {
   layout?: 'standalone' | 'grouped';
   metaTagVisibility: MetaTagVisibility;
   onDelete: (id: string) => void;
+  onCreateFromSettings?: (todo: Todo) => void;
+  onCreateFromSettingsHoldEnd?: () => void;
+  onCreateFromSettingsHoldStart?: () => void;
   onEnterSelectMode?: (id: string) => void;
   onOpenDetail: (id: string) => void;
   onOpenMenu: (id: string) => void;
@@ -491,6 +523,9 @@ function TodoRowComponent({
   layout = 'standalone',
   metaTagVisibility,
   onDelete,
+  onCreateFromSettings,
+  onCreateFromSettingsHoldEnd,
+  onCreateFromSettingsHoldStart,
   onEnterSelectMode,
   onOpenDetail,
   onOpenMenu,
@@ -504,6 +539,7 @@ function TodoRowComponent({
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const groupedSwipeableRef = useRef<TodoSwipeController | null>(null);
+  const createFromSettingsLongPressActiveRef = useRef(false);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const [singleLineTitleMeasurementKey, setSingleLineTitleMeasurementKey] = useState('');
@@ -577,6 +613,11 @@ function TodoRowComponent({
   const titleNumberOfLines =
     isClearlySingleLineTitle || singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2;
   const hasDisplayTitle = displayTitle.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim().length > 0;
+  const canCreateFromSettings =
+    !selectMode &&
+    !isPendingDelete &&
+    !isCompletionFeedback &&
+    Boolean(onCreateFromSettings);
 
   const handleTitleTextLayout = useCallback((event: TextLayoutEvent) => {
     const lines = event.nativeEvent.lines ?? [];
@@ -665,6 +706,20 @@ function TodoRowComponent({
     onSetDone,
     selectMode,
     toggleSelection,
+  ]);
+
+  const openCreateFromTodoSettings = useCallback(() => {
+    if (!canCreateFromSettings) {
+      return;
+    }
+
+    closeOtherOpenSwipeable();
+    onCreateFromSettings?.(item);
+  }, [
+    canCreateFromSettings,
+    closeOtherOpenSwipeable,
+    item,
+    onCreateFromSettings,
   ]);
 
   const toggleDoneFromSwipe = useCallback(() => {
@@ -763,12 +818,59 @@ function TodoRowComponent({
   const handleRowLongPressStateChange = useCallback((
     event: LongPressGestureHandlerStateChangeEvent,
   ) => {
+    const createHoldTarget =
+      canCreateFromSettings &&
+      isCheckboxLongPress(event, {
+        grouped: isGroupedLayout,
+        hasPriorityRail: Boolean(priorityRailTheme),
+      });
+
+    if (event.nativeEvent.state === State.BEGAN) {
+      createFromSettingsLongPressActiveRef.current = false;
+      return;
+    }
+
+    if (
+      event.nativeEvent.state === State.END ||
+      event.nativeEvent.state === State.CANCELLED ||
+      event.nativeEvent.state === State.FAILED
+    ) {
+      const shouldOpenCreateFromSettings =
+        createFromSettingsLongPressActiveRef.current &&
+        event.nativeEvent.state === State.END;
+
+      createFromSettingsLongPressActiveRef.current = false;
+      onCreateFromSettingsHoldEnd?.();
+
+      if (shouldOpenCreateFromSettings) {
+        openCreateFromTodoSettings();
+      }
+
+      return;
+    }
+
     if (event.nativeEvent.state !== State.ACTIVE) {
       return;
     }
 
+    if (createHoldTarget) {
+      createFromSettingsLongPressActiveRef.current = true;
+      onCreateFromSettingsHoldStart?.();
+      return;
+    }
+
+    createFromSettingsLongPressActiveRef.current = false;
+    onCreateFromSettingsHoldEnd?.();
     enterSelectMode();
-  }, [enterSelectMode]);
+  }, [
+    canCreateFromSettings,
+    enterSelectMode,
+    isGroupedLayout,
+    onCreateFromSettingsHoldEnd,
+    onCreateFromSettingsHoldStart,
+    openCreateFromTodoSettings,
+    priorityRailTheme,
+  ]);
 
   const handleSwipeableWillOpen = useCallback(
     (direction: 'left' | 'right') => {
@@ -1087,6 +1189,11 @@ function TodoRowComponent({
               ? (isSelected ? 'Deselect todo' : 'Select todo')
               : (isVisuallyDone ? 'Mark todo active' : 'Mark todo done')
           }
+          accessibilityHint={
+            selectMode
+              ? undefined
+              : 'Long press to create a new todo with these settings'
+          }
           activeOpacity={0.72}
           disabled={isPendingDelete}
           onPress={toggleDoneFromCheckbox}
@@ -1324,6 +1431,9 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.metaTagVisibility === next.metaTagVisibility &&
   prev.hiddenMetaTagKinds === next.hiddenMetaTagKinds &&
   prev.onDelete === next.onDelete &&
+  prev.onCreateFromSettings === next.onCreateFromSettings &&
+  prev.onCreateFromSettingsHoldEnd === next.onCreateFromSettingsHoldEnd &&
+  prev.onCreateFromSettingsHoldStart === next.onCreateFromSettingsHoldStart &&
   prev.onOpenDetail === next.onOpenDetail &&
   prev.onOpenMenu === next.onOpenMenu &&
   prev.onSetDone === next.onSetDone &&

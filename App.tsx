@@ -204,9 +204,16 @@ WebBrowser.maybeCompleteAuthSession();
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
 
-type CompletionUndoState = {
+type TodoUndoAction = 'delete' | 'done';
+
+type TodoUndoItem = {
+  action: TodoUndoAction;
+  todo: Todo;
+};
+
+type TodoUndoState = {
   id: number;
-  itemIds: string[];
+  items: TodoUndoItem[];
 };
 
 type VisibleListMenuItem = {
@@ -542,7 +549,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
-const COMPLETION_UNDO_DURATION_MS = 3000;
+const TODO_UNDO_DURATION_MS = 3000;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -1321,6 +1328,7 @@ export default function App() {
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
+  const [createFromSettingsCueVisible, setCreateFromSettingsCueVisible] = useState(false);
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
   );
@@ -1350,7 +1358,7 @@ export default function App() {
   const [recentlyEditedTodoIds, setRecentlyEditedTodoIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [completionUndo, setCompletionUndo] = useState<CompletionUndoState | null>(null);
+  const [todoUndo, setTodoUndo] = useState<TodoUndoState | null>(null);
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
@@ -1454,8 +1462,8 @@ export default function App() {
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
-  const completionUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const completionUndoSequenceRef = useRef(0);
+  const todoUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const todoUndoSequenceRef = useRef(0);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -1821,86 +1829,60 @@ export default function App() {
     startEditedTodoHighlights(targetIds);
   }, [startEditedTodoHighlights]);
 
-  const clearCompletionUndoToast = useCallback(() => {
-    if (completionUndoTimerRef.current) {
-      clearTimeout(completionUndoTimerRef.current);
-      completionUndoTimerRef.current = null;
+  const clearTodoUndoToast = useCallback(() => {
+    if (todoUndoTimerRef.current) {
+      clearTimeout(todoUndoTimerRef.current);
+      todoUndoTimerRef.current = null;
     }
 
-    setCompletionUndo(null);
+    setTodoUndo(null);
   }, []);
 
-  const scheduleCompletionUndoDismiss = useCallback((toastId: number) => {
-    if (completionUndoTimerRef.current) {
-      clearTimeout(completionUndoTimerRef.current);
+  const scheduleTodoUndoDismiss = useCallback((toastId: number) => {
+    if (todoUndoTimerRef.current) {
+      clearTimeout(todoUndoTimerRef.current);
     }
 
-    completionUndoTimerRef.current = setTimeout(() => {
-      completionUndoTimerRef.current = null;
-      setCompletionUndo((current) => (
+    todoUndoTimerRef.current = setTimeout(() => {
+      todoUndoTimerRef.current = null;
+      setTodoUndo((current) => (
         current?.id === toastId ? null : current
       ));
-    }, COMPLETION_UNDO_DURATION_MS);
+    }, TODO_UNDO_DURATION_MS);
   }, []);
 
-  const showCompletionUndoToast = useCallback((id: string) => {
-    const toastId = completionUndoSequenceRef.current + 1;
-    completionUndoSequenceRef.current = toastId;
+  const showTodoUndoToast = useCallback((item: TodoUndoItem) => {
+    const toastId = todoUndoSequenceRef.current + 1;
+    todoUndoSequenceRef.current = toastId;
+    const undoItem = {
+      action: item.action,
+      todo: cloneTodo(item.todo),
+    };
 
-    setCompletionUndo((current) => {
-      const itemIds = current?.itemIds.includes(id)
-        ? current.itemIds
-        : [...(current?.itemIds ?? []), id];
+    setTodoUndo((current) => {
+      const items = [
+        ...(current?.items ?? []).filter((currentItem) => (
+          currentItem.todo.id !== undoItem.todo.id
+        )),
+        undoItem,
+      ];
 
-      return { id: toastId, itemIds };
+      return { id: toastId, items };
     });
-    scheduleCompletionUndoDismiss(toastId);
-  }, [scheduleCompletionUndoDismiss]);
+    scheduleTodoUndoDismiss(toastId);
+  }, [scheduleTodoUndoDismiss]);
 
-  const removeCompletionUndoItem = useCallback((id: string) => {
-    setCompletionUndo((current) => {
-      if (!current?.itemIds.includes(id)) {
+  const removeTodoUndoItem = useCallback((id: string) => {
+    setTodoUndo((current) => {
+      if (!current?.items.some((item) => item.todo.id === id)) {
         return current;
       }
 
-      const itemIds = current.itemIds.filter((itemId) => itemId !== id);
+      const items = current.items.filter((item) => item.todo.id !== id);
 
-      return itemIds.length > 0 ? { ...current, itemIds } : null;
+      return items.length > 0 ? { ...current, items } : null;
     });
   }, []);
-
-  const undoCompletionDone = useCallback(() => {
-    if (!completionUndo?.itemIds.length) {
-      return;
-    }
-
-    const targetIds = new Set(completionUndo.itemIds);
-    const restoredTodos = todosRef.current
-      .filter((todo) => (
-        targetIds.has(todo.id) &&
-        todo.done &&
-        !pendingDeleteIdsRef.current.has(todo.id)
-      ))
-      .map((todo) => ({ ...todo, done: false }));
-
-    if (restoredTodos.length === 0) {
-      clearCompletionUndoToast();
-      return;
-    }
-
-    const restoredById = new Map(restoredTodos.map((todo) => [todo.id, todo]));
-
-    setTodos((current) => current.map((todo) => (
-      restoredById.get(todo.id) ?? todo
-    )));
-    restoredTodos.forEach((todo) => {
-      localTodoStore.updateDone(todo.id, false).catch(() => undefined);
-      syncTodoAlarm(todo).catch(() => undefined);
-    });
-    highlightEditedTodos(restoredById.keys());
-    clearCompletionUndoToast();
-    triggerSubtleHaptic();
-  }, [clearCompletionUndoToast, completionUndo, highlightEditedTodos]);
 
   const flushPendingMenuEditedTodoHighlights = useCallback(() => {
     const targetIds = [...pendingMenuEditedTodoIdsRef.current]
@@ -1932,6 +1914,71 @@ export default function App() {
       return next;
     });
   }, []);
+
+  const undoLastTodoAction = useCallback(() => {
+    if (!todoUndo?.items.length) {
+      return;
+    }
+
+    const currentTodoIds = new Set(todosRef.current.map((todo) => todo.id));
+    const restoredDoneTodos = todoUndo.items
+      .filter((item) => (
+        item.action === 'done' &&
+        currentTodoIds.has(item.todo.id) &&
+        !pendingDeleteIdsRef.current.has(item.todo.id)
+      ))
+      .map((item) => cloneTodo(item.todo));
+    const restoredDeletedTodos = todoUndo.items
+      .filter((item) => (
+        item.action === 'delete' &&
+        !currentTodoIds.has(item.todo.id) &&
+        !pendingDeleteIdsRef.current.has(item.todo.id)
+      ))
+      .map((item) => cloneTodo(item.todo));
+    const restoredTodos = [...restoredDoneTodos, ...restoredDeletedTodos];
+
+    if (restoredTodos.length === 0) {
+      clearTodoUndoToast();
+      return;
+    }
+
+    const restoredDoneById = new Map(restoredDoneTodos.map((todo) => [todo.id, todo]));
+    const restoredDeletedIds = new Set(restoredDeletedTodos.map((todo) => todo.id));
+
+    restoredDoneTodos.forEach((todo) => {
+      clearRepeatingTodoCompletionFeedback(todo.id);
+    });
+
+    setTodos((current) => {
+      const existingIds = new Set(current.map((todo) => todo.id));
+      const deletedTodosToRestore = restoredDeletedTodos.filter((todo) => !existingIds.has(todo.id));
+      const updatedTodos = current.map((todo) => restoredDoneById.get(todo.id) ?? todo);
+
+      return deletedTodosToRestore.length > 0
+        ? [...deletedTodosToRestore, ...updatedTodos]
+        : updatedTodos;
+    });
+
+    if (restoredDeletedIds.size > 0) {
+      setDeletedTodos((current) => current.filter((todo) => !restoredDeletedIds.has(todo.id)));
+      setActiveDeletedTodoDetailId((current) => (
+        current && restoredDeletedIds.has(current) ? null : current
+      ));
+    }
+
+    restoredTodos.forEach((todo) => {
+      localTodoStore.upsert(todo).catch(() => undefined);
+      syncTodoAlarm(todo).catch(() => undefined);
+    });
+    highlightEditedTodos(restoredTodos.map((todo) => todo.id));
+    clearTodoUndoToast();
+    triggerSubtleHaptic();
+  }, [
+    clearRepeatingTodoCompletionFeedback,
+    clearTodoUndoToast,
+    highlightEditedTodos,
+    todoUndo,
+  ]);
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -1989,9 +2036,9 @@ export default function App() {
     () => () => {
       editedTodoHighlightTimersRef.current.forEach(clearTimeout);
       editedTodoHighlightTimersRef.current.clear();
-      if (completionUndoTimerRef.current) {
-        clearTimeout(completionUndoTimerRef.current);
-        completionUndoTimerRef.current = null;
+      if (todoUndoTimerRef.current) {
+        clearTimeout(todoUndoTimerRef.current);
+        todoUndoTimerRef.current = null;
       }
       repeatingTodoCompletionTimersRef.current.forEach(clearTimeout);
       repeatingTodoCompletionTimersRef.current.clear();
@@ -2798,6 +2845,39 @@ export default function App() {
     triggerSubtleHaptic();
   }, [closeListMenu, exitTodoSelectMode, listMenuOpen, resetCreateDrawerState, todoTextMaxLength]);
 
+  const showCreateFromSettingsCue = useCallback(() => {
+    setCreateFromSettingsCueVisible(true);
+  }, []);
+
+  const hideCreateFromSettingsCue = useCallback(() => {
+    setCreateFromSettingsCueVisible(false);
+  }, []);
+
+  const openCreateDrawerFromTodoSettings = useCallback((sourceTodo: Todo) => {
+    if (listMenuOpen) {
+      closeListMenu();
+    }
+
+    const nextFilters = getCreateTodoFilters(listMenuTree, sourceTodo.filters);
+
+    exitTodoSelectMode();
+    searchInputRef.current?.blur();
+    setCreateDrawerPicker(null);
+    setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
+    setCreateDraftContent('');
+    setCreateDraftText('');
+    setCreateDraftPinned(sourceTodo.pinned);
+    setCreateDraftFilters(nextFilters);
+    setDatePickerVisible(false);
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
+    Keyboard.dismiss();
+    hideCreateFromSettingsCue();
+    setCreateDrawerVisible(true);
+    triggerSubtleHaptic();
+  }, [closeListMenu, exitTodoSelectMode, hideCreateFromSettingsCue, listMenuOpen, listMenuTree]);
+
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
@@ -3003,7 +3083,9 @@ export default function App() {
 
     localTodoStore.delete(id).catch(() => undefined);
     cancelTodoAlarm(id).catch(() => undefined);
+    clearRepeatingTodoCompletionFeedback(id);
     clearEditedTodoHighlights([id]);
+    showTodoUndoToast({ action: 'delete', todo: deletedTodo });
     setTodos((current) => current.filter((todo) => todo.id !== id));
     setDeletedTodos((current) => [
       deletedTodo,
@@ -3021,7 +3103,13 @@ export default function App() {
       return next;
     });
     triggerSubtleHaptic();
-  }, [clearEditedTodoHighlights, pendingDeleteIds, todos]);
+  }, [
+    clearEditedTodoHighlights,
+    clearRepeatingTodoCompletionFeedback,
+    pendingDeleteIds,
+    showTodoUndoToast,
+    todos,
+  ]);
 
   const restoreDeletedTodo = useCallback((id: string) => {
     const deletedTodo = deletedTodos.find((todo) => todo.id === id);
@@ -3093,16 +3181,17 @@ export default function App() {
 
     const updatedTodo = todosRef.current.find((todo) => todo.id === id);
     if (!done) {
-      removeCompletionUndoItem(id);
+      removeTodoUndoItem(id);
     }
 
     const repeatedNextTodo = done && updatedTodo
       ? advanceRepeatingTodoAfterDone(updatedTodo)
       : null;
 
-    if (repeatedNextTodo) {
+    if (repeatedNextTodo && updatedTodo) {
       setActiveTodoMenuId((current) => (current === id ? null : current));
       setActiveTodoDetailId((current) => (current === id ? null : current));
+      showTodoUndoToast({ action: 'done', todo: updatedTodo });
       scheduleRepeatingTodoRollForward(id);
       return;
     }
@@ -3127,7 +3216,7 @@ export default function App() {
       }
       syncTodoAlarm(nextTodo).catch(() => undefined);
       if (done && updatedTodo && !updatedTodo.done && nextTodo.done) {
-        showCompletionUndoToast(id);
+        showTodoUndoToast({ action: 'done', todo: updatedTodo });
       }
     } else if (done) {
       cancelTodoAlarm(id).catch(() => undefined);
@@ -3136,9 +3225,9 @@ export default function App() {
     hideDoneTodosForCurrentView,
     highlightEditedTodos,
     pendingDeleteIds,
-    removeCompletionUndoItem,
+    removeTodoUndoItem,
     scheduleRepeatingTodoRollForward,
-    showCompletionUndoToast,
+    showTodoUndoToast,
   ]);
 
   const deleteSelectedTodos = useCallback(() => {
@@ -6656,6 +6745,9 @@ export default function App() {
                     layout="grouped"
                     metaTagVisibility={metaTagVisibility}
                     onDelete={deleteTodo}
+                    onCreateFromSettings={openCreateDrawerFromTodoSettings}
+                    onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
+                    onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
                     onEnterSelectMode={enterTodoSelectMode}
                     onOpenDetail={openTodoDetailModal}
                     onOpenMenu={openMenuForTodoAction}
@@ -6705,6 +6797,9 @@ export default function App() {
             isPendingDelete={isPendingDelete}
             metaTagVisibility={metaTagVisibility}
             onDelete={deleteTodo}
+            onCreateFromSettings={openCreateDrawerFromTodoSettings}
+            onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
+            onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
             onEnterSelectMode={enterTodoSelectMode}
             onOpenDetail={openTodoDetailModal}
             onOpenMenu={openMenuForTodoAction}
@@ -6727,9 +6822,11 @@ export default function App() {
       deferredFilterColors,
       enterTodoSelectMode,
       groupedHiddenMetaTagKinds,
+      hideCreateFromSettingsCue,
       metaTagVisibility,
       markTodoRowTouchStart,
       newlyCreatedTodoHighlightId,
+      openCreateDrawerFromTodoSettings,
       openTodoDetailModal,
       openMenuForTodoAction,
       pendingDeleteIds,
@@ -6740,6 +6837,7 @@ export default function App() {
       setTodoDone,
       searchQuery,
       showOverdueMetaTags,
+      showCreateFromSettingsCue,
       toggleTodoGroupCollapsed,
       toggleTodoSelection,
       todoSelectMode,
@@ -6810,25 +6908,32 @@ export default function App() {
               </Pressable>
             </View>
           ) : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityHint="Opens settings"
-              accessibilityLabel="Settings"
-              accessibilityState={{ selected: navTab === 'settings' }}
-              onPress={() => handleNavTabPress('settings')}
-              style={({ pressed }) => [
-                styles.appHeaderSideButton,
-                styles.appHeaderSideButtonRight,
-                navTab === 'settings' && styles.appHeaderSettingsButtonActive,
-                pressed && styles.appHeaderSideButtonPressed,
-              ]}
-            >
-              <Ionicons
-                color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-                name="cog-outline"
-                size={23}
-              />
-            </Pressable>
+            <>
+              {createFromSettingsCueVisible ? (
+                <View pointerEvents="none" style={styles.appHeaderCreateFromSettingsCue}>
+                  <Ionicons color={THEME_CARD} name="add" size={19} />
+                </View>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityHint="Opens settings"
+                accessibilityLabel="Settings"
+                accessibilityState={{ selected: navTab === 'settings' }}
+                onPress={() => handleNavTabPress('settings')}
+                style={({ pressed }) => [
+                  styles.appHeaderSideButton,
+                  styles.appHeaderSideButtonRight,
+                  navTab === 'settings' && styles.appHeaderSettingsButtonActive,
+                  pressed && styles.appHeaderSideButtonPressed,
+                ]}
+              >
+                <Ionicons
+                  color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+                  name="cog-outline"
+                  size={23}
+                />
+              </Pressable>
+            </>
           )}
         </View>
 
@@ -7012,19 +7117,19 @@ export default function App() {
 
         </View>
 
-        {completionUndo ? (
-          <View pointerEvents="box-none" style={styles.completionUndoToastLayer}>
+        {todoUndo ? (
+          <View pointerEvents="box-none" style={styles.todoUndoToastLayer}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Undo mark done"
-              onPress={undoCompletionDone}
+              accessibilityLabel="Undo last todo action"
+              onPress={undoLastTodoAction}
               style={({ pressed }) => [
-                styles.completionUndoButton,
-                pressed && styles.completionUndoButtonPressed,
+                styles.todoUndoButton,
+                pressed && styles.todoUndoButtonPressed,
               ]}
             >
               <Ionicons color="#FFFFFF" name="arrow-undo" size={18} />
-              <Text style={styles.completionUndoButtonText}>Undo</Text>
+              <Text style={styles.todoUndoButtonText}>Undo</Text>
             </Pressable>
           </View>
         ) : null}
@@ -10671,6 +10776,25 @@ const styles = StyleSheet.create({
   appHeaderSideButtonRight: {
     right: HORIZONTAL_PADDING,
   },
+  appHeaderCreateFromSettingsCue: {
+    alignItems: 'center',
+    backgroundColor: NAV_ACCENT,
+    borderColor: THEME_CARD,
+    borderRadius: 18,
+    borderWidth: 2,
+    elevation: 3,
+    height: 36,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: HORIZONTAL_PADDING + 42,
+    shadowColor: NAV_ACCENT,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+    width: 36,
+    zIndex: 3,
+  },
   appHeaderSideButtonPressed: {
     opacity: 0.72,
   },
@@ -10695,7 +10819,7 @@ const styles = StyleSheet.create({
   navSearchIcon: {
     marginRight: 8,
   },
-  completionUndoToastLayer: {
+  todoUndoToastLayer: {
     alignItems: 'center',
     bottom: BOTTOM_NAV_RESERVED_HEIGHT + 10,
     left: 0,
@@ -10704,7 +10828,7 @@ const styles = StyleSheet.create({
     zIndex: 17,
     elevation: 6,
   },
-  completionUndoButton: {
+  todoUndoButton: {
     alignItems: 'center',
     backgroundColor: NAV_ACCENT,
     borderRadius: 14,
@@ -10720,11 +10844,11 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 6,
   },
-  completionUndoButtonPressed: {
+  todoUndoButtonPressed: {
     opacity: 0.82,
     transform: [{ scale: 0.99 }],
   },
-  completionUndoButtonText: {
+  todoUndoButtonText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: FONT_SEMIBOLD,

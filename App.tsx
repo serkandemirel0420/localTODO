@@ -1324,6 +1324,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [searchResultIds, setSearchResultIds] = useState<string[] | null>(null);
+  const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
@@ -1529,6 +1530,15 @@ export default function App() {
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const getInstantPressHandlers = useInstantPress();
+
+  const clearNotificationTodoReveal = useCallback(() => {
+    setNotificationTodoRevealId(null);
+  }, []);
+
+  const handleSearchQueryChange = useCallback((nextQuery: string) => {
+    clearNotificationTodoReveal();
+    setQuery(nextQuery);
+  }, [clearNotificationTodoReveal]);
 
   useEffect(() => {
     let alive = true;
@@ -2592,7 +2602,9 @@ export default function App() {
     setDatePickerVisible(false);
     setPresetSaveModalVisible(false);
     setPresetSaveName('');
+    setNotificationTodoRevealId(id);
     setQuery('');
+    setSearchResultIds(null);
     reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
@@ -2793,6 +2805,13 @@ export default function App() {
   }, [searchQuery]);
 
   const filteredTodos = useMemo(() => {
+    if (notificationTodoRevealId) {
+      const notificationTodo = todosById.get(notificationTodoRevealId);
+      return notificationTodo && !pendingDeleteIds.has(notificationTodoRevealId)
+        ? [notificationTodo]
+        : [];
+    }
+
     const matchedTodos = searchQuery
       ? (searchResultIds ?? [])
         .map((id) => todosById.get(id))
@@ -2811,6 +2830,8 @@ export default function App() {
   }, [
     hideDoneTodosForCurrentView,
     listMenuTree,
+    notificationTodoRevealId,
+    pendingDeleteIds,
     searchQuery,
     searchResultIds,
     selectedFilters,
@@ -2951,6 +2972,7 @@ export default function App() {
     if (!filtersEqual(selectedFilters, nextSelectedFilters)) {
       setSelectedFilters(nextSelectedFilters);
     }
+    clearNotificationTodoReveal();
     if (query.trim()) {
       setQuery('');
       setSearchResultIds(null);
@@ -2969,6 +2991,7 @@ export default function App() {
     createDraftFilters,
     createDraftPinned,
     createDraftText,
+    clearNotificationTodoReveal,
     highlightNewlyCreatedTodo,
     listMenuTree,
     query,
@@ -3386,8 +3409,9 @@ export default function App() {
       return;
     }
 
+    clearNotificationTodoReveal();
     setSelectedFilters((current) => updater(cloneTodoFilters(current)));
-  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+  }, [clearNotificationTodoReveal, getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const closeDatePicker = useCallback(() => {
     setDatePickerVisible(false);
@@ -4800,12 +4824,13 @@ export default function App() {
   ]);
 
   const toggleRepeatingItemsFilter = useCallback(() => {
+    clearNotificationTodoReveal();
     setSelectedFilters((current) => ({
       ...current,
       reminder: toggleRepeatingItemsFilterValue(current.reminder),
     }));
     triggerSubtleHaptic();
-  }, []);
+  }, [clearNotificationTodoReveal]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
     if (label === REPEATING_ITEMS_FILTER_VALUE) {
@@ -4940,6 +4965,7 @@ export default function App() {
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters());
     } else {
+      clearNotificationTodoReveal();
       setSelectedFilters(cloneTodoFilters());
       setTodoSortMode('newest');
       setTodoGroupMode('none');
@@ -4955,6 +4981,7 @@ export default function App() {
     triggerSubtleHaptic();
   }, [
     closeListMenuState,
+    clearNotificationTodoReveal,
     hasTodoEditTargets,
     updateCurrentTodoTargetFilters,
   ]);
@@ -5005,6 +5032,7 @@ export default function App() {
   }, []);
 
   const selectTodoSortMode = useCallback((sortMode: TodoSortMode) => {
+    clearNotificationTodoReveal();
     const display = resolveListDisplaySettings(
       listMenuTree,
       selectedFilters.list,
@@ -5024,7 +5052,13 @@ export default function App() {
     }
 
     triggerSubtleHaptic();
-  }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
+  }, [
+    clearNotificationTodoReveal,
+    listMenuTree,
+    selectedFilters.list,
+    todoGroupMode,
+    todoSortMode,
+  ]);
 
   const toggleTodoGroupCollapsed = useCallback((groupId: string) => {
     triggerSubtleHaptic();
@@ -5050,9 +5084,10 @@ export default function App() {
   }, []);
 
   const toggleHideDoneTodos = useCallback(() => {
+    clearNotificationTodoReveal();
     setHideDoneTodos((current) => !current);
     triggerSubtleHaptic();
-  }, []);
+  }, [clearNotificationTodoReveal]);
 
   const toggleDateLabelDisplayMode = useCallback(() => {
     setDateLabelDisplayMode((current) => (
@@ -5073,6 +5108,7 @@ export default function App() {
   );
 
   const selectTodoGroupMode = useCallback((groupMode: TodoGroupMode) => {
+    clearNotificationTodoReveal();
     const display = resolveListDisplaySettings(
       listMenuTree,
       selectedFilters.list,
@@ -5092,7 +5128,13 @@ export default function App() {
     }
 
     triggerSubtleHaptic();
-  }, [listMenuTree, selectedFilters.list, todoGroupMode, todoSortMode]);
+  }, [
+    clearNotificationTodoReveal,
+    listMenuTree,
+    selectedFilters.list,
+    todoGroupMode,
+    todoSortMode,
+  ]);
 
   const clearMenuSection = useCallback((section: MenuMode) => {
     const filterKey = MENU_SECTION_FILTER_KEYS[section];
@@ -5129,6 +5171,7 @@ export default function App() {
     }
 
     if (section === 'sort') {
+      clearNotificationTodoReveal();
       const display = resolveListDisplaySettings(
         listMenuTree,
         selectedFilters.list,
@@ -5152,6 +5195,7 @@ export default function App() {
     }
 
     if (section === 'group') {
+      clearNotificationTodoReveal();
       const display = resolveListDisplaySettings(
         listMenuTree,
         selectedFilters.list,
@@ -5181,6 +5225,7 @@ export default function App() {
   }, [
     clearAppliedMenuPreset,
     clearFilters,
+    clearNotificationTodoReveal,
     includeActiveTodoReminderRows,
     listMenuTree,
     selectedFilters.list,
@@ -5251,6 +5296,7 @@ export default function App() {
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
     } else {
+      clearNotificationTodoReveal();
       setSelectedFilters((current) => (
         filtersEqual(current, nextFilters) ? current : nextFilters
       ));
@@ -5270,6 +5316,7 @@ export default function App() {
     }
   }, [
     closeListMenuState,
+    clearNotificationTodoReveal,
     hasTodoEditTargets,
     updateCurrentTodoTargetFilters,
   ]);
@@ -5761,6 +5808,7 @@ export default function App() {
   }, [activeListDisplay.listLabel, menuMode, selectedFilters.list, selectedTodoCount, todoSelectMode]);
 
   const focusHeaderSearch = useCallback(() => {
+    clearNotificationTodoReveal();
     setNavTab('search');
     closeListMenuState();
     alignTodoListForSearchFocus();
@@ -5768,7 +5816,7 @@ export default function App() {
       searchInputRef.current?.focus();
     });
     triggerSubtleHaptic();
-  }, [alignTodoListForSearchFocus, closeListMenuState]);
+  }, [alignTodoListForSearchFocus, clearNotificationTodoReveal, closeListMenuState]);
 
   const closeHeaderSearch = useCallback(() => {
     Keyboard.dismiss();
@@ -5785,12 +5833,13 @@ export default function App() {
     setSettingsModalVisible(false);
     setFilterConfigModalVisible(false);
     setNavTab(null);
+    clearNotificationTodoReveal();
     setQuery('');
 
     if (options.haptic ?? true) {
       triggerSubtleHaptic();
     }
-  }, [closeListMenuState, exitTodoSelectMode]);
+  }, [clearNotificationTodoReveal, closeListMenuState, exitTodoSelectMode]);
 
   const handleNavTabPress = useCallback((tab: NavTab) => {
     if (tab !== 'calendar') {
@@ -5900,6 +5949,7 @@ export default function App() {
 
     if (!todoSelectMode && sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
       lastFilterNavTapRef.current = 0;
+      clearNotificationTodoReveal();
       setSelectedFilters(cloneTodoFilters());
       setTodoSortMode('newest');
       setTodoGroupMode('none');
@@ -5912,7 +5962,7 @@ export default function App() {
 
     lastFilterNavTapRef.current = timestamp;
     handleNavTabPress('calendar');
-  }, [handleNavTabPress, todoSelectMode]);
+  }, [clearNotificationTodoReveal, handleNavTabPress, todoSelectMode]);
 
   useEffect(() => {
     if (!listMenuOpen && navTab === 'menu') {
@@ -6203,6 +6253,7 @@ export default function App() {
     await localTodoStore.replaceAll(backup.payload.todos);
     setTodos(backup.payload.todos);
     reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
+    clearNotificationTodoReveal();
     setDeletedTodos(backup.payload.settings.deletedTodos);
     setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
     setFilterConfigUiState(cloneFilterConfigUiState(backup.payload.settings.filterConfigUiState));
@@ -6245,7 +6296,7 @@ export default function App() {
       `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
     );
     triggerSubtleHaptic();
-  }, []);
+  }, [clearNotificationTodoReveal]);
 
   const runGoogleDriveAction = useCallback(async (
     action: GoogleDriveAction,
@@ -7033,7 +7084,7 @@ export default function App() {
                           onBlur={() => {
                             setNavTab((current) => (current === 'search' ? null : current));
                           }}
-                          onChangeText={setQuery}
+                          onChangeText={handleSearchQueryChange}
                           onFocus={() => {
                             if (suppressHeaderSearchFocusRef.current) {
                               suppressHeaderSearchFocusRef.current = false;
@@ -7051,6 +7102,7 @@ export default function App() {
                               return;
                             }
 
+                            clearNotificationTodoReveal();
                             setNavTab('search');
                             alignTodoListForSearchFocus();
                           }}

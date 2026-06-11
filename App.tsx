@@ -41,6 +41,7 @@ import {
   FlatList as GestureFlatList,
   GestureHandlerRootView,
   PanGestureHandler,
+  ScrollView as GestureScrollView,
   State,
   Swipeable,
   TouchableOpacity as GHTouchableOpacity,
@@ -106,6 +107,11 @@ import {
   type StoredGoogleAuth,
 } from './src/google/googleAuthStore';
 import { isDevAppVariant } from './src/appVariant';
+import {
+  createDevTestTodos,
+  DEV_TEST_TODO_COUNT,
+  isDevTestTodo,
+} from './src/dev/seedTestTodos';
 import {
   cloneFilterColors,
   FILTER_COLOR_SWATCHES,
@@ -718,7 +724,11 @@ const getAppTodoListItemKey = (item: AppTodoListRow) => {
     return `search-list:${item.node.label}:${collapseState}:${item.count}:${item.matchesQuery ? 1 : 0}`;
   }
 
-  if (item.type === 'searchPresetTodo' || item.type === 'searchListTodo') {
+  if (
+    item.type === 'searchPresetTodo' ||
+    item.type === 'searchListTodo' ||
+    item.type === 'searchItemTodo'
+  ) {
     return item.id;
   }
 
@@ -740,6 +750,10 @@ const getAppTodoListItemType = (item: AppTodoListRow) => {
 
   if (item.type === 'searchListTodo') {
     return 'searchListTodo';
+  }
+
+  if (item.type === 'searchItemTodo') {
+    return 'searchItemTodo';
   }
 
   return getTodoListItemType(item);
@@ -834,7 +848,19 @@ const buildSearchListMenuRows = (
   return rows;
 };
 
+const buildItemSearchRows = (todos: Todo[]): SearchItemTodoRow[] =>
+  todos.map((todo, index) => ({
+    type: 'searchItemTodo',
+    gapBefore: index > 0,
+    id: `search-item:${todo.id}`,
+    isFirst: index === 0,
+    isLast: index === todos.length - 1,
+    todo,
+  }));
+
 const PRESET_SWIPE_DELETE_WIDTH = 72;
+const SETTINGS_LIST_ROW_HEIGHT = 54;
+const SETTINGS_LIST_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
   list: 'List',
   date: 'Date',
@@ -847,6 +873,8 @@ type SearchFilterItem = {
   id: string;
   value: string;
 };
+
+type SearchMode = 'preset' | 'item';
 
 type SearchPresetItem = {
   count: number;
@@ -906,12 +934,22 @@ type SearchListTodoRow = {
   type: 'searchListTodo';
 };
 
+type SearchItemTodoRow = {
+  gapBefore: boolean;
+  id: string;
+  isFirst: boolean;
+  isLast: boolean;
+  todo: Todo;
+  type: 'searchItemTodo';
+};
+
 type AppTodoListRow =
   | VisibleTodoListRow
   | SearchPresetHeaderRow
   | SearchPresetTodoRow
   | SearchListHeaderRow
-  | SearchListTodoRow;
+  | SearchListTodoRow
+  | SearchItemTodoRow;
 
 const PRESET_SEARCH_NO_MATCH_SCORE = Number.POSITIVE_INFINITY;
 
@@ -1033,10 +1071,10 @@ const getSearchTextScore = (
 };
 
 const getPresetSearchScore = (preset: MenuPreset, query: string) =>
-  getSearchTextScore(preset.label, preset.searchKeywords, query);
+  getSearchTextScore('', preset.searchKeywords, query);
 
 const getListMenuSearchScore = (node: ListMenuNode, query: string) =>
-  getSearchTextScore(node.label, node.searchKeywords, query);
+  getSearchTextScore('', node.searchKeywords, query);
 
 const buildActiveFilterItems = (
   filters: SelectedFilters,
@@ -1380,33 +1418,16 @@ const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
 
 const resolveQuickPresetNavSlotIconName = (
   slotIndex: number,
-  preset: MenuPreset | null,
   listMenuTree: ListMenuNode[],
-  orderedListMenuTree: ListMenuNode[],
-  quickPresetNavUsesAutomaticSlots: boolean,
-  quickPresetNavIconNames: string[],
+  quickPresetNavIconName?: string,
 ): string => {
-  const listFromPreset = preset?.filters.list.length === 1
-    ? findListMenuNode(listMenuTree, preset.filters.list[0])
-    : null;
+  const listAtSettingsIndex = listMenuTree[slotIndex];
 
-  if (listFromPreset?.iconName) {
-    return listFromPreset.iconName;
+  if (listAtSettingsIndex?.iconName) {
+    return listAtSettingsIndex.iconName;
   }
 
-  const listAtIndex = orderedListMenuTree[slotIndex];
-
-  if (listAtIndex?.iconName) {
-    return listAtIndex.iconName;
-  }
-
-  if (quickPresetNavUsesAutomaticSlots) {
-    return DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[slotIndex]
-      ?? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[0]
-      ?? 'star-four-points';
-  }
-
-  return quickPresetNavIconNames[slotIndex]
+  return quickPresetNavIconName
     ?? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
       slotIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
     ]
@@ -1712,6 +1733,380 @@ function MenuPresetSwipeRow({
 
 const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
 
+type SettingsListSwipeRowProps = {
+  isIconPickerOpen: boolean;
+  label: string;
+  listIconName?: string;
+  onDelete: () => void;
+  onIconPress: () => void;
+  onMainPress: () => void;
+  onPinPress: () => void;
+  showInNavbar: boolean;
+};
+
+function SettingsListSwipeRow({
+  isIconPickerOpen,
+  label,
+  listIconName,
+  onDelete,
+  onIconPress,
+  onMainPress,
+  onPinPress,
+  showInNavbar,
+}: SettingsListSwipeRowProps) {
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.settingsListSwipeActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${label}`}
+          activeOpacity={0.82}
+          onPress={onDelete}
+          style={styles.settingsListSwipeDelete}
+        >
+          <Ionicons color="#FFFFFF" name="trash-outline" size={22} />
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [label, onDelete],
+  );
+
+  return (
+    <View style={styles.settingsListSwipeShell}>
+      <Swipeable
+        childrenContainerStyle={styles.settingsListSwipeChildren}
+        containerStyle={styles.settingsListSwipeContainer}
+        friction={1.1}
+        overshootRight={false}
+        renderRightActions={renderRightActions}
+        rightThreshold={SETTINGS_LIST_SWIPE_DELETE_WIDTH}
+      >
+        <View
+          style={styles.settingsListRow}
+        >
+          <View style={styles.settingsListRowContent}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: isIconPickerOpen }}
+              accessibilityLabel={`Choose icon for ${label}`}
+              onPress={onIconPress}
+              style={({ pressed }) => [
+                styles.settingsListIconButton,
+                isIconPickerOpen && styles.settingsListIconButtonActive,
+                pressed && styles.settingsOptionRowPressed,
+              ]}
+            >
+              <MaterialCommunityIcons
+                color={listIconName ? THEME_ACCENT : '#8F877F'}
+                name={
+                  listIconName
+                    ? toMaterialCommunityIconName(listIconName)
+                    : 'paw'
+                }
+                size={17}
+              />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityHint="Tap to edit search keywords."
+              accessibilityLabel={label}
+              onPress={onMainPress}
+              style={({ pressed }) => [
+                styles.settingsListMainPress,
+                pressed && styles.settingsListRowPressed,
+              ]}
+            >
+              <Text
+                numberOfLines={1}
+                style={styles.settingsListTitle}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          </View>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: showInNavbar }}
+            accessibilityLabel={
+              showInNavbar
+                ? `Unpin ${label} from navbar`
+                : `Pin ${label} to navbar`
+            }
+            onPress={onPinPress}
+            style={({ pressed }) => [
+              styles.settingsListPinButton,
+              showInNavbar && styles.settingsListPinButtonActive,
+              pressed && styles.settingsOptionRowPressed,
+            ]}
+          >
+            <Ionicons
+              color={showInNavbar ? THEME_ACCENT : '#8F877F'}
+              name={showInNavbar ? 'pin' : 'pin-outline'}
+              size={18}
+            />
+          </Pressable>
+        </View>
+      </Swipeable>
+    </View>
+  );
+}
+
+const MemoizedSettingsListSwipeRow = React.memo(SettingsListSwipeRow);
+
+type SettingsListReorderRowProps = {
+  canReorder: boolean;
+  iconPickerIndex: number | null;
+  index: number;
+  isReorderHighlighted: boolean;
+  item: ListMenuNode;
+  onDelete: () => void;
+  onIconPickerChange: (index: number | null) => void;
+  onMainPress: () => void;
+  onPinPress: () => void;
+  onReorderHandlePress: (index: number) => void;
+  onSetIcon: (index: number, iconName: string | null) => void;
+};
+
+function SettingsListReorderRow({
+  canReorder,
+  iconPickerIndex,
+  index,
+  isReorderHighlighted,
+  item,
+  onDelete,
+  onIconPickerChange,
+  onMainPress,
+  onPinPress,
+  onReorderHandlePress,
+  onSetIcon,
+}: SettingsListReorderRowProps) {
+  const listIconName = item.iconName;
+  const showInNavbar = item.showInNavbar !== false;
+  const isIconPickerOpen = iconPickerIndex === index;
+
+  return (
+    <View
+      style={[
+        styles.settingsListGroup,
+        isReorderHighlighted && styles.settingsListGroupReorderSelected,
+      ]}
+    >
+      <View style={styles.settingsListRowSlot}>
+        <View style={styles.settingsListRowWrap}>
+          {canReorder ? (
+            <Pressable
+              accessibilityHint="Tap another list handle to swap positions."
+              accessibilityLabel={`Reorder ${item.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isReorderHighlighted }}
+              onPress={() => onReorderHandlePress(index)}
+              style={({ pressed }) => [
+                styles.settingsListDragHandle,
+                isReorderHighlighted && styles.settingsListDragHandleSelected,
+                pressed && styles.settingsOptionRowPressed,
+              ]}
+            >
+              <Ionicons
+                color={isReorderHighlighted ? THEME_ACCENT : '#8F877F'}
+                name="reorder-three"
+                size={22}
+              />
+            </Pressable>
+          ) : null}
+          <View style={styles.settingsListSwipeWrap}>
+            <MemoizedSettingsListSwipeRow
+              isIconPickerOpen={isIconPickerOpen}
+              label={item.label}
+              listIconName={listIconName}
+              onDelete={onDelete}
+              onIconPress={() => {
+                onIconPickerChange(isIconPickerOpen ? null : index);
+                triggerSubtleHaptic();
+              }}
+              onMainPress={onMainPress}
+              onPinPress={onPinPress}
+              showInNavbar={showInNavbar}
+            />
+          </View>
+        </View>
+      </View>
+      {isIconPickerOpen ? (
+        <ScrollView
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          style={styles.settingsListIconChoicesScroll}
+          contentContainerStyle={styles.settingsListIconChoices}
+        >
+          <View style={styles.settingsListIconGroupGrid}>
+            <Pressable
+              accessibilityLabel={`Remove icon from ${item.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: !listIconName }}
+              onPress={() => onSetIcon(index, null)}
+              style={({ pressed }) => [
+                styles.settingsListIconChoiceButton,
+                !listIconName && styles.settingsListIconChoiceButtonSelected,
+                pressed && styles.settingsOptionRowPressed,
+              ]}
+            >
+              <View style={styles.settingsListIconChoiceEmpty} />
+            </Pressable>
+          </View>
+          {LIST_ICON_GROUPS.map((group) => (
+            <View
+              key={`${item.label}-${group.title}`}
+              style={styles.settingsListIconGroup}
+            >
+              <Text style={styles.settingsListIconGroupTitle}>
+                {group.title}
+              </Text>
+              <View style={styles.settingsListIconGroupGrid}>
+                {group.icons.map((iconName) => {
+                  const selected = listIconName === iconName;
+
+                  return (
+                    <Pressable
+                      accessibilityLabel={`Use ${iconName} icon for ${item.label}`}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      key={`${item.label}-${group.title}-${iconName}`}
+                      onPress={() => onSetIcon(index, iconName)}
+                      style={({ pressed }) => [
+                        styles.settingsListIconChoiceButton,
+                        selected && styles.settingsListIconChoiceButtonSelected,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        color={selected ? THEME_ACCENT : '#8F877F'}
+                        name={iconName}
+                        size={18}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      ) : null}
+    </View>
+  );
+}
+
+const MemoizedSettingsListReorderRow = React.memo(SettingsListReorderRow);
+
+const SETTINGS_LIST_SWAP_FLASH_MS = 320;
+
+type SettingsListEditorProps = {
+  iconPickerIndex: number | null;
+  items: ListMenuNode[];
+  onDelete: (index: number) => void;
+  onIconPickerChange: (index: number | null) => void;
+  onMainPress: (index: number) => void;
+  onPinPress: (index: number) => void;
+  onSetIcon: (index: number, iconName: string | null) => void;
+  onSwap: (fromIndex: number, toIndex: number) => void;
+  reorderCancelNonce: number;
+};
+
+function SettingsListEditor({
+  iconPickerIndex,
+  items,
+  onDelete,
+  onIconPickerChange,
+  onMainPress,
+  onPinPress,
+  onSetIcon,
+  onSwap,
+  reorderCancelNonce,
+}: SettingsListEditorProps) {
+  const swapFlashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedReorderIndex, setSelectedReorderIndex] = useState<number | null>(null);
+  const [swapFlashIndices, setSwapFlashIndices] = useState<number[]>([]);
+
+  const clearSwapFlash = useCallback(() => {
+    if (swapFlashTimeoutRef.current) {
+      clearTimeout(swapFlashTimeoutRef.current);
+      swapFlashTimeoutRef.current = null;
+    }
+    setSwapFlashIndices([]);
+  }, []);
+
+  const resetReorderSelection = useCallback(() => {
+    clearSwapFlash();
+    setSelectedReorderIndex(null);
+  }, [clearSwapFlash]);
+
+  useEffect(() => {
+    resetReorderSelection();
+  }, [reorderCancelNonce, resetReorderSelection]);
+
+  useEffect(() => () => {
+    if (swapFlashTimeoutRef.current) {
+      clearTimeout(swapFlashTimeoutRef.current);
+    }
+  }, []);
+
+  const handleReorderHandlePress = useCallback((index: number) => {
+    onIconPickerChange(null);
+
+    if (selectedReorderIndex === null) {
+      setSelectedReorderIndex(index);
+      triggerSubtleHaptic();
+      return;
+    }
+
+    if (selectedReorderIndex === index) {
+      resetReorderSelection();
+      return;
+    }
+
+    const fromIndex = selectedReorderIndex;
+    const toIndex = index;
+    setSelectedReorderIndex(null);
+    setSwapFlashIndices([fromIndex, toIndex]);
+    onSwap(fromIndex, toIndex);
+    triggerSubtleHaptic();
+
+    if (swapFlashTimeoutRef.current) {
+      clearTimeout(swapFlashTimeoutRef.current);
+    }
+    swapFlashTimeoutRef.current = setTimeout(() => {
+      swapFlashTimeoutRef.current = null;
+      setSwapFlashIndices([]);
+    }, SETTINGS_LIST_SWAP_FLASH_MS);
+  }, [onIconPickerChange, onSwap, resetReorderSelection, selectedReorderIndex]);
+
+  const canReorder = items.length > 1;
+
+  return (
+    <View style={styles.settingsListEditor}>
+      {items.map((item, index) => (
+        <MemoizedSettingsListReorderRow
+          key={item.label}
+          canReorder={canReorder}
+          iconPickerIndex={iconPickerIndex}
+          index={index}
+          isReorderHighlighted={
+            selectedReorderIndex === index
+            || swapFlashIndices.includes(index)
+          }
+          item={item}
+          onDelete={() => onDelete(index)}
+          onIconPickerChange={onIconPickerChange}
+          onMainPress={() => onMainPress(index)}
+          onPinPress={() => onPinPress(index)}
+          onReorderHandlePress={handleReorderHandlePress}
+          onSetIcon={onSetIcon}
+        />
+      ))}
+    </View>
+  );
+}
+
+const MemoizedSettingsListEditor = React.memo(SettingsListEditor);
+
 type SettingsColorItem = {
   displayLabel?: string;
   filterKey: FilterColorSettingKey;
@@ -1862,7 +2257,11 @@ export default function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
-  const [searchResultIds, setSearchResultIds] = useState<string[] | null>(null);
+  const [searchMode, setSearchMode] = useState<SearchMode>('preset');
+  const [itemSearchState, setItemSearchState] = useState<{
+    ids: string[];
+    query: string;
+  } | null>(null);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
@@ -1932,7 +2331,6 @@ export default function App() {
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
   const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
-  const [settingsNavbarPresetsExpanded, setSettingsNavbarPresetsExpanded] = useState(false);
   const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
@@ -1952,6 +2350,7 @@ export default function App() {
   const [googleDriveLastRestoreAt, setGoogleDriveLastRestoreAt] = useState<string | null>(null);
   const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
   const [listOrderMode, setListOrderMode] = useState<ListOrderMode>('alphabetical');
+  const listMenuTreeRef = useRef<ListMenuNode[]>([]);
   const [listMenuTree, setListMenuTree] = useState<ListMenuNode[]>(
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
@@ -1980,12 +2379,9 @@ export default function App() {
     () => cloneMetaTagVisibility(),
   );
   const [newListName, setNewListName] = useState('');
-  const [settingsListReorderIndex, setSettingsListReorderIndex] = useState<number | null>(null);
+  const [settingsListReorderCancelNonce, setSettingsListReorderCancelNonce] = useState(0);
   const [settingsListIconPickerIndex, setSettingsListIconPickerIndex] = useState<number | null>(
     null,
-  );
-  const [recentlyMovedListLabels, setRecentlyMovedListLabels] = useState<Set<string>>(
-    () => new Set(),
   );
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
@@ -2016,9 +2412,6 @@ export default function App() {
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const movedListHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
@@ -2037,6 +2430,7 @@ export default function App() {
   const autoBackupFailedStateKeyRef = useRef<string | null>(null);
   const autoBackupStateKeyRef = useRef<string | null>(null);
   todosRef.current = todos;
+  listMenuTreeRef.current = listMenuTree;
   filterColorsRef.current = filterColors;
   loadedRef.current = loaded;
   pendingDeleteIdsRef.current = pendingDeleteIds;
@@ -2046,6 +2440,7 @@ export default function App() {
   const menuDismissHapticRef = useRef(0);
   const didApplyTodoListInitialOffsetRef = useRef(false);
   const hadTodoListRowsRef = useRef(false);
+  const devTestTodosSeededRef = useRef(false);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const todoRowTouchStartRef = useRef({
     pageX: 0,
@@ -2062,6 +2457,13 @@ export default function App() {
   const quickPresetNavPressInRef = useRef<string | null>(null);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
   const savedSearchScrollOffsetRef = useRef<number | null>(null);
+  const searchScrollOffsetsByModeRef = useRef<Record<SearchMode, number | null>>({
+    item: null,
+    preset: null,
+  });
+  const itemSearchResultsCacheRef = useRef(new Map<string, string[]>());
+  const previousSearchModeRef = useRef<SearchMode>('preset');
+  const skipNextTodoListOffsetEffectRef = useRef(false);
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
   const todoSelectMode = selectedTodoIds.size > 0;
@@ -2106,6 +2508,34 @@ export default function App() {
     clearNotificationTodoReveal();
     setQuery(nextQuery);
   }, [clearNotificationTodoReveal]);
+
+  const handleSearchModeChange = useCallback((nextMode: SearchMode) => {
+    if (nextMode === searchMode) {
+      return;
+    }
+
+    clearNotificationTodoReveal();
+
+    if (navTab === 'search') {
+      searchScrollOffsetsByModeRef.current[searchMode] = actualScrollOffsetY.current;
+      skipNextTodoListOffsetEffectRef.current = true;
+    }
+
+    if (nextMode === 'item') {
+      const trimmedQuery = query.trim();
+
+      if (trimmedQuery) {
+        const cachedIds = itemSearchResultsCacheRef.current.get(trimmedQuery);
+
+        if (cachedIds) {
+          setItemSearchState({ ids: cachedIds, query: trimmedQuery });
+        }
+      }
+    }
+
+    setSearchMode(nextMode);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, navTab, query, searchMode]);
 
   useEffect(() => {
     let alive = true;
@@ -2303,6 +2733,30 @@ export default function App() {
     settingsLoaded,
     todos,
   ]);
+
+  const devTestTodoCount = useMemo(
+    () => todos.filter(isDevTestTodo).length,
+    [todos],
+  );
+
+  useEffect(() => {
+    if (!isDevAppVariant || !loaded || !settingsLoaded || devTestTodosSeededRef.current) {
+      return;
+    }
+
+    devTestTodosSeededRef.current = true;
+
+    setTodos((current) => {
+      if (current.length > 0 || current.some(isDevTestTodo)) {
+        return current;
+      }
+
+      const testTodos = createDevTestTodos(collectListNodeLabels(listMenuTree));
+      localTodoStore.upsertMany(testTodos).catch(() => undefined);
+      reconcileTodoAlarms(testTodos).catch(() => undefined);
+      return testTodos;
+    });
+  }, [listMenuTree, loaded, settingsLoaded]);
 
   const clearTodoMenuHighlightRequest = useCallback(() => {
     if (todoMenuHighlightTimerRef.current) {
@@ -3194,7 +3648,7 @@ export default function App() {
     setSearchKeywordDraft('');
     setNotificationTodoRevealId(id);
     setQuery('');
-    setSearchResultIds(null);
+    setItemSearchState(null);
     reminderTimeModalRef.current?.close();
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
@@ -3347,6 +3801,7 @@ export default function App() {
   }, [goBackInMenu]);
 
   const searchQuery = deferredQuery.trim();
+  const itemSearchHighlightQuery = searchMode === 'item' ? searchQuery : '';
   const todosById = useMemo(
     () => new Map(todos.map((todo) => [todo.id, todo])),
     [todos],
@@ -3373,59 +3828,50 @@ export default function App() {
   const hideDoneTodosForCurrentView = hideDoneTodos && todoListGroupMode !== 'status';
 
   useEffect(() => {
-    const requestId = searchRequestIdRef.current + 1;
-    searchRequestIdRef.current = requestId;
-
-    if (!searchQuery) {
-      setSearchResultIds(null);
+    if (!searchQuery || searchMode !== 'item') {
       return undefined;
     }
 
-    setSearchResultIds([]);
-
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
     let alive = true;
+
     localTodoStore.search(searchQuery)
       .then((matchedTodos) => {
-        if (alive && searchRequestIdRef.current === requestId) {
-          setSearchResultIds(matchedTodos.map((todo) => todo.id));
+        if (!alive || searchRequestIdRef.current !== requestId) {
+          return;
         }
+
+        const ids = matchedTodos.map((todo) => todo.id);
+        itemSearchResultsCacheRef.current.set(searchQuery, ids);
+        setItemSearchState({ ids, query: searchQuery });
       })
       .catch(() => {
-        if (alive && searchRequestIdRef.current === requestId) {
-          setSearchResultIds([]);
+        if (!alive || searchRequestIdRef.current !== requestId) {
+          return;
         }
+
+        itemSearchResultsCacheRef.current.set(searchQuery, []);
+        setItemSearchState({ ids: [], query: searchQuery });
       });
 
     return () => {
       alive = false;
     };
-  }, [searchQuery]);
+  }, [searchMode, searchQuery]);
 
   const searchMatchedTodoIds = useMemo(() => {
-    if (!searchQuery) {
+    if (!searchQuery || searchMode !== 'item') {
       return null;
     }
 
-    const matchedIds = new Set(searchResultIds ?? []);
+    if (itemSearchState?.query === searchQuery) {
+      return new Set(itemSearchState.ids);
+    }
 
-    listMenuTree.forEach((node) => {
-      if (!Number.isFinite(getListMenuSearchScore(node, searchQuery))) {
-        return;
-      }
-
-      todos.forEach((todo) => {
-        if (pendingDeleteIds.has(todo.id)) {
-          return;
-        }
-
-        if (todo.filters.list.includes(node.label)) {
-          matchedIds.add(todo.id);
-        }
-      });
-    });
-
-    return matchedIds;
-  }, [listMenuTree, pendingDeleteIds, searchQuery, searchResultIds, todos]);
+    const cachedIds = itemSearchResultsCacheRef.current.get(searchQuery);
+    return new Set(cachedIds ?? []);
+  }, [itemSearchState, searchMode, searchQuery]);
 
   const filteredTodos = useMemo(() => {
     if (notificationTodoRevealId) {
@@ -3435,11 +3881,13 @@ export default function App() {
         : [];
     }
 
-    const matchedTodos = searchQuery
+    const matchedTodos = searchQuery && searchMode === 'item'
       ? [...(searchMatchedTodoIds ?? new Set<string>())]
         .map((id) => todosById.get(id))
         .filter((todo): todo is Todo => Boolean(todo))
-      : todos;
+      : navTab === 'search' && searchMode === 'item'
+        ? []
+        : todos;
     const now = new Date();
 
     return matchedTodos
@@ -3455,7 +3903,9 @@ export default function App() {
     listMenuTree,
     notificationTodoRevealId,
     pendingDeleteIds,
+    navTab,
     searchMatchedTodoIds,
+    searchMode,
     searchQuery,
     selectedFilters,
     todos,
@@ -3648,7 +4098,7 @@ export default function App() {
     clearNotificationTodoReveal();
     if (query.trim()) {
       setQuery('');
-      setSearchResultIds(null);
+      setItemSearchState(null);
     }
     setTodos((current) => [todo, ...current]);
     highlightNewlyCreatedTodo(todo.id);
@@ -3840,6 +4290,47 @@ export default function App() {
     syncTodoAlarm(restoredTodo).catch(() => undefined);
     triggerSubtleHaptic();
   }, [createSettingsSnapshot, deletedTodos, todos]);
+
+  const addDevTestTodos = useCallback(() => {
+    const testTodos = createDevTestTodos(collectListNodeLabels(listMenuTree));
+
+    setTodos((current) => {
+      const withoutDev = current.filter((todo) => !isDevTestTodo(todo));
+
+      current
+        .filter(isDevTestTodo)
+        .forEach((todo) => {
+          localTodoStore.delete(todo.id).catch(() => undefined);
+          cancelTodoAlarm(todo.id).catch(() => undefined);
+        });
+
+      const next = [...testTodos, ...withoutDev];
+      localTodoStore.upsertMany(testTodos).catch(() => undefined);
+      reconcileTodoAlarms(next).catch(() => undefined);
+      triggerSubtleHaptic();
+      return next;
+    });
+  }, [listMenuTree]);
+
+  const clearDevTestTodos = useCallback(() => {
+    setTodos((current) => {
+      const devTodos = current.filter(isDevTestTodo);
+
+      if (devTodos.length === 0) {
+        return current;
+      }
+
+      devTodos.forEach((todo) => {
+        localTodoStore.delete(todo.id).catch(() => undefined);
+        cancelTodoAlarm(todo.id).catch(() => undefined);
+      });
+
+      const next = current.filter((todo) => !isDevTestTodo(todo));
+      reconcileTodoAlarms(next).catch(() => undefined);
+      triggerSubtleHaptic();
+      return next;
+    });
+  }, []);
 
   const deleteDeletedTodoPermanently = useCallback((id: string) => {
     const deletedTodo = deletedTodos.find((todo) => todo.id === id);
@@ -4746,6 +5237,7 @@ export default function App() {
       menuPresets.length,
       quickPresetNavIconNames.length,
       quickPresetNavPresetIds.length,
+      listMenuTree.length,
     ),
     QUICK_PRESET_NAV_MAX_SLOT_COUNT,
   );
@@ -4754,7 +5246,11 @@ export default function App() {
   const quickPresetNavItems = useMemo(
     () => {
       const automaticSlotCount = Math.min(
-        Math.max(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length, menuPresets.length),
+        Math.max(
+          DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
+          menuPresets.length,
+          listMenuTree.length,
+        ),
         quickPresetNavSlotLimit,
       );
       const explicitSlotCount = Math.min(
@@ -4764,38 +5260,48 @@ export default function App() {
       const slotCount = quickPresetNavUsesAutomaticSlots
         ? automaticSlotCount
         : explicitSlotCount;
+      const items: Array<{
+        iconName: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+        id: string;
+        preset: MenuPreset | null;
+        presetId: string | null;
+        slotNumber: number;
+      }> = [];
 
-      return Array.from({ length: slotCount }, (_, index) => {
+      for (let index = 0; index < slotCount; index += 1) {
+        const list = listMenuTree[index];
+        if (list?.showInNavbar === false) {
+          continue;
+        }
+
         const presetId = quickPresetNavUsesAutomaticSlots
           ? menuPresets[index]?.id ?? null
           : quickPresetNavPresetIds[index] ?? null;
         const preset = presetId ? menuPresetById.get(presetId) ?? null : null;
         const iconName = resolveQuickPresetNavSlotIconName(
           index,
-          preset,
           listMenuTree,
-          orderedListMenuTree,
-          quickPresetNavUsesAutomaticSlots,
-          quickPresetNavIconNames,
+          quickPresetNavUsesAutomaticSlots ? undefined : quickPresetNavIconNames[index],
         );
 
-        return {
+        items.push({
           iconName: toMaterialCommunityIconName(iconName),
           id: `quick-preset-slot-${index + 1}`,
           preset,
           presetId,
-          slotNumber: index + 1,
-        };
-      });
+          slotNumber: items.length + 1,
+        });
+      }
+
+      return items;
     },
     [
       listMenuTree,
-      orderedListMenuTree,
-      quickPresetNavIconNames,
-      quickPresetNavSlotLimit,
       menuPresetById,
       menuPresets,
+      quickPresetNavIconNames,
       quickPresetNavPresetIds,
+      quickPresetNavSlotLimit,
       quickPresetNavUsesAutomaticSlots,
     ],
   );
@@ -4806,20 +5312,9 @@ export default function App() {
   const heldQuickPresetNavDetail = heldQuickPresetNavPreset
     ? getQuickPresetNavDetail(heldQuickPresetNavPreset, dateLabelDisplayMode)
     : null;
-  const assignedQuickPresetNavCount = quickPresetNavItems.filter((item) => item.preset).length;
-  const quickPresetNavSettingsSummary = menuPresets.length === 0
-    ? 'No saved presets'
-    : quickPresetNavUsesAutomaticSlots
-      ? 'Auto first saved presets'
-      : `${assignedQuickPresetNavCount}/${quickPresetNavItems.length} assigned · ${menuPresets.length} saved`;
-  const quickPresetNavCanAddSlot = quickPresetNavItems.length < quickPresetNavSlotLimit;
-  const getExplicitQuickPresetNavPresetIds = useCallback(
-    () => quickPresetNavItems.map((item) => item.presetId ?? null),
-    [quickPresetNavItems],
-  );
-  const getExplicitQuickPresetNavIconNames = useCallback(
-    () => quickPresetNavItems.map((item) => String(item.iconName)),
-    [quickPresetNavItems],
+  const settingsNavbarPinnedListCount = useMemo(
+    () => listMenuTree.filter((list) => list.showInNavbar !== false).length,
+    [listMenuTree],
   );
   const todoListUseSubsectionLayout =
     todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
@@ -5092,7 +5587,7 @@ export default function App() {
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
   const includeActiveTodoReminderRows = hasTodoEditTargets;
   const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
-  const showSearchPresetSections = navTab === 'search';
+  const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
   const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
     const now = new Date();
@@ -5262,68 +5757,46 @@ export default function App() {
       searchPresetTodosByPresetId,
     ],
   );
-  const searchKeywordMatchedListLabels = useMemo(() => {
-    if (!searchPresetQuery) {
-      return new Set<string>();
-    }
-
-    return new Set(
-      listMenuTree
-        .filter((node) => Number.isFinite(getListMenuSearchScore(node, searchPresetQuery)))
-        .map((node) => node.label),
-    );
-  }, [listMenuTree, searchPresetQuery]);
-  const searchFlatTodoListRows = useMemo(() => {
-    if (!searchPresetQuery || searchKeywordMatchedListLabels.size === 0) {
-      return visibleTodoListRows;
-    }
-
-    return visibleTodoListRows.filter((row) => {
-      if (row.type !== 'todo') {
-        return true;
-      }
-
-      return !row.todo.filters.list.some((label) => (
-        searchKeywordMatchedListLabels.has(label)
-      ));
-    });
-  }, [
-    searchKeywordMatchedListLabels,
-    searchPresetQuery,
-    visibleTodoListRows,
-  ]);
+  const itemSearchRows = useMemo(
+    () => (
+      navTab === 'search' && searchMode === 'item' && searchQuery
+        ? buildItemSearchRows(sortedTodos)
+        : null
+    ),
+    [navTab, searchMode, searchQuery, sortedTodos],
+  );
   const appTodoListData = useMemo<AppTodoListRow[]>(() => {
+    if (itemSearchRows) {
+      return itemSearchRows;
+    }
+
     if (!showSearchPresetSections) {
       return visibleTodoListRows;
     }
 
-    if (!searchPresetQuery) {
-      return searchListRows;
-    }
-
-    return [...searchListRows, ...searchFlatTodoListRows];
+    return searchListRows;
   }, [
-    searchFlatTodoListRows,
+    itemSearchRows,
     searchListRows,
-    searchPresetQuery,
     showSearchPresetSections,
     visibleTodoListRows,
   ]);
   const todoListOneHandedOffset = useMemo(() => {
-    if (appTodoListData.length === 0) {
-      return 0;
-    }
-
     const viewportHeight = todoListFrameHeight || windowHeight;
-
-    return Math.max(
+    const calculatedOffset = Math.max(
       LIST_MENU_ROW_HEIGHT,
       Math.round(
         (viewportHeight * TODO_LIST_ONE_HANDED_SCROLL_RATIO) /
           LIST_MENU_ROW_HEIGHT,
       ) * LIST_MENU_ROW_HEIGHT,
     );
-  }, [appTodoListData.length, todoListFrameHeight, windowHeight]);
+
+    if (appTodoListData.length === 0) {
+      return navTab === 'search' ? calculatedOffset : 0;
+    }
+
+    return calculatedOffset;
+  }, [appTodoListData.length, navTab, todoListFrameHeight, windowHeight]);
   const todoListSearchOffset = todoListOneHandedOffset;
   const todoListRestingOffset = todoListOneHandedOffset + HEADER_SEARCH_ROW_HEIGHT;
   const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
@@ -5654,6 +6127,13 @@ export default function App() {
 
   useEffect(() => {
     const hasTodoRows = todoListOneHandedOffset > 1;
+
+    if (skipNextTodoListOffsetEffectRef.current) {
+      skipNextTodoListOffsetEffectRef.current = false;
+      hadTodoListRowsRef.current = hasTodoRows;
+      return undefined;
+    }
+
     const shouldApplyOffset =
       hasTodoRows &&
       (!didApplyTodoListInitialOffsetRef.current || !hadTodoListRowsRef.current);
@@ -5683,6 +6163,37 @@ export default function App() {
 
     return () => cancelAnimationFrame(frame);
   }, [todoListOneHandedOffset, todoListRestingOffset]);
+
+  useLayoutEffect(() => {
+    if (navTab !== 'search' || previousSearchModeRef.current === searchMode) {
+      previousSearchModeRef.current = searchMode;
+      return;
+    }
+
+    previousSearchModeRef.current = searchMode;
+
+    const savedOffset = searchScrollOffsetsByModeRef.current[searchMode];
+    const defaultOffset = searchMode === 'preset'
+      ? todoListRestingOffset
+      : todoListSearchOffset;
+    const offset = savedOffset ?? defaultOffset;
+
+    scrollOffsetY.current = offset;
+    actualScrollOffsetY.current = offset;
+
+    const restoreScrollOffset = () => {
+      todoListRef.current?.scrollToOffset({
+        animated: false,
+        offset,
+      });
+    };
+
+    restoreScrollOffset();
+    requestAnimationFrame(() => {
+      restoreScrollOffset();
+      requestAnimationFrame(restoreScrollOffset);
+    });
+  }, [navTab, searchMode, todoListRestingOffset, todoListSearchOffset]);
 
   const restoreSearchScroll = useCallback(() => {
     const savedOffset = savedSearchScrollOffsetRef.current;
@@ -6632,136 +7143,6 @@ export default function App() {
     applyQuickPresetNavPreset,
   ]);
 
-  const assignQuickPresetNavSlot = useCallback((slotIndex: number, presetId: string | null) => {
-    const nextPresetId = presetId && menuPresets.some((preset) => preset.id === presetId)
-      ? presetId
-      : null;
-
-    const nextPresetIds = getExplicitQuickPresetNavPresetIds();
-    nextPresetIds[slotIndex] = nextPresetId;
-    setQuickPresetNavPresetIds(nextPresetIds);
-    setQuickPresetNavIconNames(getExplicitQuickPresetNavIconNames());
-    triggerSubtleHaptic();
-  }, [
-    getExplicitQuickPresetNavIconNames,
-    getExplicitQuickPresetNavPresetIds,
-    menuPresets,
-  ]);
-
-  const addQuickPresetNavSlot = useCallback(() => {
-    if (!quickPresetNavCanAddSlot) {
-      return;
-    }
-
-    const assignedPresetIds = new Set(
-      quickPresetNavItems.map((item) => item.presetId).filter(Boolean),
-    );
-    const nextPreset = menuPresets.find((preset) => !assignedPresetIds.has(preset.id)) ?? null;
-    const nextIndex = quickPresetNavItems.length;
-    setQuickPresetNavPresetIds([
-      ...getExplicitQuickPresetNavPresetIds(),
-      nextPreset?.id ?? null,
-    ]);
-    setQuickPresetNavIconNames([
-      ...getExplicitQuickPresetNavIconNames(),
-      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
-        nextIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
-      ] ?? 'star-four-points',
-    ]);
-    triggerSubtleHaptic();
-  }, [
-    getExplicitQuickPresetNavIconNames,
-    getExplicitQuickPresetNavPresetIds,
-    menuPresets,
-    quickPresetNavCanAddSlot,
-    quickPresetNavItems,
-  ]);
-
-  const removeQuickPresetNavSlot = useCallback((slotIndex: number) => {
-    const nextPresetIds = getExplicitQuickPresetNavPresetIds().filter((_, index) => (
-      index !== slotIndex
-    ));
-    const nextIconNames = getExplicitQuickPresetNavIconNames().filter((_, index) => (
-      index !== slotIndex
-    ));
-
-    setQuickPresetNavPresetIds(nextPresetIds);
-    setQuickPresetNavIconNames(nextIconNames);
-    setOpenQuickPresetNavSlotNumber((current) => {
-      if (current === null) {
-        return current;
-      }
-      if (current === slotIndex + 1) {
-        return null;
-      }
-      return current > slotIndex + 1 ? current - 1 : current;
-    });
-    triggerSubtleHaptic();
-  }, [
-    getExplicitQuickPresetNavIconNames,
-    getExplicitQuickPresetNavPresetIds,
-  ]);
-
-  const changeQuickPresetNavSlotIcon = useCallback((slotIndex: number, iconName: string) => {
-    const nextIconNames = getExplicitQuickPresetNavIconNames();
-    nextIconNames[slotIndex] = iconName;
-    setQuickPresetNavIconNames(nextIconNames);
-    setQuickPresetNavPresetIds(getExplicitQuickPresetNavPresetIds());
-    triggerSubtleHaptic();
-  }, [
-    getExplicitQuickPresetNavIconNames,
-    getExplicitQuickPresetNavPresetIds,
-  ]);
-
-  const moveQuickPresetNavSlot = useCallback((slotIndex: number, direction: -1 | 1) => {
-    const targetIndex = slotIndex + direction;
-    if (targetIndex < 0 || targetIndex >= quickPresetNavItems.length) {
-      return;
-    }
-
-    const nextPresetIds = getExplicitQuickPresetNavPresetIds();
-    const nextIconNames = getExplicitQuickPresetNavIconNames();
-    [nextPresetIds[slotIndex], nextPresetIds[targetIndex]] = [
-      nextPresetIds[targetIndex] ?? null,
-      nextPresetIds[slotIndex] ?? null,
-    ];
-    [nextIconNames[slotIndex], nextIconNames[targetIndex]] = [
-      nextIconNames[targetIndex] ??
-        DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
-          targetIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
-        ] ??
-        'star-four-points',
-      nextIconNames[slotIndex] ??
-        DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
-          slotIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
-        ] ??
-        'star-four-points',
-    ];
-
-    setQuickPresetNavPresetIds(nextPresetIds);
-    setQuickPresetNavIconNames(nextIconNames);
-    setOpenQuickPresetNavSlotNumber((current) => {
-      if (current === slotIndex + 1) {
-        return targetIndex + 1;
-      }
-      if (current === targetIndex + 1) {
-        return slotIndex + 1;
-      }
-      return current;
-    });
-    triggerSubtleHaptic();
-  }, [
-    getExplicitQuickPresetNavIconNames,
-    getExplicitQuickPresetNavPresetIds,
-    quickPresetNavItems.length,
-  ]);
-
-  const resetQuickPresetNavSlots = useCallback(() => {
-    setQuickPresetNavIconNames([]);
-    setQuickPresetNavPresetIds([]);
-    triggerSubtleHaptic();
-  }, []);
-
   const removeMenuPreset = useCallback((id: string) => {
     const removed = menuPresets.find((preset) => preset.id === id);
     const shouldResetView = Boolean(
@@ -6827,43 +7208,6 @@ export default function App() {
     triggerSubtleHaptic();
   }, [newListName, persistListMenuTree]);
 
-  const startMovedListHighlights = useCallback((labels: Iterable<string>) => {
-    const targetLabels = [...new Set(labels)].filter(Boolean);
-
-    if (targetLabels.length === 0) {
-      return;
-    }
-
-    setRecentlyMovedListLabels((current) => {
-      const next = new Set(current);
-      targetLabels.forEach((label) => next.add(label));
-      return next;
-    });
-
-    targetLabels.forEach((label) => {
-      const existingTimer = movedListHighlightTimersRef.current.get(label);
-
-      if (existingTimer) {
-        clearTimeout(existingTimer);
-      }
-
-      const timer = setTimeout(() => {
-        movedListHighlightTimersRef.current.delete(label);
-        setRecentlyMovedListLabels((current) => {
-          if (!current.has(label)) {
-            return current;
-          }
-
-          const next = new Set(current);
-          next.delete(label);
-          return next;
-        });
-      }, EDITED_TODO_HIGHLIGHT_DURATION_MS);
-
-      movedListHighlightTimersRef.current.set(label, timer);
-    });
-  }, []);
-
   const setSettingsListIcon = useCallback((index: number, iconName: string | null) => {
     setListMenuTree((current) => {
       const next = current.map((item, itemIndex) => {
@@ -6884,69 +7228,55 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistListMenuTree]);
 
-  const handleSettingsListReorderPress = useCallback((index: number) => {
-    if (listOrderMode !== 'manual') {
+  const toggleSettingsListNavbarPinned = useCallback((index: number) => {
+    setListMenuTree((current) => {
+      const next = current.map((item, itemIndex) => {
+        if (itemIndex !== index) {
+          return item;
+        }
+
+        return item.showInNavbar === false
+          ? { ...item, showInNavbar: true }
+          : { ...item, showInNavbar: false };
+      });
+      persistListMenuTree(next);
+      return next;
+    });
+    triggerSubtleHaptic();
+  }, [persistListMenuTree]);
+
+  const swapSettingsListItems = useCallback((indexA: number, indexB: number) => {
+    if (indexA === indexB) {
       return;
     }
-
-    if (settingsListReorderIndex === null) {
-      setSettingsListReorderIndex(index);
-      triggerSubtleHaptic();
-      return;
-    }
-
-    if (settingsListReorderIndex === index) {
-      setSettingsListReorderIndex(null);
-      triggerSubtleHaptic();
-      return;
-    }
-
-    const fromIndex = settingsListReorderIndex;
-    const fromLabel = listMenuTree[fromIndex]?.label;
-    const toLabel = listMenuTree[index]?.label;
 
     setListOrderMode('manual');
     setListMenuTree((current) => {
+      const itemA = current[indexA];
+      const itemB = current[indexB];
+      if (!itemA || !itemB) {
+        return current;
+      }
+
       const next = [...current];
-      [next[fromIndex], next[index]] = [next[index], next[fromIndex]];
+      next[indexA] = itemB;
+      next[indexB] = itemA;
+      listMenuTreeRef.current = next;
       persistListMenuTree(next);
       return next;
     });
     void persistAppSettings({ listOrderMode: 'manual' });
+  }, [persistAppSettings, persistListMenuTree]);
 
-    if (fromLabel && toLabel) {
-      startMovedListHighlights([fromLabel, toLabel]);
-    }
-
-    setSettingsListReorderIndex(null);
-    triggerSubtleHaptic();
-  }, [
-    listMenuTree,
-    listOrderMode,
-    persistAppSettings,
-    persistListMenuTree,
-    settingsListReorderIndex,
-    startMovedListHighlights,
-  ]);
-
-  const handleSettingsListMainPress = useCallback((index: number) => {
-    if (listOrderMode === 'manual' && settingsListReorderIndex !== null) {
-      handleSettingsListReorderPress(index);
-      return;
-    }
-
-    openSettingsListKeywordPrompt(index);
-  }, [
-    handleSettingsListReorderPress,
-    listOrderMode,
-    openSettingsListKeywordPrompt,
-    settingsListReorderIndex,
-  ]);
+  const handleSettingsListSwap = useCallback((
+    fromIndex: number,
+    toIndex: number,
+  ) => {
+    swapSettingsListItems(fromIndex, toIndex);
+  }, [swapSettingsListItems]);
 
   const removeSettingsList = useCallback((index: number) => {
-    setSettingsListReorderIndex((current) => (
-      current === null || current === index ? null : current > index ? current - 1 : current
-    ));
+    setSettingsListReorderCancelNonce((current) => current + 1);
     setSettingsListIconPickerIndex((current) => (
       current === null || current === index ? null : current > index ? current - 1 : current
     ));
@@ -7004,10 +7334,8 @@ export default function App() {
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
     setSettingsListsExpanded(false);
-    setSettingsNavbarPresetsExpanded(false);
-    setSettingsListReorderIndex(null);
+    setSettingsListReorderCancelNonce((current) => current + 1);
     setSettingsListIconPickerIndex(null);
-    setRecentlyMovedListLabels(new Set());
     setSettingsModalVisible(true);
     triggerSubtleHaptic();
   }, [closeListMenuState, exitTodoSelectMode]);
@@ -8147,7 +8475,83 @@ export default function App() {
                 onSetDone={setTodoDone}
                 onTouchStart={markTodoRowTouchStart(todo.id)}
                 onToggleSelect={toggleTodoSelection}
-                searchHighlightQuery={searchQuery}
+                searchHighlightQuery={itemSearchHighlightQuery}
+                selectMode={todoSelectMode}
+                showOverdueMetaTags={showOverdueMetaTags}
+                viewportWidth={windowWidth}
+              />
+            </View>
+          </View>
+        );
+      }
+
+      if (item.type === 'searchItemTodo') {
+        const todo = item.todo;
+        const isPendingDelete = pendingDeleteIds.has(todo.id);
+        const isTodoMenuTarget =
+          !isPendingDelete &&
+          activeTodoMenuId === todo.id;
+        const isTodoMenuTargetHighlighted =
+          isTodoMenuTarget &&
+          activeTodoMenuHighlightId === todo.id;
+        const isSelected = selectedTodoIds.has(todo.id);
+        const isNewlyCreatedTodo =
+          newlyCreatedTodoHighlightId === todo.id;
+        const isRecentlyEditedTodo = recentlyEditedTodoIds.has(todo.id);
+        const isRepeatingCompletionFeedbackTodo =
+          repeatingTodoCompletionFeedbackIds.has(todo.id);
+        const shouldHighlightGroupedRow =
+          (
+            (isRecentlyEditedTodo ||
+              isNewlyCreatedTodo ||
+              isRepeatingCompletionFeedbackTodo) &&
+            !isTodoMenuTarget
+          ) ||
+          (todoSelectMode && isSelected);
+
+        return (
+          <View style={styles.todoListItem}>
+            {renderVisibleTodoRowGap(item.gapBefore)}
+            <View
+              style={[
+                styles.todoSectionGroupedShell,
+                shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
+                item.isLast && styles.todoSectionGroupedShellLast,
+              ]}
+            >
+              {!item.isFirst ? (
+                <View
+                  style={[
+                    styles.todoRowDivider,
+                    shouldHighlightGroupedRow && styles.todoRowDividerHighlighted,
+                  ]}
+                />
+              ) : null}
+              <TodoRow
+                dateLabelDisplayMode={dateLabelDisplayMode}
+                filterColors={deferredFilterColors}
+                isSelected={isSelected}
+                item={todo}
+                isMenuTarget={isTodoMenuTarget}
+                isMenuTargetHighlighted={isTodoMenuTargetHighlighted}
+                isNewlyCreated={isNewlyCreatedTodo}
+                isRecentlyEdited={isRecentlyEditedTodo}
+                isCompletionFeedback={isRepeatingCompletionFeedbackTodo}
+                isPendingDelete={isPendingDelete}
+                layout="grouped"
+                metaTagVisibility={metaTagVisibility}
+                onDelete={deleteTodo}
+                onCreateFromSettings={openCreateDrawerFromTodoSettings}
+                onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
+                onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
+                onEnterSelectMode={enterTodoSelectMode}
+                onOpenDetail={openTodoDetailModal}
+                onOpenMenu={openMenuForTodoAction}
+                onSetDone={setTodoDone}
+                onTouchStart={markTodoRowTouchStart(todo.id)}
+                onToggleSelect={toggleTodoSelection}
+                searchHighlightContent={false}
+                searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
                 viewportWidth={windowWidth}
@@ -8299,7 +8703,7 @@ export default function App() {
                 onSetDone={setTodoDone}
                 onTouchStart={markTodoRowTouchStart(todo.id)}
                 onToggleSelect={toggleTodoSelection}
-                searchHighlightQuery={searchQuery}
+                searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
                 viewportWidth={windowWidth}
@@ -8435,7 +8839,7 @@ export default function App() {
                     onSetDone={setTodoDone}
                     onTouchStart={markTodoRowTouchStart(todo.id)}
                     onToggleSelect={toggleTodoSelection}
-                    searchHighlightQuery={searchQuery}
+                    searchHighlightQuery={itemSearchHighlightQuery}
                     selectMode={todoSelectMode}
                     sectionLabel={item.sectionLabel}
                     showOverdueMetaTags={showOverdueMetaTags}
@@ -8491,7 +8895,7 @@ export default function App() {
             onSetDone={setTodoDone}
             onTouchStart={markTodoRowTouchStart(item.todo.id)}
             onToggleSelect={toggleTodoSelection}
-            searchHighlightQuery={searchQuery}
+            searchHighlightQuery={itemSearchHighlightQuery}
             selectMode={todoSelectMode}
             showOverdueMetaTags={showOverdueMetaTags}
             viewportWidth={windowWidth}
@@ -8526,7 +8930,7 @@ export default function App() {
       renderVisibleTodoRowGap,
       selectedTodoIds,
       setTodoDone,
-      searchQuery,
+      itemSearchHighlightQuery,
       showOverdueMetaTags,
       showCreateFromSettingsCue,
       toggleTodoGroupCollapsed,
@@ -8686,18 +9090,22 @@ export default function App() {
                       <Text style={styles.emptyTitle}>
                         {query.trim()
                           ? 'No matching items'
-                          : hideDoneTodos
-                            ? 'No active items'
-                            : 'No items yet'}
+                          : navTab === 'search' && searchMode === 'item'
+                            ? 'Search items'
+                            : hideDoneTodos
+                              ? 'No active items'
+                              : 'No items yet'}
                       </Text>
                       <Text style={styles.emptyText}>
                         {query.trim()
                           ? 'Try a different search term.'
-                          : hideDoneTodos
-                            ? 'Done items are hidden.'
-                            : todoListGroupMode !== 'none' || showSearchPresetSections
-                              ? 'Tap + on a section to add a todo.'
-                              : 'Tap + in the bar below to add a todo.'}
+                          : navTab === 'search' && searchMode === 'item'
+                            ? 'Type to search items.'
+                            : hideDoneTodos
+                              ? 'Done items are hidden.'
+                              : todoListGroupMode !== 'none' || showSearchPresetSections
+                                ? 'Tap + on a section to add a todo.'
+                                : 'Tap + in the bar below to add a todo.'}
                       </Text>
                     </View>
                   )
@@ -8755,7 +9163,11 @@ export default function App() {
                               restoreSearchScroll();
                             }
                           }}
-                          placeholder="Search todos…"
+                          placeholder={
+                            navTab === 'search' && searchMode === 'item'
+                              ? 'Search items…'
+                              : 'Search keywords…'
+                          }
                           placeholderTextColor={THEME_TEXT_SECONDARY}
                           returnKeyType="search"
                           selectionColor={NAV_ACCENT}
@@ -8763,6 +9175,52 @@ export default function App() {
                           textAlignVertical="center"
                           value={query}
                         />
+                        {navTab === 'search' ? (
+                          <View style={styles.searchModeToggle}>
+                            <Pressable
+                              accessibilityLabel="Preset search"
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: searchMode === 'preset' }}
+                              onPress={() => handleSearchModeChange('preset')}
+                              style={({ pressed }) => [
+                                styles.searchModeToggleButton,
+                                searchMode === 'preset' && styles.searchModeToggleButtonActive,
+                                pressed && styles.searchModeToggleButtonPressed,
+                              ]}
+                            >
+                              <Ionicons
+                                color={
+                                  searchMode === 'preset'
+                                    ? NAV_ACCENT
+                                    : THEME_TEXT_SECONDARY
+                                }
+                                name="layers-outline"
+                                size={15}
+                              />
+                            </Pressable>
+                            <Pressable
+                              accessibilityLabel="Item search"
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: searchMode === 'item' }}
+                              onPress={() => handleSearchModeChange('item')}
+                              style={({ pressed }) => [
+                                styles.searchModeToggleButton,
+                                searchMode === 'item' && styles.searchModeToggleButtonActive,
+                                pressed && styles.searchModeToggleButtonPressed,
+                              ]}
+                            >
+                              <Ionicons
+                                color={
+                                  searchMode === 'item'
+                                    ? NAV_ACCENT
+                                    : THEME_TEXT_SECONDARY
+                                }
+                                name="document-text-outline"
+                                size={15}
+                              />
+                            </Pressable>
+                          </View>
+                        ) : null}
                       </View>
                     </View>
                   </View>
@@ -10341,9 +10799,10 @@ export default function App() {
               </Pressable>
             </View>
 
-            <ScrollView
+            <GestureScrollView
               contentContainerStyle={styles.settingsBodyContent}
               keyboardShouldPersistTaps="handled"
+              scrollEnabled
               showsVerticalScrollIndicator={false}
               style={styles.settingsBody}
             >
@@ -10426,244 +10885,6 @@ export default function App() {
                         {showOverdueMetaTags ? 'On' : 'Off'}
                       </Text>
                     </Pressable>
-                  </View>
-                ) : null}
-              </View>
-
-              <View style={styles.settingsSection}>
-                <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Navbar presets</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {quickPresetNavSettingsSummary}
-                    </Text>
-                  </View>
-                  <Pressable
-                    accessibilityLabel={`${settingsNavbarPresetsExpanded ? 'Collapse' : 'Expand'} Navbar presets section`}
-                    accessibilityRole="button"
-                    accessibilityState={{ expanded: settingsNavbarPresetsExpanded }}
-                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
-                    onPress={() => setSettingsNavbarPresetsExpanded((current) => !current)}
-                    style={({ pressed }) => [
-                      styles.settingsSectionChevronButton,
-                      pressed && styles.settingsSectionChevronButtonPressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.settingsSectionChevron,
-                        settingsNavbarPresetsExpanded && styles.settingsSectionChevronExpanded,
-                      ]}
-                    >
-                      ›
-                    </Text>
-                  </Pressable>
-                </View>
-
-                {settingsNavbarPresetsExpanded ? (
-                  <View style={styles.settingsCard}>
-                    {menuPresets.length === 0 ? (
-                      <Text style={styles.settingsEmptyText}>No saved presets</Text>
-                    ) : (
-                      <>
-                        {!quickPresetNavUsesAutomaticSlots ? (
-                          <Pressable
-                            accessibilityLabel="Use first saved presets in navbar"
-                            accessibilityRole="button"
-                            onPress={resetQuickPresetNavSlots}
-                            style={({ pressed }) => [
-                              styles.settingsNavbarPresetAutoRow,
-                              pressed && styles.settingsOptionRowPressed,
-                            ]}
-                          >
-                            <Ionicons color={THEME_ACCENT} name="refresh-outline" size={18} />
-                            <Text style={styles.settingsNavbarPresetAutoText}>
-                              Auto first saved presets
-                            </Text>
-                          </Pressable>
-                        ) : null}
-
-                        <View style={styles.settingsNavbarPresetToolbar}>
-                          <Pressable
-                            accessibilityLabel="Add navbar preset icon"
-                            accessibilityRole="button"
-                            accessibilityState={{ disabled: !quickPresetNavCanAddSlot }}
-                            disabled={!quickPresetNavCanAddSlot}
-                            onPress={addQuickPresetNavSlot}
-                            style={({ pressed }) => [
-                              styles.settingsNavbarPresetAddButton,
-                              !quickPresetNavCanAddSlot && styles.settingsButtonDisabled,
-                              pressed && styles.settingsOptionRowPressed,
-                            ]}
-                          >
-                            <Ionicons color={THEME_ACCENT} name="add" size={17} />
-                            <Text style={styles.settingsNavbarPresetAddButtonText}>Add icon</Text>
-                          </Pressable>
-                        </View>
-
-                        {quickPresetNavItems.map((item, index) => {
-                          const slotHasPresetId = Boolean(item.presetId);
-                          const slotValueLabel = item.preset
-                            ? item.preset.label
-                            : slotHasPresetId
-                              ? 'Missing preset'
-                              : 'No preset assigned';
-                          const removeSlotDisabled = quickPresetNavItems.length <= 1;
-
-                          return (
-                            <View
-                              key={`settings-${item.id}`}
-                              style={[
-                                styles.settingsNavbarPresetSlot,
-                                index === 0 && styles.settingsNavbarPresetSlotFirst,
-                              ]}
-                            >
-                              <View style={styles.settingsNavbarPresetSlotHeader}>
-                                <PanGestureHandler
-                                  activeOffsetY={[-6, 6]}
-                                  failOffsetX={[-18, 18]}
-                                  onHandlerStateChange={(event) => {
-                                    const { state, translationY } = event.nativeEvent;
-                                    if (state === State.END && Math.abs(translationY) > 18) {
-                                      moveQuickPresetNavSlot(index, translationY > 0 ? 1 : -1);
-                                    }
-                                  }}
-                                >
-                                  <View
-                                    collapsable={false}
-                                    style={styles.settingsNavbarPresetDragZone}
-                                  >
-                                    <Text style={styles.settingsNavbarPresetDragHandle}>☰</Text>
-                                  </View>
-                                </PanGestureHandler>
-                                <View style={styles.settingsNavbarPresetSlotIcon}>
-                                  <MaterialCommunityIcons
-                                    color={NAV_ICON_INACTIVE}
-                                    name={item.iconName}
-                                    size={18}
-                                  />
-                                </View>
-                                <View style={styles.settingsNavbarPresetSlotTextWrap}>
-                                  <Text style={styles.settingsNavbarPresetSlotTitle}>
-                                    Slot {item.slotNumber}
-                                  </Text>
-                                  <Text
-                                    numberOfLines={1}
-                                    style={styles.settingsNavbarPresetSlotValue}
-                                  >
-                                    {slotValueLabel}
-                                  </Text>
-                                </View>
-                                <Pressable
-                                  accessibilityLabel={`Clear navbar preset slot ${item.slotNumber}`}
-                                  accessibilityRole="button"
-                                  accessibilityState={{ disabled: !slotHasPresetId }}
-                                  disabled={!slotHasPresetId}
-                                  onPress={() => assignQuickPresetNavSlot(index, null)}
-                                  style={({ pressed }) => [
-                                    styles.settingsIconButton,
-                                    !slotHasPresetId && styles.settingsButtonDisabled,
-                                    pressed && styles.settingsOptionRowPressed,
-                                  ]}
-                                >
-                                  <Ionicons
-                                    color={slotHasPresetId ? '#8F877F' : '#C9C0B8'}
-                                    name="close"
-                                    size={18}
-                                  />
-                                </Pressable>
-                                <Pressable
-                                  accessibilityLabel={`Remove navbar preset slot ${item.slotNumber}`}
-                                  accessibilityRole="button"
-                                  accessibilityState={{ disabled: removeSlotDisabled }}
-                                  disabled={removeSlotDisabled}
-                                  onPress={() => removeQuickPresetNavSlot(index)}
-                                  style={({ pressed }) => [
-                                    styles.settingsIconButton,
-                                    removeSlotDisabled && styles.settingsButtonDisabled,
-                                    pressed && styles.settingsOptionRowPressed,
-                                  ]}
-                                >
-                                  <Ionicons
-                                    color={removeSlotDisabled ? '#C9C0B8' : '#8F877F'}
-                                    name="trash-outline"
-                                    size={17}
-                                  />
-                                </Pressable>
-                              </View>
-
-                              <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                style={styles.settingsNavbarPresetChoicesScroll}
-                                contentContainerStyle={styles.settingsNavbarPresetIconChoices}
-                              >
-                                {QUICK_PRESET_NAV_ICON_CHOICES.map((iconName) => {
-                                  const selected = item.iconName === iconName;
-
-                                  return (
-                                    <Pressable
-                                      accessibilityLabel={`Use ${iconName} icon for navbar preset slot ${item.slotNumber}`}
-                                      accessibilityRole="button"
-                                      accessibilityState={{ selected }}
-                                      key={`${item.id}-icon-${iconName}`}
-                                      onPress={() => changeQuickPresetNavSlotIcon(index, iconName)}
-                                      style={({ pressed }) => [
-                                        styles.settingsNavbarPresetIconChoiceButton,
-                                        selected && styles.settingsNavbarPresetIconChoiceButtonSelected,
-                                        pressed && styles.settingsOptionRowPressed,
-                                      ]}
-                                    >
-                                      <MaterialCommunityIcons
-                                        color={selected ? NAV_ACCENT : NAV_ICON_INACTIVE}
-                                        name={iconName}
-                                        size={18}
-                                      />
-                                    </Pressable>
-                                  );
-                                })}
-                              </ScrollView>
-
-                              <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                style={styles.settingsNavbarPresetChoicesScroll}
-                                contentContainerStyle={styles.settingsNavbarPresetChoices}
-                              >
-                                {menuPresets.map((preset) => {
-                                  const selected = item.presetId === preset.id;
-
-                                  return (
-                                    <Pressable
-                                      accessibilityLabel={`Assign ${preset.label} to navbar preset slot ${item.slotNumber}`}
-                                      accessibilityRole="button"
-                                      accessibilityState={{ selected }}
-                                      key={`${item.id}-${preset.id}`}
-                                      onPress={() => assignQuickPresetNavSlot(index, preset.id)}
-                                      style={({ pressed }) => [
-                                        styles.settingsNavbarPresetChoiceButton,
-                                        selected && styles.settingsNavbarPresetChoiceButtonSelected,
-                                        pressed && styles.settingsOptionRowPressed,
-                                      ]}
-                                    >
-                                      <Text
-                                        numberOfLines={1}
-                                        style={[
-                                          styles.settingsNavbarPresetChoiceText,
-                                          selected && styles.settingsNavbarPresetChoiceTextSelected,
-                                        ]}
-                                      >
-                                        {preset.label}
-                                      </Text>
-                                    </Pressable>
-                                  );
-                                })}
-                              </ScrollView>
-                            </View>
-                          );
-                        })}
-                      </>
-                    )}
                   </View>
                 ) : null}
               </View>
@@ -10950,7 +11171,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Lists</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {listMenuTree.length} items · {listOrderMode === 'manual' ? 'Manual order' : 'Newest first'}
+                      {listMenuTree.length} lists · {settingsNavbarPinnedListCount} in navbar
                     </Text>
                   </View>
                   <Pressable
@@ -11002,167 +11223,23 @@ export default function App() {
                       </Pressable>
                     </View>
 
-                    {listOrderMode === 'manual' && listMenuTree.length > 1 ? (
-                      <Text style={styles.settingsListReorderHint}>
-                        Press and hold to select a list, then tap another to swap. Tap when none selected to edit search keywords.
-                      </Text>
-                    ) : (
-                      <Text style={styles.settingsListReorderHint}>
-                        Tap a list to edit search keywords.
-                      </Text>
-                    )}
+                    <Text style={styles.settingsListReorderHint}>
+                      {listMenuTree.length > 1
+                        ? 'Tap the handle on one list, then another to swap. Swipe left to delete.'
+                        : 'Swipe left to delete. Pin to show in navbar.'}
+                    </Text>
 
-                    <View style={styles.settingsListEditor}>
-                      {listMenuTree.map((item, index) => {
-                        const isReorderSelected = settingsListReorderIndex === index;
-                        const isRecentlyMoved = recentlyMovedListLabels.has(item.label);
-                        const isIconPickerOpen = settingsListIconPickerIndex === index;
-                        const listIconName = item.iconName;
-
-                        return (
-                        <View key={`${item.label}-${index}`} style={styles.settingsListGroup}>
-                          <View
-                            style={[
-                              styles.settingsListRow,
-                              isReorderSelected && styles.settingsListRowReorderSelected,
-                              isRecentlyMoved && styles.settingsListRowRecentlyMoved,
-                            ]}
-                          >
-                            <View style={styles.settingsListRowContent}>
-                              <Pressable
-                                accessibilityRole="button"
-                                accessibilityState={{ expanded: isIconPickerOpen }}
-                                accessibilityLabel={`Choose icon for ${item.label}`}
-                                onPress={() => {
-                                  setSettingsListIconPickerIndex((current) => (
-                                    current === index ? null : index
-                                  ));
-                                  triggerSubtleHaptic();
-                                }}
-                                style={({ pressed }) => [
-                                  styles.settingsListIconButton,
-                                  isIconPickerOpen && styles.settingsListIconButtonActive,
-                                  pressed && styles.settingsOptionRowPressed,
-                                ]}
-                              >
-                                <MaterialCommunityIcons
-                                  color={listIconName ? THEME_ACCENT : '#8F877F'}
-                                  name={
-                                    listIconName
-                                      ? toMaterialCommunityIconName(listIconName)
-                                      : 'paw'
-                                  }
-                                  size={17}
-                                />
-                              </Pressable>
-                              <Pressable
-                                accessibilityRole="button"
-                                accessibilityState={{ selected: isReorderSelected }}
-                                accessibilityHint={
-                                  listOrderMode === 'manual'
-                                    ? settingsListReorderIndex !== null
-                                      ? 'Tap another list to swap order, or the selected list to deselect.'
-                                      : 'Tap to edit search keywords. Press and hold to select for reordering.'
-                                    : 'Tap to edit search keywords.'
-                                }
-                                accessibilityLabel={item.label}
-                                onLongPress={() => {
-                                  if (listOrderMode === 'manual') {
-                                    handleSettingsListReorderPress(index);
-                                  }
-                                }}
-                                onPress={() => handleSettingsListMainPress(index)}
-                                style={({ pressed }) => [
-                                  styles.settingsListMainPress,
-                                  pressed && styles.settingsListRowPressed,
-                                ]}
-                              >
-                                <Text
-                                  numberOfLines={1}
-                                  style={styles.settingsListTitle}
-                                >
-                                  {item.label}
-                                </Text>
-                              </Pressable>
-                            </View>
-                            <View style={styles.settingsListActions}>
-                              <Pressable
-                                accessibilityRole="button"
-                                accessibilityLabel={`Remove ${item.label}`}
-                                onPress={() => removeSettingsList(index)}
-                                style={({ pressed }) => [
-                                  styles.settingsListActionButton,
-                                  pressed && styles.settingsOptionRowPressed,
-                                ]}
-                              >
-                                <Ionicons color="#8F877F" name="trash-outline" size={17} />
-                              </Pressable>
-                            </View>
-                          </View>
-                          {isIconPickerOpen ? (
-                            <ScrollView
-                              nestedScrollEnabled
-                              showsVerticalScrollIndicator={false}
-                              style={styles.settingsListIconChoicesScroll}
-                              contentContainerStyle={styles.settingsListIconChoices}
-                            >
-                              <View style={styles.settingsListIconGroupGrid}>
-                                <Pressable
-                                  accessibilityLabel={`Remove icon from ${item.label}`}
-                                  accessibilityRole="button"
-                                  accessibilityState={{ selected: !listIconName }}
-                                  onPress={() => setSettingsListIcon(index, null)}
-                                  style={({ pressed }) => [
-                                    styles.settingsListIconChoiceButton,
-                                    !listIconName && styles.settingsListIconChoiceButtonSelected,
-                                    pressed && styles.settingsOptionRowPressed,
-                                  ]}
-                                >
-                                  <View style={styles.settingsListIconChoiceEmpty} />
-                                </Pressable>
-                              </View>
-                              {LIST_ICON_GROUPS.map((group) => (
-                                <View
-                                  key={`${item.label}-${group.title}`}
-                                  style={styles.settingsListIconGroup}
-                                >
-                                  <Text style={styles.settingsListIconGroupTitle}>
-                                    {group.title}
-                                  </Text>
-                                  <View style={styles.settingsListIconGroupGrid}>
-                                    {group.icons.map((iconName) => {
-                                      const selected = listIconName === iconName;
-
-                                      return (
-                                        <Pressable
-                                          accessibilityLabel={`Use ${iconName} icon for ${item.label}`}
-                                          accessibilityRole="button"
-                                          accessibilityState={{ selected }}
-                                          key={`${item.label}-${group.title}-${iconName}`}
-                                          onPress={() => setSettingsListIcon(index, iconName)}
-                                          style={({ pressed }) => [
-                                            styles.settingsListIconChoiceButton,
-                                            selected && styles.settingsListIconChoiceButtonSelected,
-                                            pressed && styles.settingsOptionRowPressed,
-                                          ]}
-                                        >
-                                          <MaterialCommunityIcons
-                                            color={selected ? THEME_ACCENT : '#8F877F'}
-                                            name={iconName}
-                                            size={18}
-                                          />
-                                        </Pressable>
-                                      );
-                                    })}
-                                  </View>
-                                </View>
-                              ))}
-                            </ScrollView>
-                          ) : null}
-                        </View>
-                        );
-                      })}
-                    </View>
+                    <MemoizedSettingsListEditor
+                      iconPickerIndex={settingsListIconPickerIndex}
+                      items={listMenuTree}
+                      onDelete={removeSettingsList}
+                      onIconPickerChange={setSettingsListIconPickerIndex}
+                      reorderCancelNonce={settingsListReorderCancelNonce}
+                      onMainPress={openSettingsListKeywordPrompt}
+                      onPinPress={toggleSettingsListNavbarPinned}
+                      onSwap={handleSettingsListSwap}
+                      onSetIcon={setSettingsListIcon}
+                    />
 
                     <View style={styles.settingsListMenuOrderSection}>
                       <Text style={styles.settingsListMenuOrderTitle}>List menu order</Text>
@@ -11180,7 +11257,7 @@ export default function App() {
                               onPress={() => {
                                 setListOrderMode(mode);
                                 if (mode === 'alphabetical') {
-                                  setSettingsListReorderIndex(null);
+                                  setSettingsListReorderCancelNonce((current) => current + 1);
                                 }
                                 void persistAppSettings({ listOrderMode: mode });
                               }}
@@ -11272,7 +11349,48 @@ export default function App() {
                   </View>
                 ) : null}
               </View>
-            </ScrollView>
+
+              {isDevAppVariant ? (
+                <View style={styles.settingsSection}>
+                  <View style={styles.settingsSectionHeader}>
+                    <View style={styles.settingsRowTextWrap}>
+                      <Text style={styles.settingsSectionTitle}>Dev test data</Text>
+                      <Text style={styles.settingsSectionSubtitle}>
+                        {devTestTodoCount} of {DEV_TEST_TODO_COUNT} test todos · varied date, list, priority
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.settingsCard}>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={addDevTestTodos}
+                      style={({ pressed }) => [
+                        styles.settingsPrimaryButton,
+                        pressed && styles.settingsPrimaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsPrimaryButtonText}>
+                        Add {DEV_TEST_TODO_COUNT} test todos
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={devTestTodoCount === 0}
+                      onPress={clearDevTestTodos}
+                      style={({ pressed }) => [
+                        styles.settingsRestoreButton,
+                        devTestTodoCount === 0 && styles.settingsButtonDisabled,
+                        pressed && styles.settingsSecondaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsRestoreButtonText}>Clear test todos</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+            </GestureScrollView>
             </View>
           </View>
         ) : null}
@@ -12079,10 +12197,38 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     marginHorizontal: -14,
     marginTop: 14,
+    overflow: 'visible',
+    position: 'relative',
   },
   settingsListGroup: {
     borderBottomColor: '#F2EBE3',
     borderBottomWidth: StyleSheet.hairlineWidth,
+    position: 'relative',
+  },
+  settingsListGroupReorderSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  settingsListRowSlot: {
+    minHeight: SETTINGS_LIST_ROW_HEIGHT,
+    position: 'relative',
+  },
+  settingsListRowWrap: {
+    alignItems: 'stretch',
+    flexDirection: 'row',
+  },
+  settingsListDragHandle: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    paddingLeft: 10,
+    width: 36,
+  },
+  settingsListDragHandleSelected: {
+    backgroundColor: 'rgba(76, 120, 255, 0.12)',
+  },
+  settingsListSwipeWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   settingsListRow: {
     alignItems: 'center',
@@ -12121,6 +12267,43 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: 0.1,
     textAlignVertical: 'center',
+  },
+  settingsListSwipeShell: {
+    height: SETTINGS_LIST_ROW_HEIGHT,
+    overflow: 'hidden',
+  },
+  settingsListSwipeContainer: {
+    height: SETTINGS_LIST_ROW_HEIGHT,
+    overflow: 'hidden',
+  },
+  settingsListSwipeChildren: {
+    backgroundColor: THEME_CARD,
+  },
+  settingsListSwipeActions: {
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    flexDirection: 'row',
+    height: SETTINGS_LIST_ROW_HEIGHT,
+    justifyContent: 'flex-end',
+    width: SETTINGS_LIST_SWIPE_DELETE_WIDTH,
+  },
+  settingsListSwipeDelete: {
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    height: SETTINGS_LIST_ROW_HEIGHT,
+    justifyContent: 'center',
+    width: SETTINGS_LIST_SWIPE_DELETE_WIDTH,
+  },
+  settingsListPinButton: {
+    alignItems: 'center',
+    flexShrink: 0,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  settingsListPinButtonActive: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: CONTROL_BORDER_RADIUS,
   },
   settingsListIconButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
@@ -12183,24 +12366,6 @@ const styles = StyleSheet.create({
   },
   settingsListRowPressed: {
     opacity: 0.72,
-  },
-  settingsListRowReorderSelected: {
-    backgroundColor: THEME_ACCENT_SOFT,
-  },
-  settingsListRowRecentlyMoved: {
-    backgroundColor: THEME_ACCENT_SOFT,
-  },
-  settingsListActions: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexShrink: 0,
-    gap: 4,
-  },
-  settingsListActionButton: {
-    alignItems: 'center',
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
   },
   settingsNavbarPresetAutoRow: {
     alignItems: 'center',
@@ -12278,6 +12443,9 @@ const styles = StyleSheet.create({
     height: 34,
     justifyContent: 'center',
     width: 34,
+  },
+  settingsNavbarPresetSlotIconPinned: {
+    backgroundColor: THEME_ACCENT_SOFT,
   },
   settingsNavbarPresetSlotTextWrap: {
     flex: 1,
@@ -12866,7 +13034,32 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     height: 48,
     letterSpacing: 0,
+    minWidth: 0,
     paddingVertical: 0,
+  },
+  searchModeToggle: {
+    alignItems: 'center',
+    backgroundColor: THEME_BG,
+    borderColor: THEME_BORDER,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    marginLeft: 8,
+    overflow: 'hidden',
+    padding: 2,
+  },
+  searchModeToggleButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 28,
+    justifyContent: 'center',
+    width: 30,
+  },
+  searchModeToggleButtonActive: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  searchModeToggleButtonPressed: {
+    opacity: 0.72,
   },
   listShell: {
     backgroundColor: THEME_BG,

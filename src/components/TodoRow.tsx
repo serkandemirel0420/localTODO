@@ -502,6 +502,7 @@ export type TodoRowProps = {
   onTouchStart?: (event: GestureResponderEvent) => void;
   onToggleSelect?: (id: string) => void;
   searchHighlightQuery?: string;
+  searchHighlightContent?: boolean;
   sectionLabel?: string;
   selectMode?: boolean;
   showOverdueMetaTags?: boolean;
@@ -533,6 +534,7 @@ function TodoRowComponent({
   onTouchStart,
   onToggleSelect,
   searchHighlightQuery = '',
+  searchHighlightContent = true,
   selectMode = false,
   showOverdueMetaTags = true,
   viewportWidth,
@@ -581,8 +583,12 @@ function TodoRowComponent({
     [displayTitle, searchHighlightTerms],
   );
   const highlightedContentPreview = useMemo(
-    () => renderHighlightedPreview(contentPreview, searchHighlightTerms),
-    [contentPreview, searchHighlightTerms],
+    () => (
+      searchHighlightContent
+        ? renderHighlightedPreview(contentPreview, searchHighlightTerms)
+        : contentPreview
+    ),
+    [contentPreview, searchHighlightContent, searchHighlightTerms],
   );
   const isHighlightedForMenu = isMenuTargetHighlighted;
   const suppressChangeFill = isMenuTarget;
@@ -1438,6 +1444,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.onOpenMenu === next.onOpenMenu &&
   prev.onSetDone === next.onSetDone &&
   prev.searchHighlightQuery === next.searchHighlightQuery &&
+  prev.searchHighlightContent === next.searchHighlightContent &&
   prev.viewportWidth === next.viewportWidth &&
   prev.onEnterSelectMode === next.onEnterSelectMode &&
   prev.onTouchStart === next.onTouchStart &&

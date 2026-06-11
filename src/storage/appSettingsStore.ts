@@ -33,6 +33,7 @@ export type TodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' | 'prio
 export type StoredListMenuNode = {
   label: string;
   iconName?: string;
+  showInNavbar?: boolean;
   searchKeywords?: string;
   children?: StoredListMenuNode[];
   sortMode?: TodoSortMode;
@@ -257,6 +258,7 @@ export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNo
   nodes.map((node) => ({
     label: node.label,
     ...(node.iconName ? { iconName: node.iconName } : {}),
+    ...(node.showInNavbar === false ? { showInNavbar: false } : {}),
     ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
     sortMode: node.sortMode,
     groupMode: node.groupMode,
@@ -766,11 +768,13 @@ const normalizeListMenuTreeNodes = (
       const iconName = typeof item.iconName === 'string' && item.iconName.trim()
         ? item.iconName.trim()
         : undefined;
+      const showInNavbar = item.showInNavbar === false ? false : undefined;
       const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
 
       return {
         label,
         ...(iconName ? { iconName } : {}),
+        ...(showInNavbar === false ? { showInNavbar: false } : {}),
         ...(searchKeywords ? { searchKeywords } : {}),
         ...(sortMode !== undefined ? { sortMode } : {}),
         ...(groupMode !== undefined ? { groupMode } : {}),

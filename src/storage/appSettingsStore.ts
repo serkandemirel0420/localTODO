@@ -64,6 +64,7 @@ export const QUICK_PRESET_NAV_MAX_SLOT_COUNT = 50;
 export const QUICK_PRESET_DEFAULTS_VERSION = 2;
 export type QuickPresetNavPresetIds = Array<string | null>;
 export type QuickPresetNavIconNames = string[];
+export type NavbarHiddenPresetIds = string[];
 
 export const DEFAULT_QUICK_PRESET_NAV_ICON_NAMES: QuickPresetNavIconNames = [
   'penguin',
@@ -243,6 +244,7 @@ export type AppSettings = {
   listMenuTree: StoredListMenuNode[];
   listOrderMode: ListOrderMode;
   menuPresets: StoredMenuPreset[];
+  navbarHiddenPresetIds: NavbarHiddenPresetIds;
   metaTagVisibility: MetaTagVisibility;
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
@@ -293,6 +295,32 @@ export const normalizeQuickPresetNavPresetIds = (value: unknown): QuickPresetNav
 export const cloneQuickPresetNavPresetIds = (
   presetIds: QuickPresetNavPresetIds,
 ): QuickPresetNavPresetIds => normalizeQuickPresetNavPresetIds(presetIds);
+
+export const normalizeNavbarHiddenPresetIds = (value: unknown): NavbarHiddenPresetIds => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+
+  return value.filter((presetId): presetId is string => {
+    if (typeof presetId !== 'string') {
+      return false;
+    }
+
+    const trimmed = presetId.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return false;
+    }
+
+    seen.add(trimmed);
+    return true;
+  });
+};
+
+export const cloneNavbarHiddenPresetIds = (
+  presetIds: NavbarHiddenPresetIds,
+): NavbarHiddenPresetIds => normalizeNavbarHiddenPresetIds(presetIds);
 
 const QUICK_PRESET_NAV_ICON_NAME_PATTERN = /^[a-z0-9-]+$/i;
 
@@ -396,6 +424,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   listOrderMode: 'alphabetical',
   menuPresets: cloneMenuPresets(DEFAULT_QUICK_MENU_PRESETS),
+  navbarHiddenPresetIds: [],
   metaTagVisibility: cloneMetaTagVisibility(),
   quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
   quickPresetNavIconNames: cloneQuickPresetNavIconNames(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES),
@@ -861,6 +890,10 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     ),
     normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
   );
+  const menuPresetIds = new Set(quickPresetDefaults.menuPresets.map((preset) => preset.id));
+  const navbarHiddenPresetIds = normalizeNavbarHiddenPresetIds(value.navbarHiddenPresetIds).filter(
+    (presetId) => menuPresetIds.has(presetId),
+  );
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
@@ -878,6 +911,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     listMenuTree: normalizeListMenuTree(value.listMenuTree),
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
     menuPresets: quickPresetDefaults.menuPresets,
+    navbarHiddenPresetIds,
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
     quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
     quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,

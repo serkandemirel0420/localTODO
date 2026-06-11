@@ -24,13 +24,16 @@ import {
 } from '../metaTags';
 import {
   cloneFilterConfigUiState,
+  cloneNavbarHiddenPresetIds,
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   ensureQuickPresetDefaults,
   normalizeFilterConfigUiState,
+  normalizeNavbarHiddenPresetIds,
   normalizeQuickPresetNavIconNames,
   normalizeQuickPresetNavPresetIds,
   type FilterConfigUiState,
+  type NavbarHiddenPresetIds,
   type QuickPresetNavIconNames,
   type QuickPresetNavPresetIds,
 } from '../storage/appSettingsStore';
@@ -82,6 +85,7 @@ export type BackupSettings = {
   listMenuTree: BackupListMenuNode[];
   listOrderMode: BackupListOrderMode;
   menuPresets: BackupMenuPreset[];
+  navbarHiddenPresetIds: NavbarHiddenPresetIds;
   metaTagVisibility: MetaTagVisibility;
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
@@ -393,6 +397,7 @@ export const createBackupPayload = (
       listMenuTree: cloneListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode,
       menuPresets: cloneMenuPresets(settings.menuPresets),
+      navbarHiddenPresetIds: cloneNavbarHiddenPresetIds(settings.navbarHiddenPresetIds),
       metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
       quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames),
@@ -427,6 +432,10 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       ? settings.quickPresetDefaultsVersion
       : 0,
   );
+  const menuPresetIds = new Set(quickPresetDefaults.menuPresets.map((preset) => preset.id));
+  const navbarHiddenPresetIds = normalizeNavbarHiddenPresetIds(settings.navbarHiddenPresetIds).filter(
+    (presetId) => menuPresetIds.has(presetId),
+  );
 
   return {
     app: 'localTODO',
@@ -448,6 +457,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
       menuPresets: quickPresetDefaults.menuPresets,
+      navbarHiddenPresetIds,
       metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
       quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
       quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,

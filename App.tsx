@@ -132,6 +132,7 @@ import {
   cloneFilterConfigUiState,
   cloneListMenuTree,
   cloneMenuPresets,
+  cloneNavbarHiddenPresetIds,
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
@@ -835,6 +836,7 @@ const buildSearchListMenuRows = (
 };
 
 const PRESET_SWIPE_DELETE_WIDTH = 72;
+const PRESET_SWIPE_NAVBAR_VISIBILITY_WIDTH = 88;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
   list: 'List',
   date: 'Date',
@@ -1712,6 +1714,80 @@ function MenuPresetSwipeRow({
 
 const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
 
+type SettingsNavbarPresetVisibilityRowProps = {
+  hidden: boolean;
+  label: string;
+  onToggle: () => void;
+};
+
+function SettingsNavbarPresetVisibilityRow({
+  hidden,
+  label,
+  onToggle,
+}: SettingsNavbarPresetVisibilityRowProps) {
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.settingsNavbarPresetVisibilityActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={hidden ? `Show ${label} in navbar` : `Hide ${label} from navbar`}
+          accessibilityHint="Keeps the preset saved in the filter menu"
+          activeOpacity={0.82}
+          onPress={onToggle}
+          style={[
+            styles.settingsNavbarPresetVisibilityButton,
+            hidden && styles.settingsNavbarPresetVisibilityButtonShow,
+          ]}
+        >
+          <Ionicons
+            color="#FFFFFF"
+            name={hidden ? 'eye-outline' : 'eye-off-outline'}
+            size={20}
+          />
+          <Text style={styles.settingsNavbarPresetVisibilityButtonText}>
+            {hidden ? 'Show' : 'Hide'}
+          </Text>
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [hidden, label, onToggle],
+  );
+
+  return (
+    <View style={styles.settingsNavbarPresetVisibilityShell}>
+      <Swipeable
+        childrenContainerStyle={styles.settingsNavbarPresetVisibilityChildren}
+        containerStyle={styles.settingsNavbarPresetVisibilityContainer}
+        friction={1.1}
+        overshootRight={false}
+        renderRightActions={renderRightActions}
+        rightThreshold={PRESET_SWIPE_NAVBAR_VISIBILITY_WIDTH}
+      >
+        <View style={styles.settingsNavbarPresetVisibilityRow}>
+          <Text numberOfLines={1} style={styles.settingsNavbarPresetVisibilityTitle}>
+            {label}
+          </Text>
+          <View
+            style={[
+              styles.settingsNavbarPresetVisibilityPill,
+              hidden && styles.settingsNavbarPresetVisibilityPillHidden,
+            ]}
+          >
+            <Text
+              style={[
+                styles.settingsNavbarPresetVisibilityPillText,
+                hidden && styles.settingsNavbarPresetVisibilityPillTextHidden,
+              ]}
+            >
+              {hidden ? 'Hidden' : 'In navbar'}
+            </Text>
+          </View>
+        </View>
+      </Swipeable>
+    </View>
+  );
+}
+
 type SettingsColorItem = {
   displayLabel?: string;
   filterKey: FilterColorSettingKey;
@@ -1956,6 +2032,7 @@ export default function App() {
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
+  const [navbarHiddenPresetIds, setNavbarHiddenPresetIds] = useState<string[]>([]);
   const [quickPresetNavIconNames, setQuickPresetNavIconNames] = useState<string[]>([]);
   const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
@@ -2173,6 +2250,7 @@ export default function App() {
         setListMenuTree(cloneListMenuTree(settings.listMenuTree));
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
+        setNavbarHiddenPresetIds(cloneNavbarHiddenPresetIds(settings.navbarHiddenPresetIds));
         setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
         setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
         setTodoGroupMode(settings.todoGroupMode);
@@ -2228,6 +2306,9 @@ export default function App() {
     listMenuTree: cloneListMenuTree(
       overrides.listMenuTree ?? listMenuTree,
     ),
+    navbarHiddenPresetIds: cloneNavbarHiddenPresetIds(
+      overrides.navbarHiddenPresetIds ?? navbarHiddenPresetIds,
+    ),
   }), [
     collapsedTodoGroupIds,
     dateLabelDisplayMode,
@@ -2242,6 +2323,7 @@ export default function App() {
     listMenuTree,
     listOrderMode,
     menuPresets,
+    navbarHiddenPresetIds,
     metaTagVisibility,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
@@ -4729,6 +4811,14 @@ export default function App() {
     () => new Map(menuPresets.map((preset) => [preset.id, preset])),
     [menuPresets],
   );
+  const navbarHiddenPresetIdSet = useMemo(
+    () => new Set(navbarHiddenPresetIds),
+    [navbarHiddenPresetIds],
+  );
+  const navbarVisiblePresets = useMemo(
+    () => menuPresets.filter((preset) => !navbarHiddenPresetIdSet.has(preset.id)),
+    [menuPresets, navbarHiddenPresetIdSet],
+  );
   const searchKeywordEditTitle = useMemo(() => {
     if (!searchKeywordEditTarget) {
       return '';
@@ -4743,7 +4833,7 @@ export default function App() {
   const quickPresetNavSlotLimit = Math.min(
     Math.max(
       DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
-      menuPresets.length,
+      navbarVisiblePresets.length,
       quickPresetNavIconNames.length,
       quickPresetNavPresetIds.length,
     ),
@@ -4753,10 +4843,15 @@ export default function App() {
     quickPresetNavPresetIds.length === 0 && quickPresetNavIconNames.length === 0;
   const quickPresetNavItems = useMemo(
     () => {
-      const automaticSlotCount = Math.min(
-        Math.max(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length, menuPresets.length),
-        quickPresetNavSlotLimit,
-      );
+      const automaticSlotCount = navbarVisiblePresets.length === 0
+        ? 0
+        : Math.min(
+            Math.max(
+              DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
+              navbarVisiblePresets.length,
+            ),
+            quickPresetNavSlotLimit,
+          );
       const explicitSlotCount = Math.min(
         Math.max(quickPresetNavPresetIds.length, quickPresetNavIconNames.length, 1),
         quickPresetNavSlotLimit,
@@ -4766,9 +4861,12 @@ export default function App() {
         : explicitSlotCount;
 
       return Array.from({ length: slotCount }, (_, index) => {
-        const presetId = quickPresetNavUsesAutomaticSlots
-          ? menuPresets[index]?.id ?? null
+        const rawPresetId = quickPresetNavUsesAutomaticSlots
+          ? navbarVisiblePresets[index]?.id ?? null
           : quickPresetNavPresetIds[index] ?? null;
+        const presetId = rawPresetId && !navbarHiddenPresetIdSet.has(rawPresetId)
+          ? rawPresetId
+          : null;
         const preset = presetId ? menuPresetById.get(presetId) ?? null : null;
         const iconName = resolveQuickPresetNavSlotIconName(
           index,
@@ -4790,11 +4888,12 @@ export default function App() {
     },
     [
       listMenuTree,
+      navbarHiddenPresetIdSet,
+      navbarVisiblePresets,
       orderedListMenuTree,
       quickPresetNavIconNames,
       quickPresetNavSlotLimit,
       menuPresetById,
-      menuPresets,
       quickPresetNavPresetIds,
       quickPresetNavUsesAutomaticSlots,
     ],
@@ -4810,7 +4909,9 @@ export default function App() {
   const quickPresetNavSettingsSummary = menuPresets.length === 0
     ? 'No saved presets'
     : quickPresetNavUsesAutomaticSlots
-      ? 'Auto first saved presets'
+      ? navbarHiddenPresetIds.length > 0
+        ? `${navbarVisiblePresets.length} in navbar · ${navbarHiddenPresetIds.length} hidden`
+        : 'Auto first saved presets'
       : `${assignedQuickPresetNavCount}/${quickPresetNavItems.length} assigned · ${menuPresets.length} saved`;
   const quickPresetNavCanAddSlot = quickPresetNavItems.length < quickPresetNavSlotLimit;
   const getExplicitQuickPresetNavPresetIds = useCallback(
@@ -6641,6 +6742,11 @@ export default function App() {
     nextPresetIds[slotIndex] = nextPresetId;
     setQuickPresetNavPresetIds(nextPresetIds);
     setQuickPresetNavIconNames(getExplicitQuickPresetNavIconNames());
+    if (nextPresetId) {
+      setNavbarHiddenPresetIds((current) => (
+        current.filter((presetId) => presetId !== nextPresetId)
+      ));
+    }
     triggerSubtleHaptic();
   }, [
     getExplicitQuickPresetNavIconNames,
@@ -6762,6 +6868,15 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
+  const toggleNavbarPresetVisibility = useCallback((id: string) => {
+    setNavbarHiddenPresetIds((current) => (
+      current.includes(id)
+        ? current.filter((presetId) => presetId !== id)
+        : [...current, id]
+    ));
+    triggerSubtleHaptic();
+  }, []);
+
   const removeMenuPreset = useCallback((id: string) => {
     const removed = menuPresets.find((preset) => preset.id === id);
     const shouldResetView = Boolean(
@@ -6777,6 +6892,7 @@ export default function App() {
     );
 
     setMenuPresets((current) => current.filter((preset) => preset.id !== id));
+    setNavbarHiddenPresetIds((current) => current.filter((presetId) => presetId !== id));
     setQuickPresetNavPresetIds((current) => (
       current.length === 0
         ? current
@@ -7476,6 +7592,7 @@ export default function App() {
       listMenuTree,
       listOrderMode,
       menuPresets,
+      navbarHiddenPresetIds,
       quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
@@ -7508,6 +7625,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    navbarHiddenPresetIds,
     pendingDeleteIds,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
@@ -7560,6 +7678,9 @@ export default function App() {
     setListMenuTree(restoredListMenuTree);
     setListOrderMode(backup.payload.settings.listOrderMode);
     setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
+    setNavbarHiddenPresetIds(
+      cloneNavbarHiddenPresetIds(backup.payload.settings.navbarHiddenPresetIds ?? []),
+    );
     setQuickPresetNavIconNames(
       cloneQuickPresetNavIconNames(backup.payload.settings.quickPresetNavIconNames),
     );
@@ -10483,6 +10604,23 @@ export default function App() {
                           </Pressable>
                         ) : null}
 
+                        <View style={styles.settingsNavbarPresetLibrarySection}>
+                          <Text style={styles.settingsNavbarPresetLibraryTitle}>Saved presets</Text>
+                          <Text style={styles.settingsNavbarPresetLibrarySubtitle}>
+                            Swipe to hide presets from the home navbar. Hidden presets stay in the filter menu.
+                          </Text>
+                          <View style={styles.settingsNavbarPresetLibraryList}>
+                            {menuPresets.map((preset) => (
+                              <SettingsNavbarPresetVisibilityRow
+                                hidden={navbarHiddenPresetIdSet.has(preset.id)}
+                                key={preset.id}
+                                label={preset.label}
+                                onToggle={() => toggleNavbarPresetVisibility(preset.id)}
+                              />
+                            ))}
+                          </View>
+                        </View>
+
                         <View style={styles.settingsNavbarPresetToolbar}>
                           <Pressable
                             accessibilityLabel="Add navbar preset icon"
@@ -12218,11 +12356,107 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 17,
   },
+  settingsNavbarPresetLibrarySection: {
+    marginTop: 14,
+  },
+  settingsNavbarPresetLibraryTitle: {
+    color: THEME_TEXT,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0.1,
+    lineHeight: 18,
+  },
+  settingsNavbarPresetLibrarySubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0.1,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  settingsNavbarPresetLibraryList: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginHorizontal: -14,
+    marginTop: 12,
+  },
+  settingsNavbarPresetVisibilityShell: {
+    borderBottomColor: '#F2EBE3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    height: 50,
+    overflow: 'visible',
+  },
+  settingsNavbarPresetVisibilityContainer: {
+    height: 50,
+    overflow: 'visible',
+  },
+  settingsNavbarPresetVisibilityChildren: {
+    backgroundColor: 'transparent',
+  },
+  settingsNavbarPresetVisibilityRow: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    gap: 10,
+    height: 50,
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+  },
+  settingsNavbarPresetVisibilityTitle: {
+    color: THEME_TEXT,
+    flex: 1,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+    minWidth: 0,
+  },
+  settingsNavbarPresetVisibilityPill: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  settingsNavbarPresetVisibilityPillHidden: {
+    backgroundColor: '#F3EEE7',
+  },
+  settingsNavbarPresetVisibilityPillText: {
+    color: THEME_ACCENT,
+    fontSize: 11,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 14,
+  },
+  settingsNavbarPresetVisibilityPillTextHidden: {
+    color: THEME_TEXT_SECONDARY,
+  },
+  settingsNavbarPresetVisibilityActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    height: 50,
+    justifyContent: 'flex-end',
+    width: PRESET_SWIPE_NAVBAR_VISIBILITY_WIDTH,
+  },
+  settingsNavbarPresetVisibilityButton: {
+    alignItems: 'center',
+    backgroundColor: '#8F877F',
+    height: 50,
+    justifyContent: 'center',
+    width: PRESET_SWIPE_NAVBAR_VISIBILITY_WIDTH,
+  },
+  settingsNavbarPresetVisibilityButtonShow: {
+    backgroundColor: THEME_ACCENT,
+  },
+  settingsNavbarPresetVisibilityButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 14,
+    marginTop: 2,
+  },
   settingsNavbarPresetToolbar: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'flex-start',
-    marginTop: 10,
+    marginTop: 14,
   },
   settingsNavbarPresetAddButton: {
     alignItems: 'center',

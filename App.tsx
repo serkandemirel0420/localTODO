@@ -727,11 +727,11 @@ const getAppTodoListItemKey = (item: AppTodoListRow) => {
 
 const getAppTodoListItemType = (item: AppTodoListRow) => {
   if (item.type === 'searchPresetHeader') {
-    return 'searchPresetHeader';
+    return item.isCollapsed ? 'searchPresetHeaderCollapsed' : 'searchPresetHeaderExpanded';
   }
 
   if (item.type === 'searchListHeader') {
-    return 'searchListHeader';
+    return item.isCollapsed ? 'searchListHeaderCollapsed' : 'searchListHeaderExpanded';
   }
 
   if (item.type === 'searchPresetTodo') {
@@ -8027,11 +8027,11 @@ export default function App() {
                   onLongPress={() => openSettingsListKeywordPrompt(item.listIndex)}
                   onPress={() => toggleSearchListCollapsed(item.node.label)}
                   style={({ pressed }) => [
-                    styles.todoSectionHeaderMain,
+                    styles.todoSectionHeaderPressable,
                     pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
-                  <View style={styles.searchListSectionTitleWrap}>
+                  <View style={styles.todoSectionHeaderMain}>
                     {listIconName ? (
                       <MaterialCommunityIcons
                         color={THEME_ACCENT}
@@ -8043,7 +8043,7 @@ export default function App() {
                     <Text
                       numberOfLines={1}
                       style={[
-                        styles.searchSectionTitleText,
+                        styles.todoSectionTitle,
                         item.matchesQuery && styles.searchPresetSectionTitleMatched,
                       ]}
                     >
@@ -8187,19 +8187,21 @@ export default function App() {
                   onLongPress={() => openPresetSearchKeywordPrompt(item.preset)}
                   onPress={() => toggleSearchPresetCollapsed(item.preset.id)}
                   style={({ pressed }) => [
-                    styles.todoSectionHeaderMain,
+                    styles.todoSectionHeaderPressable,
                     pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.searchSectionTitleText,
-                      item.matchesQuery && styles.searchPresetSectionTitleMatched,
-                    ]}
-                  >
-                    {item.preset.label}
-                  </Text>
+                  <View style={styles.todoSectionHeaderMain}>
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.todoSectionTitle,
+                        item.matchesQuery && styles.searchPresetSectionTitleMatched,
+                      ]}
+                    >
+                      {item.preset.label}
+                    </Text>
+                  </View>
                 </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
                   {renderTodoSectionAddButton(
@@ -8334,13 +8336,15 @@ export default function App() {
                   collapsable={false}
                   onPress={() => toggleTodoGroupCollapsed(item.id)}
                   style={({ pressed }) => [
-                    styles.todoSectionHeaderMain,
+                    styles.todoSectionHeaderPressable,
                     pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
-                  <Text numberOfLines={1} style={styles.todoSectionTitle}>
-                    {item.label}
-                  </Text>
+                  <View style={styles.todoSectionHeaderMain}>
+                    <Text numberOfLines={1} style={styles.todoSectionTitle}>
+                      {item.label}
+                    </Text>
+                  </View>
                 </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
                   {renderTodoSectionAddButton(
@@ -13448,13 +13452,17 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     width: '100%',
   },
-  todoSectionHeaderMain: {
-    alignSelf: 'stretch',
+  todoSectionHeaderPressable: {
     flex: 1,
     flexShrink: 1,
-    justifyContent: 'center',
-    minHeight: 24,
     minWidth: 0,
+  },
+  todoSectionHeaderMain: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 24,
+    width: '100%',
   },
   todoGroupHeaderPressed: {
     opacity: 0.72,
@@ -13512,24 +13520,8 @@ const styles = StyleSheet.create({
   searchPresetSectionTitleMatched: {
     color: THEME_ACCENT,
   },
-  searchListSectionTitleWrap: {
-    alignItems: 'center',
-    flex: 1,
-    flexDirection: 'row',
-    flexShrink: 1,
-    gap: 8,
-    minWidth: 0,
-  },
   searchListSectionTitleIcon: {
     flexShrink: 0,
-  },
-  searchSectionTitleText: {
-    color: THEME_TEXT,
-    flexShrink: 1,
-    fontSize: 18,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 22,
-    minWidth: 0,
   },
   searchPresetSectionEmpty: {
     alignItems: 'center',

@@ -107,6 +107,10 @@ import {
 } from './src/google/googleAuthStore';
 import { isDevAppVariant } from './src/appVariant';
 import {
+  resolveMaterialCommunityIconName,
+  type MaterialCommunityIconName,
+} from './src/materialCommunityIcons';
+import {
   cloneFilterColors,
   FILTER_COLOR_SWATCHES,
   getFilterColor,
@@ -504,10 +508,6 @@ const BOTTOM_NAV_HEIGHT = QUICK_PRESET_NAV_HEIGHT + BOTTOM_NAV_PRIMARY_HEIGHT;
 const BOTTOM_NAV_BOTTOM_GAP = Platform.OS === 'android' ? 10 : 0;
 const BOTTOM_NAV_RESERVED_HEIGHT = BOTTOM_NAV_HEIGHT + BOTTOM_NAV_BOTTOM_GAP;
 const HEADER_SEARCH_ROW_HEIGHT = 64;
-type MaterialCommunityIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-const toMaterialCommunityIconName = (iconName: string): MaterialCommunityIconName => (
-  iconName as MaterialCommunityIconName
-);
 const QUICK_PRESET_NAV_ICON_CHOICES = [
   ...DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
   'snail',
@@ -516,7 +516,7 @@ const QUICK_PRESET_NAV_ICON_CHOICES = [
   'paw',
   'flower-outline',
   'horse-variant',
-].map(toMaterialCommunityIconName);
+].map(resolveMaterialCommunityIconName);
 
 type ListIconGroup = {
   icons: MaterialCommunityIconName[];
@@ -534,59 +534,53 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
       'paw',
       'horse-variant',
       'bird',
-      'crow',
-      'dove',
+      'feather',
       'elephant',
       'panda',
       'koala',
-      'fox',
+      'dog',
       'sheep',
       'pig-variant',
       'cow',
-      'chicken',
+      'food-drumstick',
       'snake',
       'spider',
       'bat',
-      'frog',
-      'ant',
-      'mosquito',
-      'parrot',
-      'hedgehog',
-      'deer',
-      'monkey',
+      'bug',
+      'bug-outline',
       'mouse-variant',
-      'hamster',
-      'raccoon',
-      'squirrel',
-      'wolf',
-      'bear',
-      'lion',
-      'tiger',
-      'zebra',
-      'giraffe',
-      'hippo',
-      'rhino',
-      'camel',
+      'forest',
+      'nature-people',
+      'paw-outline',
+      'teddy-bear',
+      'cat',
+      'horse-variant-fast',
+      'horse-human',
+      'water',
       'donkey',
-      'goat',
       'turkey',
-    ].map(toMaterialCommunityIconName),
+      'horseshoe',
+      'island',
+      'dolphin',
+      'shark',
+    ].map(resolveMaterialCommunityIconName),
   },
   {
     title: 'Sea life',
     icons: [
       'dolphin',
-      'whale',
+      'water',
       'shark',
-      'octopus',
-      'crab',
       'jellyfish',
+      'jellyfish-outline',
       'fish',
+      'fishbowl',
       'turtle',
       'waves',
       'sail-boat',
       'anchor',
-    ].map(toMaterialCommunityIconName),
+      'island',
+    ].map(resolveMaterialCommunityIconName),
   },
   {
     title: 'Nature',
@@ -606,7 +600,7 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
       'fruit-grapes',
       'carrot',
       'food-apple-outline',
-    ].map(toMaterialCommunityIconName),
+    ].map(resolveMaterialCommunityIconName),
   },
   {
     title: 'Sky & weather',
@@ -620,10 +614,10 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
       'weather-rainy',
       'weather-snowy',
       'umbrella-outline',
-      'rainbow',
+      'gradient-vertical',
       'rocket-launch-outline',
       'airplane',
-    ].map(toMaterialCommunityIconName),
+    ].map(resolveMaterialCommunityIconName),
   },
   {
     title: 'Cute & fun',
@@ -638,7 +632,7 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
       'party-popper',
       'emoticon-happy-outline',
       'hand-heart-outline',
-    ].map(toMaterialCommunityIconName),
+    ].map(resolveMaterialCommunityIconName),
   },
 ];
 // Menu overlay sits above both nav rows; a small gap keeps the sheet off the nav bar.
@@ -4780,7 +4774,7 @@ export default function App() {
         );
 
         return {
-          iconName: toMaterialCommunityIconName(iconName),
+          iconName: resolveMaterialCommunityIconName(iconName),
           id: `quick-preset-slot-${index + 1}`,
           preset,
           presetId,
@@ -8035,7 +8029,7 @@ export default function App() {
                     {listIconName ? (
                       <MaterialCommunityIcons
                         color={THEME_ACCENT}
-                        name={toMaterialCommunityIconName(listIconName)}
+                        name={resolveMaterialCommunityIconName(listIconName)}
                         size={17}
                         style={styles.searchListSectionTitleIcon}
                       />
@@ -9627,7 +9621,7 @@ export default function App() {
                                     <View style={styles.listMenuIconSlot}>
                                       <MaterialCommunityIcons
                                         color={listColorTheme?.accent ?? '#8F877F'}
-                                        name={toMaterialCommunityIconName(listIconName)}
+                                        name={resolveMaterialCommunityIconName(listIconName)}
                                         size={16}
                                       />
                                     </View>
@@ -11049,7 +11043,7 @@ export default function App() {
                                   color={listIconName ? THEME_ACCENT : '#8F877F'}
                                   name={
                                     listIconName
-                                      ? toMaterialCommunityIconName(listIconName)
+                                      ? resolveMaterialCommunityIconName(listIconName)
                                       : 'paw'
                                   }
                                   size={17}

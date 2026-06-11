@@ -132,6 +132,7 @@ import {
   cloneFilterConfigUiState,
   cloneListMenuTree,
   cloneMenuPresets,
+  clonePinnedMenuPresetIds,
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
@@ -350,9 +351,17 @@ type MenuRow =
   | {
       id: string;
       label: string;
+      pinned: boolean;
       preset: MenuPreset;
       summary: string;
       type: 'preset';
+    }
+  | {
+      id: string;
+      label: string;
+      preset: MenuPreset;
+      summary: string;
+      type: 'pinnedPreset';
     }
   | {
       count?: number;
@@ -835,6 +844,8 @@ const buildSearchListMenuRows = (
 };
 
 const PRESET_SWIPE_DELETE_WIDTH = 72;
+const PRESET_SWIPE_PIN_WIDTH = 72;
+const PRESET_SWIPE_ACTIONS_WIDTH = PRESET_SWIPE_DELETE_WIDTH + PRESET_SWIPE_PIN_WIDTH;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
   list: 'List',
   date: 'Date',
@@ -1648,6 +1659,8 @@ type MenuPresetSwipeRowProps = {
   label: string;
   onDelete: () => void;
   onPress: () => void;
+  onTogglePin: () => void;
+  pinned: boolean;
   summary: string;
 };
 
@@ -1656,11 +1669,27 @@ function MenuPresetSwipeRow({
   label,
   onDelete,
   onPress,
+  onTogglePin,
+  pinned,
   summary,
 }: MenuPresetSwipeRowProps) {
   const renderRightActions = useCallback(
     () => (
       <View style={styles.listMenuPresetSwipeActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={pinned ? `Unpin ${label}` : `Pin ${label}`}
+          accessibilityHint="Pins this preset to the filter menu without adding it to the navbar"
+          activeOpacity={0.82}
+          onPress={onTogglePin}
+          style={styles.listMenuPresetSwipePin}
+        >
+          <Ionicons
+            color="#FFFFFF"
+            name={pinned ? 'pin' : 'pin-outline'}
+            size={22}
+          />
+        </GHTouchableOpacity>
         <GHTouchableOpacity
           accessibilityRole="button"
           accessibilityLabel={`Delete ${label}`}
@@ -1672,7 +1701,7 @@ function MenuPresetSwipeRow({
         </GHTouchableOpacity>
       </View>
     ),
-    [label, onDelete],
+    [label, onDelete, onTogglePin, pinned],
   );
 
   return (
@@ -1683,25 +1712,35 @@ function MenuPresetSwipeRow({
         friction={1.1}
         overshootRight={false}
         renderRightActions={renderRightActions}
-        rightThreshold={PRESET_SWIPE_DELETE_WIDTH}
+        rightThreshold={PRESET_SWIPE_PIN_WIDTH}
       >
         <GHTouchableOpacity
           accessibilityRole="button"
           accessibilityHint={
             actionLabel === 'Edit'
-              ? 'Opens this preset in the filter menu for editing'
-              : 'Applies this preset to the selected item'
+              ? 'Opens this preset in the filter menu for editing. Swipe left to pin or delete.'
+              : 'Applies this preset to the selected item. Swipe left to pin or delete.'
           }
           accessibilityLabel={`${actionLabel} preset ${label}`}
           activeOpacity={1}
           onPress={onPress}
           style={styles.listMenuPresetRow}
         >
-          <View style={styles.listMenuRowTextStack}>
-            <Text style={styles.listMenuRowTitle}>{label}</Text>
-            <Text numberOfLines={1} style={styles.listMenuRowSummary}>
-              {summary}
-            </Text>
+          <View style={styles.listMenuPresetRowLeading}>
+            {pinned ? (
+              <Ionicons
+                color={THEME_ACCENT}
+                name="pin"
+                size={16}
+                style={styles.listMenuPresetPinIcon}
+              />
+            ) : null}
+            <View style={styles.listMenuRowTextStack}>
+              <Text style={styles.listMenuRowTitle}>{label}</Text>
+              <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+                {summary}
+              </Text>
+            </View>
           </View>
           <Text style={styles.listMenuApplyText}>{actionLabel}</Text>
         </GHTouchableOpacity>
@@ -1956,6 +1995,7 @@ export default function App() {
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
+  const [pinnedMenuPresetIds, setPinnedMenuPresetIds] = useState<string[]>([]);
   const [quickPresetNavIconNames, setQuickPresetNavIconNames] = useState<string[]>([]);
   const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
@@ -2173,6 +2213,7 @@ export default function App() {
         setListMenuTree(cloneListMenuTree(settings.listMenuTree));
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
+        setPinnedMenuPresetIds(clonePinnedMenuPresetIds(settings.pinnedMenuPresetIds));
         setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
         setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
         setTodoGroupMode(settings.todoGroupMode);
@@ -2228,6 +2269,9 @@ export default function App() {
     listMenuTree: cloneListMenuTree(
       overrides.listMenuTree ?? listMenuTree,
     ),
+    pinnedMenuPresetIds: clonePinnedMenuPresetIds(
+      overrides.pinnedMenuPresetIds ?? pinnedMenuPresetIds,
+    ),
   }), [
     collapsedTodoGroupIds,
     dateLabelDisplayMode,
@@ -2242,6 +2286,7 @@ export default function App() {
     listMenuTree,
     listOrderMode,
     menuPresets,
+    pinnedMenuPresetIds,
     metaTagVisibility,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
@@ -4729,6 +4774,21 @@ export default function App() {
     () => new Map(menuPresets.map((preset) => [preset.id, preset])),
     [menuPresets],
   );
+  const pinnedMenuPresetIdSet = useMemo(
+    () => new Set(pinnedMenuPresetIds),
+    [pinnedMenuPresetIds],
+  );
+  const orderedMenuPresetsForMenu = useMemo(() => {
+    const pinned = pinnedMenuPresetIds
+      .map((presetId) => menuPresetById.get(presetId))
+      .filter((preset): preset is MenuPreset => Boolean(preset))
+      .map((preset) => ({ pinned: true, preset }));
+    const unpinned = menuPresets
+      .filter((preset) => !pinnedMenuPresetIdSet.has(preset.id))
+      .map((preset) => ({ pinned: false, preset }));
+
+    return [...pinned, ...unpinned];
+  }, [menuPresetById, menuPresets, pinnedMenuPresetIdSet, pinnedMenuPresetIds]);
   const searchKeywordEditTitle = useMemo(() => {
     if (!searchKeywordEditTarget) {
       return '';
@@ -5465,9 +5525,10 @@ export default function App() {
       }
 
       rows.push(
-        ...menuPresets.map((preset) => ({
+        ...orderedMenuPresetsForMenu.map(({ pinned, preset }) => ({
           id: `preset-${preset.id}`,
           label: preset.label,
+          pinned,
           preset,
           summary: formatPresetSummary(
             preset.filters,
@@ -5544,6 +5605,20 @@ export default function App() {
             type: 'updatePreset' as const,
           }]
         : []),
+      ...orderedMenuPresetsForMenu
+        .filter(({ pinned }) => pinned)
+        .map(({ preset }) => ({
+          id: `pinned-preset-${preset.id}`,
+          label: preset.label,
+          preset,
+          summary: formatPresetSummary(
+            preset.filters,
+            preset.todoSortMode,
+            preset.todoGroupMode,
+            preset.listOrderMode,
+          ),
+          type: 'pinnedPreset' as const,
+        })),
       {
         count: menuPresets.length || undefined,
         id: 'main-presets',
@@ -5639,6 +5714,7 @@ export default function App() {
     menuFilters,
     menuMode,
     menuPresets,
+    orderedMenuPresetsForMenu,
     openMenuPreset,
     openMenuPresetHasChanges,
     openQuickPresetNavSlotNumber,
@@ -6762,6 +6838,15 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
+  const togglePinnedMenuPreset = useCallback((id: string) => {
+    setPinnedMenuPresetIds((current) => (
+      current.includes(id)
+        ? current.filter((presetId) => presetId !== id)
+        : [...current, id]
+    ));
+    triggerSubtleHaptic();
+  }, []);
+
   const removeMenuPreset = useCallback((id: string) => {
     const removed = menuPresets.find((preset) => preset.id === id);
     const shouldResetView = Boolean(
@@ -6777,6 +6862,7 @@ export default function App() {
     );
 
     setMenuPresets((current) => current.filter((preset) => preset.id !== id));
+    setPinnedMenuPresetIds((current) => current.filter((presetId) => presetId !== id));
     setQuickPresetNavPresetIds((current) => (
       current.length === 0
         ? current
@@ -7476,6 +7562,7 @@ export default function App() {
       listMenuTree,
       listOrderMode,
       menuPresets,
+      pinnedMenuPresetIds,
       quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
@@ -7509,6 +7596,7 @@ export default function App() {
     menuPresets,
     metaTagVisibility,
     pendingDeleteIds,
+    pinnedMenuPresetIds,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
     selectedFilters,
@@ -7560,6 +7648,9 @@ export default function App() {
     setListMenuTree(restoredListMenuTree);
     setListOrderMode(backup.payload.settings.listOrderMode);
     setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
+    setPinnedMenuPresetIds(
+      clonePinnedMenuPresetIds(backup.payload.settings.pinnedMenuPresetIds ?? []),
+    );
     setQuickPresetNavIconNames(
       cloneQuickPresetNavIconNames(backup.payload.settings.quickPresetNavIconNames),
     );
@@ -9352,6 +9443,20 @@ export default function App() {
   	                            );
   	                          }
 
+                            if (item.type === 'pinnedPreset') {
+                              return (
+                                <MemoizedMenuPresetSwipeRow
+                                  actionLabel="Apply"
+                                  label={item.label}
+                                  onDelete={() => removeMenuPreset(item.preset.id)}
+                                  onPress={() => applyMenuPreset(item.preset)}
+                                  onTogglePin={() => togglePinnedMenuPreset(item.preset.id)}
+                                  pinned
+                                  summary={item.summary}
+                                />
+                              );
+                            }
+
   	                          if (item.type === 'preset') {
   	                            return (
   	                              <MemoizedMenuPresetSwipeRow
@@ -9363,6 +9468,8 @@ export default function App() {
                                         ? applyMenuPreset(item.preset)
                                         : openMenuPresetEditor(item.preset)
                                     )}
+                                    onTogglePin={() => togglePinnedMenuPreset(item.preset.id)}
+                                    pinned={item.pinned}
   	                                summary={item.summary}
   	                              />
   	                            );
@@ -13266,14 +13373,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   listMenuPresetSwipeActions: {
-    width: PRESET_SWIPE_DELETE_WIDTH,
+    width: PRESET_SWIPE_ACTIONS_WIDTH,
     height: LIST_MENU_ROW_HEIGHT,
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    backgroundColor: '#CF413A',
     borderTopRightRadius: 12,
     borderBottomRightRadius: 12,
+    overflow: 'hidden',
+  },
+  listMenuPresetSwipePin: {
+    width: PRESET_SWIPE_PIN_WIDTH,
+    height: LIST_MENU_ROW_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: THEME_ACCENT,
   },
   listMenuPresetSwipeDelete: {
     width: PRESET_SWIPE_DELETE_WIDTH,
@@ -13281,6 +13395,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#CF413A',
+  },
+  listMenuPresetRowLeading: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    minWidth: 0,
+  },
+  listMenuPresetPinIcon: {
+    marginRight: 8,
   },
   listMenuIconSlot: {
     alignItems: 'center',

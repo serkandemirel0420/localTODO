@@ -10604,23 +10604,6 @@ export default function App() {
                           </Pressable>
                         ) : null}
 
-                        <View style={styles.settingsNavbarPresetLibrarySection}>
-                          <Text style={styles.settingsNavbarPresetLibraryTitle}>Saved presets</Text>
-                          <Text style={styles.settingsNavbarPresetLibrarySubtitle}>
-                            Swipe to hide presets from the home navbar. Hidden presets stay in the filter menu.
-                          </Text>
-                          <View style={styles.settingsNavbarPresetLibraryList}>
-                            {menuPresets.map((preset) => (
-                              <SettingsNavbarPresetVisibilityRow
-                                hidden={navbarHiddenPresetIdSet.has(preset.id)}
-                                key={preset.id}
-                                label={preset.label}
-                                onToggle={() => toggleNavbarPresetVisibility(preset.id)}
-                              />
-                            ))}
-                          </View>
-                        </View>
-
                         <View style={styles.settingsNavbarPresetToolbar}>
                           <Pressable
                             accessibilityLabel="Add navbar preset icon"
@@ -11140,15 +11123,31 @@ export default function App() {
                       </Pressable>
                     </View>
 
-                    {listOrderMode === 'manual' && listMenuTree.length > 1 ? (
-                      <Text style={styles.settingsListReorderHint}>
-                        Press and hold to select a list, then tap another to swap. Tap when none selected to edit search keywords.
-                      </Text>
-                    ) : (
-                      <Text style={styles.settingsListReorderHint}>
-                        Tap a list to edit search keywords.
-                      </Text>
-                    )}
+                    {menuPresets.length > 0 ? (
+                      <View style={styles.settingsNavbarPresetLibrarySection}>
+                        <Text style={styles.settingsNavbarPresetLibraryTitle}>Navbar presets</Text>
+                        <Text style={styles.settingsNavbarPresetLibrarySubtitle}>
+                          These shortcuts appear on the home navbar. Swipe to hide without deleting.
+                        </Text>
+                        <View style={styles.settingsNavbarPresetLibraryList}>
+                          {menuPresets.map((preset) => (
+                            <SettingsNavbarPresetVisibilityRow
+                              hidden={navbarHiddenPresetIdSet.has(preset.id)}
+                              key={preset.id}
+                              label={preset.label}
+                              onToggle={() => toggleNavbarPresetVisibility(preset.id)}
+                            />
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+
+                    <Text style={styles.settingsListSectionDividerTitle}>List filters</Text>
+                    <Text style={styles.settingsListSectionDividerSubtitle}>
+                      {listOrderMode === 'manual' && listMenuTree.length > 1
+                        ? 'Press and hold to reorder. Tap to edit search keywords.'
+                        : 'Tap a list to edit search keywords.'}
+                    </Text>
 
                     <View style={styles.settingsListEditor}>
                       {listMenuTree.map((item, index) => {
@@ -12189,6 +12188,22 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 12,
   },
+  settingsListSectionDividerTitle: {
+    color: THEME_TEXT,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0.1,
+    lineHeight: 18,
+    marginTop: 16,
+  },
+  settingsListSectionDividerSubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0.1,
+    lineHeight: 16,
+    marginTop: 2,
+  },
   settingsListMenuOrderSection: {
     borderTopColor: '#F2EBE3',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -12357,7 +12372,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   settingsNavbarPresetLibrarySection: {
-    marginTop: 14,
+    marginTop: 16,
   },
   settingsNavbarPresetLibraryTitle: {
     color: THEME_TEXT,

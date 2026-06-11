@@ -48,6 +48,8 @@ export type BackupTodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' |
 
 export type BackupListMenuNode = {
   label: string;
+  iconName?: string;
+  searchKeywords?: string;
   children?: BackupListMenuNode[];
   sortMode?: BackupTodoSortMode;
   groupMode?: BackupTodoGroupMode;
@@ -58,6 +60,7 @@ export type BackupListMenuNode = {
 export type BackupMenuPreset = {
   id: string;
   label: string;
+  searchKeywords?: string;
   filters: TodoFilters;
   listOrderMode: BackupListOrderMode;
   todoGroupMode: BackupTodoGroupMode;
@@ -197,9 +200,17 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
   const groupMode = parseOptionalBackupTodoGroupMode(item.groupMode);
   const subsectionSortMode = parseOptionalBackupTodoSortMode(item.subsectionSortMode);
   const subsectionGroupMode = parseOptionalBackupTodoGroupMode(item.subsectionGroupMode);
+  const iconName = typeof item.iconName === 'string' && item.iconName.trim()
+    ? item.iconName.trim()
+    : undefined;
+  const searchKeywords = typeof item.searchKeywords === 'string'
+    ? item.searchKeywords.replace(/\s+/g, ' ').trim()
+    : '';
 
   return {
     label,
+    ...(iconName ? { iconName } : {}),
+    ...(searchKeywords ? { searchKeywords } : {}),
     ...(sortMode !== undefined ? { sortMode } : {}),
     ...(groupMode !== undefined ? { groupMode } : {}),
     ...(subsectionSortMode !== undefined ? { subsectionSortMode } : {}),
@@ -211,6 +222,8 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
 const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
   nodes.map((node) => ({
     label: node.label,
+    ...(node.iconName ? { iconName: node.iconName } : {}),
+    ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
     sortMode: node.sortMode,
     groupMode: node.groupMode,
     subsectionSortMode: node.subsectionSortMode,
@@ -222,6 +235,7 @@ const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
   presets.map((preset) => ({
     id: preset.id,
     label: preset.label,
+    ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
     filters: cloneTodoFilters(preset.filters),
     listOrderMode: preset.listOrderMode,
     todoGroupMode: preset.todoGroupMode,
@@ -238,7 +252,11 @@ const flattenBackupListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuN
       const key = item.label.toLocaleLowerCase();
       if (!seen.has(key)) {
         seen.add(key);
-        flattened.push({ label: item.label });
+        flattened.push({
+          label: item.label,
+          ...(item.iconName ? { iconName: item.iconName } : {}),
+          ...(item.searchKeywords ? { searchKeywords: item.searchKeywords } : {}),
+        });
       }
 
       if (item.children?.length) {
@@ -283,10 +301,14 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
       const createdAt = typeof item.createdAt === 'number' && Number.isFinite(item.createdAt)
         ? item.createdAt
         : 0;
+      const searchKeywords = typeof item.searchKeywords === 'string'
+        ? item.searchKeywords.replace(/\s+/g, ' ').trim()
+        : '';
 
       return {
         id,
         label,
+        ...(searchKeywords ? { searchKeywords } : {}),
         filters: normalizeTodoFilters(item.filters),
         listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
         todoGroupMode: normalizeBackupTodoGroupMode(item.todoGroupMode),

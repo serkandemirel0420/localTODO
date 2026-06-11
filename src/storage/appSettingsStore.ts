@@ -32,6 +32,8 @@ export type TodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' | 'prio
 
 export type StoredListMenuNode = {
   label: string;
+  iconName?: string;
+  searchKeywords?: string;
   children?: StoredListMenuNode[];
   sortMode?: TodoSortMode;
   groupMode?: TodoGroupMode;
@@ -49,6 +51,7 @@ export type ActiveListDisplaySettings = {
 export type StoredMenuPreset = {
   id: string;
   label: string;
+  searchKeywords?: string;
   filters: TodoFilters;
   listOrderMode: ListOrderMode;
   todoGroupMode: TodoGroupMode;
@@ -253,6 +256,8 @@ export type AppSettings = {
 export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNode[] =>
   nodes.map((node) => ({
     label: node.label,
+    ...(node.iconName ? { iconName: node.iconName } : {}),
+    ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
     sortMode: node.sortMode,
     groupMode: node.groupMode,
     subsectionSortMode: node.subsectionSortMode,
@@ -264,6 +269,7 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
   presets.map((preset) => ({
     id: preset.id,
     label: preset.label,
+    ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
     filters: cloneTodoFilters(preset.filters),
     listOrderMode: preset.listOrderMode,
     todoGroupMode: preset.todoGroupMode,
@@ -482,6 +488,15 @@ const normalizeTodoSortMode = (value: unknown): TodoSortMode => {
   }
 
   return 'newest';
+};
+
+const normalizeMenuPresetSearchKeywords = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const keywords = value.replace(/\s+/g, ' ').trim();
+  return keywords ? keywords : undefined;
 };
 
 const parseOptionalTodoSortMode = (value: unknown): TodoSortMode | undefined => {
@@ -748,9 +763,15 @@ const normalizeListMenuTreeNodes = (
       const groupMode = parseOptionalTodoGroupMode(item.groupMode);
       const subsectionSortMode = parseOptionalTodoSortMode(item.subsectionSortMode);
       const subsectionGroupMode = parseOptionalTodoGroupMode(item.subsectionGroupMode);
+      const iconName = typeof item.iconName === 'string' && item.iconName.trim()
+        ? item.iconName.trim()
+        : undefined;
+      const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
 
       return {
         label,
+        ...(iconName ? { iconName } : {}),
+        ...(searchKeywords ? { searchKeywords } : {}),
         ...(sortMode !== undefined ? { sortMode } : {}),
         ...(groupMode !== undefined ? { groupMode } : {}),
         ...(subsectionSortMode !== undefined ? { subsectionSortMode } : {}),
@@ -789,10 +810,12 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
       const createdAt = typeof item.createdAt === 'number' && Number.isFinite(item.createdAt)
         ? item.createdAt
         : 0;
+      const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
 
       return {
         id,
         label,
+        ...(searchKeywords ? { searchKeywords } : {}),
         filters: normalizeTodoFilters(item.filters),
         listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
         todoGroupMode: normalizeTodoGroupMode(item.todoGroupMode),

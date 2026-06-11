@@ -34,12 +34,15 @@ export type StoredListMenuNode = {
   label: string;
   iconName?: string;
   searchKeywords?: string;
+  pinnedToNavbar?: boolean;
   children?: StoredListMenuNode[];
   sortMode?: TodoSortMode;
   groupMode?: TodoGroupMode;
   subsectionSortMode?: TodoSortMode;
   subsectionGroupMode?: TodoGroupMode;
 };
+
+export const isListPinnedToNavbar = (node: StoredListMenuNode) => node.pinnedToNavbar !== false;
 
 export type ActiveListDisplaySettings = {
   listLabel: string | null;
@@ -258,6 +261,7 @@ export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNo
     label: node.label,
     ...(node.iconName ? { iconName: node.iconName } : {}),
     ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
+    ...(node.pinnedToNavbar === false ? { pinnedToNavbar: false } : {}),
     sortMode: node.sortMode,
     groupMode: node.groupMode,
     subsectionSortMode: node.subsectionSortMode,
@@ -772,6 +776,7 @@ const normalizeListMenuTreeNodes = (
         label,
         ...(iconName ? { iconName } : {}),
         ...(searchKeywords ? { searchKeywords } : {}),
+        ...(item.pinnedToNavbar === false ? { pinnedToNavbar: false } : {}),
         ...(sortMode !== undefined ? { sortMode } : {}),
         ...(groupMode !== undefined ? { groupMode } : {}),
         ...(subsectionSortMode !== undefined ? { subsectionSortMode } : {}),
@@ -861,7 +866,6 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     ),
     normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
   );
-
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
     dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),

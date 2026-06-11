@@ -50,6 +50,7 @@ export type BackupListMenuNode = {
   label: string;
   iconName?: string;
   searchKeywords?: string;
+  pinnedToNavbar?: boolean;
   children?: BackupListMenuNode[];
   sortMode?: BackupTodoSortMode;
   groupMode?: BackupTodoGroupMode;
@@ -211,6 +212,7 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
     label,
     ...(iconName ? { iconName } : {}),
     ...(searchKeywords ? { searchKeywords } : {}),
+    ...(item.pinnedToNavbar === false ? { pinnedToNavbar: false } : {}),
     ...(sortMode !== undefined ? { sortMode } : {}),
     ...(groupMode !== undefined ? { groupMode } : {}),
     ...(subsectionSortMode !== undefined ? { subsectionSortMode } : {}),
@@ -224,6 +226,7 @@ const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
     label: node.label,
     ...(node.iconName ? { iconName: node.iconName } : {}),
     ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
+    ...(node.pinnedToNavbar === false ? { pinnedToNavbar: false } : {}),
     sortMode: node.sortMode,
     groupMode: node.groupMode,
     subsectionSortMode: node.subsectionSortMode,
@@ -427,7 +430,6 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       ? settings.quickPresetDefaultsVersion
       : 0,
   );
-
   return {
     app: 'localTODO',
     exportedAt: typeof value.exportedAt === 'string' ? value.exportedAt : new Date().toISOString(),

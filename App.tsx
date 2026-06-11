@@ -6884,6 +6884,42 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistListMenuTree]);
 
+  const moveSettingsList = useCallback((index: number, direction: -1 | 1) => {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= listMenuTree.length) {
+      return;
+    }
+
+    const movedLabel = listMenuTree[index]?.label;
+    const swappedLabel = listMenuTree[targetIndex]?.label;
+
+    setListOrderMode('manual');
+    setListMenuTree((current) => {
+      const nextTargetIndex = index + direction;
+      if (nextTargetIndex < 0 || nextTargetIndex >= current.length) {
+        return current;
+      }
+
+      const next = [...current];
+      [next[index], next[nextTargetIndex]] = [next[nextTargetIndex], next[index]];
+      persistListMenuTree(next);
+      return next;
+    });
+    void persistAppSettings({ listOrderMode: 'manual' });
+
+    if (movedLabel && swappedLabel) {
+      startMovedListHighlights([movedLabel, swappedLabel]);
+    }
+
+    setSettingsListReorderIndex(null);
+    triggerSubtleHaptic();
+  }, [
+    listMenuTree,
+    persistAppSettings,
+    persistListMenuTree,
+    startMovedListHighlights,
+  ]);
+
   const handleSettingsListReorderPress = useCallback((index: number) => {
     if (listOrderMode !== 'manual') {
       return;
@@ -10529,12 +10565,12 @@ export default function App() {
                                     }
                                   }}
                                 >
-                                  <View
+                                  <Animated.View
                                     collapsable={false}
                                     style={styles.settingsNavbarPresetDragZone}
                                   >
                                     <Text style={styles.settingsNavbarPresetDragHandle}>☰</Text>
-                                  </View>
+                                  </Animated.View>
                                 </PanGestureHandler>
                                 <View style={styles.settingsNavbarPresetSlotIcon}>
                                   <MaterialCommunityIcons
@@ -11004,7 +11040,7 @@ export default function App() {
 
                     {listOrderMode === 'manual' && listMenuTree.length > 1 ? (
                       <Text style={styles.settingsListReorderHint}>
-                        Press and hold to select a list, then tap another to swap. Tap when none selected to edit search keywords.
+                        Drag ☰ to reorder, or press and hold a list then tap another to swap. Tap when none selected to edit search keywords.
                       </Text>
                     ) : (
                       <Text style={styles.settingsListReorderHint}>
@@ -11029,6 +11065,25 @@ export default function App() {
                             ]}
                           >
                             <View style={styles.settingsListRowContent}>
+                              {listOrderMode === 'manual' && listMenuTree.length > 1 ? (
+                                <PanGestureHandler
+                                  activeOffsetY={[-6, 6]}
+                                  failOffsetX={[-18, 18]}
+                                  onHandlerStateChange={(event) => {
+                                    const { state, translationY } = event.nativeEvent;
+                                    if (state === State.END && Math.abs(translationY) > 18) {
+                                      moveSettingsList(index, translationY > 0 ? 1 : -1);
+                                    }
+                                  }}
+                                >
+                                  <Animated.View
+                                    collapsable={false}
+                                    style={styles.settingsListDragZone}
+                                  >
+                                    <Text style={styles.settingsListDragHandle}>☰</Text>
+                                  </Animated.View>
+                                </PanGestureHandler>
+                              ) : null}
                               <Pressable
                                 accessibilityRole="button"
                                 accessibilityState={{ expanded: isIconPickerOpen }}
@@ -12100,6 +12155,18 @@ const styles = StyleSheet.create({
     gap: 10,
     minHeight: 34,
     minWidth: 0,
+  },
+  settingsListDragZone: {
+    alignItems: 'center',
+    height: 34,
+    justifyContent: 'center',
+    width: 24,
+  },
+  settingsListDragHandle: {
+    color: THEME_TEXT_TERTIARY,
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
   },
   settingsListIconButton: {
     alignItems: 'center',

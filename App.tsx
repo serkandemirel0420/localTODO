@@ -6884,6 +6884,51 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistListMenuTree]);
 
+  const moveSettingsList = useCallback((index: number, direction: -1 | 1) => {
+    if (listOrderMode !== 'manual') {
+      return;
+    }
+
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= listMenuTree.length) {
+      return;
+    }
+
+    const fromLabel = listMenuTree[index]?.label;
+    const toLabel = listMenuTree[targetIndex]?.label;
+
+    setListMenuTree((current) => {
+      const next = [...current];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      persistListMenuTree(next);
+      return next;
+    });
+
+    if (fromLabel && toLabel) {
+      startMovedListHighlights([fromLabel, toLabel]);
+    }
+
+    setSettingsListReorderIndex(null);
+    setSettingsListIconPickerIndex((current) => {
+      if (current === null) {
+        return null;
+      }
+      if (current === index) {
+        return targetIndex;
+      }
+      if (current === targetIndex) {
+        return index;
+      }
+      return current;
+    });
+    triggerSubtleHaptic();
+  }, [
+    listMenuTree,
+    listOrderMode,
+    persistListMenuTree,
+    startMovedListHighlights,
+  ]);
+
   const handleSettingsListReorderPress = useCallback((index: number) => {
     if (listOrderMode !== 'manual') {
       return;
@@ -11002,13 +11047,55 @@ export default function App() {
                       </Pressable>
                     </View>
 
+                    <View style={styles.settingsListMenuOrderSection}>
+                      <Text style={styles.settingsListMenuOrderTitle}>List menu order</Text>
+                      <Text style={styles.settingsListMenuOrderSubtitle}>
+                        Applies to the lists menu only
+                      </Text>
+                      <View style={styles.settingsSegmentedControl}>
+                        {(['alphabetical', 'manual'] as ListOrderMode[]).map((mode) => {
+                          const selected = listOrderMode === mode;
+                          return (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityState={{ selected }}
+                              key={mode}
+                              onPress={() => {
+                                setListOrderMode(mode);
+                                if (mode === 'alphabetical') {
+                                  setSettingsListReorderIndex(null);
+                                }
+                                void persistAppSettings({ listOrderMode: mode });
+                              }}
+                              style={({ pressed }) => [
+                                styles.settingsSegmentButton,
+                                selected && styles.settingsSegmentButtonSelected,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.settingsSegmentButtonText,
+                                  selected && styles.settingsSegmentButtonTextSelected,
+                                ]}
+                              >
+                                {mode === 'alphabetical' ? 'Alphabetical' : 'Manual'}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+
                     {listOrderMode === 'manual' && listMenuTree.length > 1 ? (
                       <Text style={styles.settingsListReorderHint}>
-                        Press and hold to select a list, then tap another to swap. Tap when none selected to edit search keywords.
+                        Drag the handle to reorder. Tap a list name to edit search keywords.
                       </Text>
                     ) : (
                       <Text style={styles.settingsListReorderHint}>
-                        Tap a list to edit search keywords.
+                        {listOrderMode === 'manual'
+                          ? 'Add another list to reorder.'
+                          : 'Switch to Manual above to reorder lists. Tap a list to edit search keywords.'}
                       </Text>
                     )}
 
@@ -11018,6 +11105,7 @@ export default function App() {
                         const isRecentlyMoved = recentlyMovedListLabels.has(item.label);
                         const isIconPickerOpen = settingsListIconPickerIndex === index;
                         const listIconName = item.iconName;
+                        const canDragReorder = listOrderMode === 'manual' && listMenuTree.length > 1;
 
                         return (
                         <View key={`${item.label}-${index}`} style={styles.settingsListGroup}>
@@ -11028,6 +11116,27 @@ export default function App() {
                               isRecentlyMoved && styles.settingsListRowRecentlyMoved,
                             ]}
                           >
+                            {canDragReorder ? (
+                              <PanGestureHandler
+                                activeOffsetY={[-6, 6]}
+                                failOffsetX={[-18, 18]}
+                                onHandlerStateChange={(event) => {
+                                  const { state, translationY } = event.nativeEvent;
+                                  if (state === State.END && Math.abs(translationY) > 18) {
+                                    moveSettingsList(index, translationY > 0 ? 1 : -1);
+                                  }
+                                }}
+                              >
+                                <View
+                                  accessibilityLabel={`Reorder ${item.label}`}
+                                  accessibilityRole="adjustable"
+                                  collapsable={false}
+                                  style={styles.settingsListDragZone}
+                                >
+                                  <Text style={styles.settingsListDragHandle}>☰</Text>
+                                </View>
+                              </PanGestureHandler>
+                            ) : null}
                             <View style={styles.settingsListRowContent}>
                               <Pressable
                                 accessibilityRole="button"
@@ -11162,46 +11271,6 @@ export default function App() {
                         </View>
                         );
                       })}
-                    </View>
-
-                    <View style={styles.settingsListMenuOrderSection}>
-                      <Text style={styles.settingsListMenuOrderTitle}>List menu order</Text>
-                      <Text style={styles.settingsListMenuOrderSubtitle}>
-                        Applies to the lists menu only
-                      </Text>
-                      <View style={styles.settingsSegmentedControl}>
-                        {(['alphabetical', 'manual'] as ListOrderMode[]).map((mode) => {
-                          const selected = listOrderMode === mode;
-                          return (
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityState={{ selected }}
-                              key={mode}
-                              onPress={() => {
-                                setListOrderMode(mode);
-                                if (mode === 'alphabetical') {
-                                  setSettingsListReorderIndex(null);
-                                }
-                                void persistAppSettings({ listOrderMode: mode });
-                              }}
-                              style={({ pressed }) => [
-                                styles.settingsSegmentButton,
-                                selected && styles.settingsSegmentButtonSelected,
-                                pressed && styles.settingsOptionRowPressed,
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.settingsSegmentButtonText,
-                                  selected && styles.settingsSegmentButtonTextSelected,
-                                ]}
-                              >
-                                {mode === 'alphabetical' ? 'Alphabetical' : 'Manual'}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
                     </View>
                   </View>
                 ) : null}
@@ -12052,12 +12121,19 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   settingsListMenuOrderSection: {
-    borderTopColor: '#F2EBE3',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    marginHorizontal: -14,
     marginTop: 14,
-    paddingHorizontal: 14,
-    paddingTop: 14,
+  },
+  settingsListDragZone: {
+    alignItems: 'center',
+    height: 38,
+    justifyContent: 'center',
+    width: 24,
+  },
+  settingsListDragHandle: {
+    color: THEME_TEXT_TERTIARY,
+    fontSize: 16,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
   },
   settingsListMenuOrderTitle: {
     color: THEME_TEXT,

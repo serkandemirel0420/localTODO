@@ -710,12 +710,12 @@ const getTodoListItemType = (item: VisibleTodoListRow) => {
 const getAppTodoListItemKey = (item: AppTodoListRow) => {
   if (item.type === 'searchPresetHeader') {
     const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
-    return `search-preset:${item.preset.id}:${collapseState}:${item.count}`;
+    return `search-preset:${item.preset.id}:${collapseState}:${item.count}:${item.matchesQuery ? 1 : 0}`;
   }
 
   if (item.type === 'searchListHeader') {
     const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
-    return `search-list:${item.node.label}:${collapseState}:${item.count}`;
+    return `search-list:${item.node.label}:${collapseState}:${item.count}:${item.matchesQuery ? 1 : 0}`;
   }
 
   if (item.type === 'searchPresetTodo' || item.type === 'searchListTodo') {
@@ -727,11 +727,11 @@ const getAppTodoListItemKey = (item: AppTodoListRow) => {
 
 const getAppTodoListItemType = (item: AppTodoListRow) => {
   if (item.type === 'searchPresetHeader') {
-    return item.isCollapsed ? 'searchPresetHeaderCollapsed' : 'searchPresetHeaderExpanded';
+    return 'searchPresetHeader';
   }
 
   if (item.type === 'searchListHeader') {
-    return item.isCollapsed ? 'searchListHeaderCollapsed' : 'searchListHeaderExpanded';
+    return 'searchListHeader';
   }
 
   if (item.type === 'searchPresetTodo') {
@@ -1072,6 +1072,63 @@ type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
 type CreateDrawerPicker = 'date' | 'list' | 'priority';
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
+
+const LIST_SUBSECTION_NOT_SECTIONED_LABEL = 'Not Sectioned';
+
+const getCreateFiltersForSectionHeader = (
+  sectionId: string,
+  sectionLabel: string,
+): TodoFilters => {
+  const base = cloneTodoFilters();
+
+  if (sectionId.startsWith('group-list-')) {
+    const key = sectionId.slice('group-list-'.length);
+    if (key === 'No list') {
+      return base;
+    }
+
+    const notSectionedSuffix = `::${LIST_SUBSECTION_NOT_SECTIONED_LABEL}`;
+    if (key.endsWith(notSectionedSuffix)) {
+      const parentLabel = key.slice(0, -notSectionedSuffix.length);
+      return { ...base, list: [parentLabel] };
+    }
+
+    return { ...base, list: [key] };
+  }
+
+  if (sectionId.startsWith('group-priority-')) {
+    const key = sectionId.slice('group-priority-'.length);
+    if (key === 'No priority') {
+      return base;
+    }
+
+    return { ...base, priority: [key] };
+  }
+
+  if (sectionId.startsWith('group-date-')) {
+    const key = sectionId.slice('group-date-'.length);
+    if (key === 'No date') {
+      return base;
+    }
+
+    return { ...base, date: [key] };
+  }
+
+  if (sectionId.startsWith('subsection-')) {
+    if (sectionLabel === LIST_SUBSECTION_NOT_SECTIONED_LABEL) {
+      const prefix = 'subsection-';
+      const suffix = `-${LIST_SUBSECTION_NOT_SECTIONED_LABEL}`;
+      if (sectionId.endsWith(suffix)) {
+        const parentLabel = sectionId.slice(prefix.length, -suffix.length);
+        return { ...base, list: [parentLabel] };
+      }
+    }
+
+    return { ...base, list: [sectionLabel] };
+  }
+
+  return base;
+};
 
 const getDefaultCreateDraftFilters = (
   listMenuTree: ListMenuNode[],
@@ -1923,8 +1980,12 @@ export default function App() {
     () => cloneMetaTagVisibility(),
   );
   const [newListName, setNewListName] = useState('');
+  const [settingsListReorderIndex, setSettingsListReorderIndex] = useState<number | null>(null);
   const [settingsListIconPickerIndex, setSettingsListIconPickerIndex] = useState<number | null>(
     null,
+  );
+  const [recentlyMovedListLabels, setRecentlyMovedListLabels] = useState<Set<string>>(
+    () => new Set(),
   );
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
@@ -1955,6 +2016,9 @@ export default function App() {
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const movedListHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
@@ -3433,6 +3497,46 @@ export default function App() {
     setCreateFromSettingsCueVisible(false);
   }, []);
 
+  const openCreateDrawerWithFilters = useCallback((
+    sectionFilters: TodoFilters,
+    initialText = '',
+  ) => {
+    if (listMenuOpen) {
+      closeListMenu();
+    }
+
+    const nextFilters = getCreateTodoFilters(listMenuTree, sectionFilters);
+
+    exitTodoSelectMode();
+    searchInputRef.current?.blur();
+    setCreateDrawerPicker(null);
+    setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
+    setCreateDraftContent('');
+    setCreateDraftText(
+      truncateTodoText(
+        initialText.trim().replace(/\s+/g, ' '),
+        todoTextMaxLength,
+      ),
+    );
+    setCreateDraftPinned(false);
+    setCreateDraftFilters(nextFilters);
+    setDatePickerVisible(false);
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
+    Keyboard.dismiss();
+    hideCreateFromSettingsCue();
+    setCreateDrawerVisible(true);
+    triggerSubtleHaptic();
+  }, [
+    closeListMenu,
+    exitTodoSelectMode,
+    hideCreateFromSettingsCue,
+    listMenuOpen,
+    listMenuTree,
+    todoTextMaxLength,
+  ]);
+
   const openCreateDrawerFromTodoSettings = useCallback((sourceTodo: Todo) => {
     if (listMenuOpen) {
       closeListMenu();
@@ -4821,6 +4925,7 @@ export default function App() {
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       recentlyEditedTodoKey,
+      searchQueryKey: query.trim(),
       selectedTodoKey,
     }),
     [
@@ -4830,6 +4935,7 @@ export default function App() {
       collapsedSearchPresetKey,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
+      query,
       recentlyEditedTodoKey,
       repeatingTodoCompletionFeedbackKey,
       selectedTodoKey,
@@ -6721,6 +6827,43 @@ export default function App() {
     triggerSubtleHaptic();
   }, [newListName, persistListMenuTree]);
 
+  const startMovedListHighlights = useCallback((labels: Iterable<string>) => {
+    const targetLabels = [...new Set(labels)].filter(Boolean);
+
+    if (targetLabels.length === 0) {
+      return;
+    }
+
+    setRecentlyMovedListLabels((current) => {
+      const next = new Set(current);
+      targetLabels.forEach((label) => next.add(label));
+      return next;
+    });
+
+    targetLabels.forEach((label) => {
+      const existingTimer = movedListHighlightTimersRef.current.get(label);
+
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+
+      const timer = setTimeout(() => {
+        movedListHighlightTimersRef.current.delete(label);
+        setRecentlyMovedListLabels((current) => {
+          if (!current.has(label)) {
+            return current;
+          }
+
+          const next = new Set(current);
+          next.delete(label);
+          return next;
+        });
+      }, EDITED_TODO_HIGHLIGHT_DURATION_MS);
+
+      movedListHighlightTimersRef.current.set(label, timer);
+    });
+  }, []);
+
   const setSettingsListIcon = useCallback((index: number, iconName: string | null) => {
     setListMenuTree((current) => {
       const next = current.map((item, itemIndex) => {
@@ -6741,7 +6884,69 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistListMenuTree]);
 
+  const handleSettingsListReorderPress = useCallback((index: number) => {
+    if (listOrderMode !== 'manual') {
+      return;
+    }
+
+    if (settingsListReorderIndex === null) {
+      setSettingsListReorderIndex(index);
+      triggerSubtleHaptic();
+      return;
+    }
+
+    if (settingsListReorderIndex === index) {
+      setSettingsListReorderIndex(null);
+      triggerSubtleHaptic();
+      return;
+    }
+
+    const fromIndex = settingsListReorderIndex;
+    const fromLabel = listMenuTree[fromIndex]?.label;
+    const toLabel = listMenuTree[index]?.label;
+
+    setListOrderMode('manual');
+    setListMenuTree((current) => {
+      const next = [...current];
+      [next[fromIndex], next[index]] = [next[index], next[fromIndex]];
+      persistListMenuTree(next);
+      return next;
+    });
+    void persistAppSettings({ listOrderMode: 'manual' });
+
+    if (fromLabel && toLabel) {
+      startMovedListHighlights([fromLabel, toLabel]);
+    }
+
+    setSettingsListReorderIndex(null);
+    triggerSubtleHaptic();
+  }, [
+    listMenuTree,
+    listOrderMode,
+    persistAppSettings,
+    persistListMenuTree,
+    settingsListReorderIndex,
+    startMovedListHighlights,
+  ]);
+
+  const handleSettingsListMainPress = useCallback((index: number) => {
+    if (listOrderMode === 'manual' && settingsListReorderIndex !== null) {
+      handleSettingsListReorderPress(index);
+      return;
+    }
+
+    openSettingsListKeywordPrompt(index);
+  }, [
+    handleSettingsListReorderPress,
+    listOrderMode,
+    openSettingsListKeywordPrompt,
+    settingsListReorderIndex,
+  ]);
+
   const removeSettingsList = useCallback((index: number) => {
+    setSettingsListReorderIndex((current) => (
+      current === null || current === index ? null : current > index ? current - 1 : current
+    ));
     setSettingsListIconPickerIndex((current) => (
       current === null || current === index ? null : current > index ? current - 1 : current
     ));
@@ -6800,7 +7005,9 @@ export default function App() {
     setSettingsDoneExpanded(false);
     setSettingsListsExpanded(false);
     setSettingsNavbarPresetsExpanded(false);
+    setSettingsListReorderIndex(null);
     setSettingsListIconPickerIndex(null);
+    setRecentlyMovedListLabels(new Set());
     setSettingsModalVisible(true);
     triggerSubtleHaptic();
   }, [closeListMenuState, exitTodoSelectMode]);
@@ -7762,6 +7969,31 @@ export default function App() {
     [],
   );
 
+  const renderTodoSectionAddButton = useCallback((
+    accessibilityLabel: string,
+    sectionFilters: TodoFilters,
+  ) => {
+    if (todoSelectMode) {
+      return null;
+    }
+
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityHint="Opens the new todo drawer for this section"
+        accessibilityLabel={accessibilityLabel}
+        hitSlop={6}
+        onPress={() => openCreateDrawerWithFilters(sectionFilters, searchQuery)}
+        style={({ pressed }) => [
+          styles.todoSectionAddButton,
+          pressed && styles.todoSectionAddButtonPressed,
+        ]}
+      >
+        <Ionicons color={NAV_ACCENT} name="add-circle-outline" size={20} />
+      </Pressable>
+    );
+  }, [openCreateDrawerWithFilters, searchQuery, todoSelectMode]);
+
   const renderTodoItem = useCallback(
     ({ item }: { item: AppTodoListRow }) => {
       if (item.type === 'searchListHeader') {
@@ -7779,42 +8011,51 @@ export default function App() {
                 hasExpandedTodos && styles.todoSectionCardShadowExpanded,
               ]}
             >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityHint="Tap to expand or collapse. Press and hold to edit hidden search keywords."
-                accessibilityLabel={`List ${item.node.label}, ${item.count} items`}
-                accessibilityState={{ expanded: isExpanded }}
-                collapsable={false}
-                onLongPress={() => openSettingsListKeywordPrompt(item.listIndex)}
-                onPress={() => toggleSearchListCollapsed(item.node.label)}
-                style={({ pressed }) => [
+              <View
+                style={[
                   styles.todoSectionCard,
                   hasExpandedTodos && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
-                  pressed && styles.todoGroupHeaderPressed,
                 ]}
               >
-                <View style={styles.searchListSectionTitleWrap}>
-                  {listIconName ? (
-                    <MaterialCommunityIcons
-                      color={THEME_ACCENT}
-                      name={toMaterialCommunityIconName(listIconName)}
-                      size={17}
-                      style={styles.searchListSectionTitleIcon}
-                    />
-                  ) : null}
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.todoSectionTitle,
-                      styles.searchListSectionTitle,
-                      item.matchesQuery && styles.searchPresetSectionTitleMatched,
-                    ]}
-                  >
-                    {item.node.label}
-                  </Text>
-                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityHint="Tap to expand or collapse. Press and hold to edit hidden search keywords."
+                  accessibilityLabel={`List ${item.node.label}, ${item.count} items`}
+                  accessibilityState={{ expanded: isExpanded }}
+                  collapsable={false}
+                  onLongPress={() => openSettingsListKeywordPrompt(item.listIndex)}
+                  onPress={() => toggleSearchListCollapsed(item.node.label)}
+                  style={({ pressed }) => [
+                    styles.todoSectionHeaderMain,
+                    pressed && styles.todoGroupHeaderPressed,
+                  ]}
+                >
+                  <View style={styles.searchListSectionTitleWrap}>
+                    {listIconName ? (
+                      <MaterialCommunityIcons
+                        color={THEME_ACCENT}
+                        name={toMaterialCommunityIconName(listIconName)}
+                        size={17}
+                        style={styles.searchListSectionTitleIcon}
+                      />
+                    ) : null}
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.searchSectionTitleText,
+                        item.matchesQuery && styles.searchPresetSectionTitleMatched,
+                      ]}
+                    >
+                      {item.node.label}
+                    </Text>
+                  </View>
+                </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
+                  {renderTodoSectionAddButton(
+                    `Add todo to ${item.node.label}`,
+                    { ...cloneTodoFilters(), list: [item.node.label] },
+                  )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
@@ -7822,7 +8063,7 @@ export default function App() {
                     size={18}
                   />
                 </View>
-              </Pressable>
+              </View>
               {isExpanded && item.count === 0 ? (
                 <View
                   style={[
@@ -7930,31 +8171,41 @@ export default function App() {
                 hasExpandedTodos && styles.todoSectionCardShadowExpanded,
               ]}
             >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityHint="Tap to expand or collapse. Press and hold to edit hidden search keywords."
-                accessibilityLabel={`Preset ${item.preset.label}, ${item.count} items`}
-                accessibilityState={{ expanded: isExpanded }}
-                collapsable={false}
-                onLongPress={() => openPresetSearchKeywordPrompt(item.preset)}
-                onPress={() => toggleSearchPresetCollapsed(item.preset.id)}
-                style={({ pressed }) => [
+              <View
+                style={[
                   styles.todoSectionCard,
                   hasExpandedTodos && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
-                  pressed && styles.todoGroupHeaderPressed,
                 ]}
               >
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.todoSectionTitle,
-                    item.matchesQuery && styles.searchPresetSectionTitleMatched,
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityHint="Tap to expand or collapse. Press and hold to edit hidden search keywords."
+                  accessibilityLabel={`Preset ${item.preset.label}, ${item.count} items`}
+                  accessibilityState={{ expanded: isExpanded }}
+                  collapsable={false}
+                  onLongPress={() => openPresetSearchKeywordPrompt(item.preset)}
+                  onPress={() => toggleSearchPresetCollapsed(item.preset.id)}
+                  style={({ pressed }) => [
+                    styles.todoSectionHeaderMain,
+                    pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
-                  {item.preset.label}
-                </Text>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.searchSectionTitleText,
+                      item.matchesQuery && styles.searchPresetSectionTitleMatched,
+                    ]}
+                  >
+                    {item.preset.label}
+                  </Text>
+                </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
+                  {renderTodoSectionAddButton(
+                    `Add todo to ${item.preset.label}`,
+                    cloneTodoFilters(item.preset.filters),
+                  )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
@@ -7962,7 +8213,7 @@ export default function App() {
                     size={18}
                   />
                 </View>
-              </Pressable>
+              </View>
               {isExpanded && item.count === 0 ? (
                 <View
                   style={[
@@ -8069,26 +8320,33 @@ export default function App() {
                 isExpanded && styles.todoSectionCardShadowExpanded,
               ]}
             >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ expanded: isExpanded }}
-                accessibilityLabel={`${item.label}, ${item.count} items`}
-                collapsable={false}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  toggleTodoGroupCollapsed(item.id);
-                }}
-                style={({ pressed }) => [
+              <View
+                style={[
                   styles.todoSectionCard,
                   isExpanded && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
-                  pressed && styles.todoGroupHeaderPressed,
                 ]}
               >
-                <Text numberOfLines={1} style={styles.todoSectionTitle}>
-                  {item.label}
-                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: isExpanded }}
+                  accessibilityLabel={`${item.label}, ${item.count} items`}
+                  collapsable={false}
+                  onPress={() => toggleTodoGroupCollapsed(item.id)}
+                  style={({ pressed }) => [
+                    styles.todoSectionHeaderMain,
+                    pressed && styles.todoGroupHeaderPressed,
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.todoSectionTitle}>
+                    {item.label}
+                  </Text>
+                </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
+                  {renderTodoSectionAddButton(
+                    `Add todo to ${item.label}`,
+                    getCreateFiltersForSectionHeader(item.id, item.label),
+                  )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
@@ -8096,7 +8354,7 @@ export default function App() {
                     size={18}
                   />
                 </View>
-              </Pressable>
+              </View>
             </View>
           </View>
         );
@@ -8254,7 +8512,9 @@ export default function App() {
       toggleSearchListCollapsed,
       toggleSearchPresetCollapsed,
       openCreateDrawerFromTodoSettings,
+      openCreateDrawerWithFilters,
       openTodoDetailModal,
+      renderTodoSectionAddButton,
       openMenuForTodoAction,
       pendingDeleteIds,
       recentlyEditedTodoIds,
@@ -8431,7 +8691,9 @@ export default function App() {
                           ? 'Try a different search term.'
                           : hideDoneTodos
                             ? 'Done items are hidden.'
-                            : 'Tap + to add a todo.'}
+                            : todoListGroupMode !== 'none' || showSearchPresetSections
+                              ? 'Tap + on a section to add a todo.'
+                              : 'Tap + in the bar below to add a todo.'}
                       </Text>
                     </View>
                   )
@@ -8497,19 +8759,6 @@ export default function App() {
                           textAlignVertical="center"
                           value={query}
                         />
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityHint="Opens the new todo drawer"
-                          accessibilityLabel="Add todo"
-                          hitSlop={8}
-                          onPress={() => openCreateDrawer(query)}
-                          style={({ pressed }) => [
-                            styles.searchBoxAddButton,
-                            pressed && styles.searchBoxAddButtonPressed,
-                          ]}
-                        >
-                          <Ionicons color={NAV_ACCENT} name="add-circle" size={22} />
-                        </Pressable>
                       </View>
                     </View>
                   </View>
@@ -10697,7 +10946,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Lists</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {listMenuTree.length} items · Newest first
+                      {listMenuTree.length} items · {listOrderMode === 'manual' ? 'Manual order' : 'Newest first'}
                     </Text>
                   </View>
                   <Pressable
@@ -10749,18 +10998,32 @@ export default function App() {
                       </Pressable>
                     </View>
 
-                    <Text style={styles.settingsListReorderHint}>
-                      Tap a list to edit search keywords.
-                    </Text>
+                    {listOrderMode === 'manual' && listMenuTree.length > 1 ? (
+                      <Text style={styles.settingsListReorderHint}>
+                        Press and hold to select a list, then tap another to swap. Tap when none selected to edit search keywords.
+                      </Text>
+                    ) : (
+                      <Text style={styles.settingsListReorderHint}>
+                        Tap a list to edit search keywords.
+                      </Text>
+                    )}
 
                     <View style={styles.settingsListEditor}>
                       {listMenuTree.map((item, index) => {
+                        const isReorderSelected = settingsListReorderIndex === index;
+                        const isRecentlyMoved = recentlyMovedListLabels.has(item.label);
                         const isIconPickerOpen = settingsListIconPickerIndex === index;
                         const listIconName = item.iconName;
 
                         return (
                         <View key={`${item.label}-${index}`} style={styles.settingsListGroup}>
-                          <View style={styles.settingsListRow}>
+                          <View
+                            style={[
+                              styles.settingsListRow,
+                              isReorderSelected && styles.settingsListRowReorderSelected,
+                              isRecentlyMoved && styles.settingsListRowRecentlyMoved,
+                            ]}
+                          >
                             <View style={styles.settingsListRowContent}>
                               <Pressable
                                 accessibilityRole="button"
@@ -10790,9 +11053,21 @@ export default function App() {
                               </Pressable>
                               <Pressable
                                 accessibilityRole="button"
-                                accessibilityHint="Tap to edit search keywords."
+                                accessibilityState={{ selected: isReorderSelected }}
+                                accessibilityHint={
+                                  listOrderMode === 'manual'
+                                    ? settingsListReorderIndex !== null
+                                      ? 'Tap another list to swap order, or the selected list to deselect.'
+                                      : 'Tap to edit search keywords. Press and hold to select for reordering.'
+                                    : 'Tap to edit search keywords.'
+                                }
                                 accessibilityLabel={item.label}
-                                onPress={() => openSettingsListKeywordPrompt(index)}
+                                onLongPress={() => {
+                                  if (listOrderMode === 'manual') {
+                                    handleSettingsListReorderPress(index);
+                                  }
+                                }}
+                                onPress={() => handleSettingsListMainPress(index)}
                                 style={({ pressed }) => [
                                   styles.settingsListMainPress,
                                   pressed && styles.settingsListRowPressed,
@@ -10900,6 +11175,9 @@ export default function App() {
                               key={mode}
                               onPress={() => {
                                 setListOrderMode(mode);
+                                if (mode === 'alphabetical') {
+                                  setSettingsListReorderIndex(null);
+                                }
                                 void persistAppSettings({ listOrderMode: mode });
                               }}
                               style={({ pressed }) => [
@@ -11902,6 +12180,12 @@ const styles = StyleSheet.create({
   settingsListRowPressed: {
     opacity: 0.72,
   },
+  settingsListRowReorderSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  settingsListRowRecentlyMoved: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
   settingsListActions: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -12578,19 +12862,7 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     height: 48,
     letterSpacing: 0,
-    minWidth: 0,
     paddingVertical: 0,
-  },
-  searchBoxAddButton: {
-    alignItems: 'center',
-    flexShrink: 0,
-    height: 32,
-    justifyContent: 'center',
-    marginLeft: 4,
-    width: 32,
-  },
-  searchBoxAddButtonPressed: {
-    opacity: 0.72,
   },
   listShell: {
     backgroundColor: THEME_BG,
@@ -13176,6 +13448,14 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     width: '100%',
   },
+  todoSectionHeaderMain: {
+    alignSelf: 'stretch',
+    flex: 1,
+    flexShrink: 1,
+    justifyContent: 'center',
+    minHeight: 24,
+    minWidth: 0,
+  },
   todoGroupHeaderPressed: {
     opacity: 0.72,
   },
@@ -13183,7 +13463,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     flexShrink: 0,
-    gap: 8,
+    gap: 6,
+  },
+  todoSectionAddButton: {
+    alignItems: 'center',
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  todoSectionAddButtonPressed: {
+    opacity: 0.72,
   },
   todoSectionTitle: {
     color: THEME_TEXT,
@@ -13227,14 +13516,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
+    flexShrink: 1,
     gap: 8,
     minWidth: 0,
   },
   searchListSectionTitleIcon: {
     flexShrink: 0,
   },
-  searchListSectionTitle: {
-    flex: 1,
+  searchSectionTitleText: {
+    color: THEME_TEXT,
+    flexShrink: 1,
+    fontSize: 18,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 22,
+    minWidth: 0,
   },
   searchPresetSectionEmpty: {
     alignItems: 'center',

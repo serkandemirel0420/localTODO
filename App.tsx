@@ -13,6 +13,8 @@ import React, {
 } from 'react';
 import {
   Alert,
+  AppState,
+  type AppStateStatus,
   Animated,
   BackHandler,
   Easing,
@@ -737,11 +739,13 @@ const getAppTodoListItemKey = (item: AppTodoListRow) => {
 
 const getAppTodoListItemType = (item: AppTodoListRow) => {
   if (item.type === 'searchPresetHeader') {
-    return item.isCollapsed ? 'searchPresetHeaderCollapsed' : 'searchPresetHeaderExpanded';
+    const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
+    return `searchPresetHeader:${item.preset.id}:${collapseState}`;
   }
 
   if (item.type === 'searchListHeader') {
-    return item.isCollapsed ? 'searchListHeaderCollapsed' : 'searchListHeaderExpanded';
+    const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
+    return `searchListHeader:${item.id}:${collapseState}`;
   }
 
   if (item.type === 'searchPresetTodo') {
@@ -1116,13 +1120,14 @@ const LIST_SUBSECTION_NOT_SECTIONED_LABEL = 'Not Sectioned';
 const getCreateFiltersForSectionHeader = (
   sectionId: string,
   sectionLabel: string,
+  currentFilters: TodoFilters = cloneTodoFilters(),
 ): TodoFilters => {
-  const base = cloneTodoFilters();
+  const base = cloneTodoFilters(currentFilters);
 
   if (sectionId.startsWith('group-list-')) {
     const key = sectionId.slice('group-list-'.length);
     if (key === 'No list') {
-      return base;
+      return { ...base, list: [] };
     }
 
     const notSectionedSuffix = `::${LIST_SUBSECTION_NOT_SECTIONED_LABEL}`;
@@ -1137,7 +1142,7 @@ const getCreateFiltersForSectionHeader = (
   if (sectionId.startsWith('group-priority-')) {
     const key = sectionId.slice('group-priority-'.length);
     if (key === 'No priority') {
-      return base;
+      return { ...base, priority: [] };
     }
 
     return { ...base, priority: [key] };
@@ -1146,7 +1151,7 @@ const getCreateFiltersForSectionHeader = (
   if (sectionId.startsWith('group-date-')) {
     const key = sectionId.slice('group-date-'.length);
     if (key === 'No date') {
-      return base;
+      return { ...base, date: [] };
     }
 
     return { ...base, date: [key] };
@@ -1808,7 +1813,7 @@ function SettingsListSwipeRow({
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Tap to edit search keywords."
+              accessibilityHint="Tap to edit list name and search keywords."
               accessibilityLabel={label}
               onPress={onMainPress}
               style={({ pressed }) => [
@@ -2315,6 +2320,7 @@ export default function App() {
     SearchKeywordEditTarget | null
   >(null);
   const [searchKeywordDraft, setSearchKeywordDraft] = useState('');
+  const [searchKeywordTitleDraft, setSearchKeywordTitleDraft] = useState('');
   const searchKeywordModalVisible = searchKeywordEditTarget !== null;
   const [editingMenuPresetId, setEditingMenuPresetId] = useState<string | null>(null);
   const [openMenuPresetId, setOpenMenuPresetId] = useState<string | null>(null);
@@ -2395,6 +2401,7 @@ export default function App() {
   const createInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
   const presetSearchKeywordInputRef = useRef<TextInput>(null);
+  const listSearchKeywordTitleInputRef = useRef<TextInput>(null);
   const todoDetailContentInputRef = useRef<TextInput>(null);
   const todoDetailDraftTodoIdRef = useRef<string | null>(null);
   const listMenuRef = useRef<GestureFlatList<BottomMenuItem> | null>(null);
@@ -2417,6 +2424,7 @@ export default function App() {
   );
   const todoUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todoUndoSequenceRef = useRef(0);
+  const todoAlarmResumeSyncAtRef = useRef(0);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -2570,6 +2578,27 @@ export default function App() {
 
     return () => {
       alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncAlarmsOnActive = (nextState: AppStateStatus) => {
+      if (nextState !== 'active' || !loadedRef.current) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - todoAlarmResumeSyncAtRef.current < 1000) {
+        return;
+      }
+
+      todoAlarmResumeSyncAtRef.current = now;
+      reconcileTodoAlarms(todosRef.current).catch(() => undefined);
+    };
+
+    const subscription = AppState.addEventListener('change', syncAlarmsOnActive);
+    return () => {
+      subscription.remove();
     };
   }, []);
 
@@ -3596,6 +3625,7 @@ export default function App() {
     Keyboard.dismiss();
     setSearchKeywordEditTarget(null);
     setSearchKeywordDraft('');
+    setSearchKeywordTitleDraft('');
   }, []);
 
   const backToCreateDrawerInput = useCallback(() => {
@@ -3646,6 +3676,7 @@ export default function App() {
     setPresetSaveName('');
     setSearchKeywordEditTarget(null);
     setSearchKeywordDraft('');
+    setSearchKeywordTitleDraft('');
     setNotificationTodoRevealId(id);
     setQuery('');
     setItemSearchState(null);
@@ -3924,10 +3955,14 @@ export default function App() {
       closeListMenu();
     }
 
+    const seedFilters = hasRememberedCreateDraftFilters(listMenuTree, selectedFilters)
+      ? selectedFilters
+      : lastCreateTodoFilters;
+
     exitTodoSelectMode();
     searchInputRef.current?.blur();
     setCreateDrawerPicker(null);
-    resetCreateDrawerState();
+    resetCreateDrawerState(seedFilters);
     setCreateDraftText(
       truncateTodoText(
         initialText.trim().replace(/\s+/g, ' '),
@@ -3937,7 +3972,16 @@ export default function App() {
     Keyboard.dismiss();
     setCreateDrawerVisible(true);
     triggerSubtleHaptic();
-  }, [closeListMenu, exitTodoSelectMode, listMenuOpen, resetCreateDrawerState, todoTextMaxLength]);
+  }, [
+    closeListMenu,
+    exitTodoSelectMode,
+    lastCreateTodoFilters,
+    listMenuOpen,
+    listMenuTree,
+    resetCreateDrawerState,
+    selectedFilters,
+    todoTextMaxLength,
+  ]);
 
   const showCreateFromSettingsCue = useCallback(() => {
     setCreateFromSettingsCueVisible(true);
@@ -5221,16 +5265,35 @@ export default function App() {
     [menuPresets],
   );
   const searchKeywordEditTitle = useMemo(() => {
-    if (!searchKeywordEditTarget) {
+    if (!searchKeywordEditTarget || searchKeywordEditTarget.kind === 'list') {
       return '';
     }
 
-    if (searchKeywordEditTarget.kind === 'list') {
-      return listMenuTree[searchKeywordEditTarget.listIndex]?.label ?? 'List';
+    return menuPresetById.get(searchKeywordEditTarget.presetId)?.label ?? 'Preset';
+  }, [menuPresetById, searchKeywordEditTarget]);
+  const searchKeywordModalSaveDisabled = useMemo(() => {
+    if (!searchKeywordEditTarget || searchKeywordEditTarget.kind !== 'list') {
+      return false;
     }
 
-    return menuPresetById.get(searchKeywordEditTarget.presetId)?.label ?? 'Preset';
-  }, [listMenuTree, menuPresetById, searchKeywordEditTarget]);
+    const formattedTitle = formatListLabel(searchKeywordTitleDraft);
+    if (!formattedTitle) {
+      return true;
+    }
+
+    const currentItem = listMenuTree[searchKeywordEditTarget.listIndex];
+    if (!currentItem) {
+      return true;
+    }
+
+    if (formattedTitle.toLocaleLowerCase() === currentItem.label.toLocaleLowerCase()) {
+      return false;
+    }
+
+    return collectListNodeLabels(listMenuTree).some(
+      (label) => label.toLocaleLowerCase() === formattedTitle.toLocaleLowerCase(),
+    );
+  }, [listMenuTree, searchKeywordEditTarget, searchKeywordTitleDraft]);
   const quickPresetNavSlotLimit = Math.min(
     Math.max(
       DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
@@ -5270,7 +5333,7 @@ export default function App() {
 
       for (let index = 0; index < slotCount; index += 1) {
         const list = listMenuTree[index];
-        if (list?.showInNavbar === false) {
+        if (!quickPresetNavUsesAutomaticSlots && list?.showInNavbar === false) {
           continue;
         }
 
@@ -5587,6 +5650,7 @@ export default function App() {
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
   const includeActiveTodoReminderRows = hasTodoEditTargets;
   const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
+  const selectedFilterCount = countFilters(selectedFilters);
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
   const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
@@ -6853,8 +6917,13 @@ export default function App() {
     menuFilters,
   ]);
 
-  const schedulePresetSearchKeywordInputFocus = useCallback(() => {
+  const scheduleSearchKeywordModalInputFocus = useCallback(() => {
     const attemptFocus = () => {
+      if (searchKeywordEditTarget?.kind === 'list') {
+        listSearchKeywordTitleInputRef.current?.focus();
+        return;
+      }
+
       presetSearchKeywordInputRef.current?.focus();
     };
 
@@ -6867,7 +6936,7 @@ export default function App() {
     return () => {
       timers.forEach(clearTimeout);
     };
-  }, []);
+  }, [searchKeywordEditTarget?.kind]);
 
   const openPresetSearchKeywordPrompt = useCallback((preset: MenuPreset) => {
     triggerSubtleHaptic();
@@ -6886,8 +6955,79 @@ export default function App() {
     triggerSubtleHaptic();
     Keyboard.dismiss();
     setSearchKeywordEditTarget({ kind: 'list', listIndex });
+    setSearchKeywordTitleDraft(listItem.label);
     setSearchKeywordDraft(listItem.searchKeywords ?? '');
   }, [listMenuTree]);
+
+  const applyListLabelRename = useCallback((oldLabel: string, newLabel: string) => {
+    if (oldLabel === newLabel) {
+      return;
+    }
+
+    const replaceLabel = (labels: string[]) => labels.map(
+      (label) => (label === oldLabel ? newLabel : label),
+    );
+
+    setSelectedFilters((filters) => ({
+      ...filters,
+      list: replaceLabel(filters.list),
+    }));
+    setLastCreateTodoFilters((filters) => ({
+      ...filters,
+      list: replaceLabel(filters.list),
+    }));
+    setCollapsedSearchListLabels((current) => {
+      if (!current.has(oldLabel)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.delete(oldLabel);
+      next.add(newLabel);
+      return next;
+    });
+    setFilterColors((colors) => {
+      if (!(oldLabel in colors.list)) {
+        return colors;
+      }
+
+      const nextList = { ...colors.list };
+      const existingColor = nextList[oldLabel];
+      delete nextList[oldLabel];
+      if (existingColor !== undefined) {
+        nextList[newLabel] = existingColor;
+      }
+
+      return { ...colors, list: nextList };
+    });
+    setMenuPresets((current) => current.map((preset) => ({
+      ...preset,
+      filters: {
+        ...preset.filters,
+        list: replaceLabel(preset.filters.list),
+      },
+    })));
+    setDeletedTodos((current) => current.map((todo) => ({
+      ...todo,
+      filters: {
+        ...todo.filters,
+        list: replaceLabel(todo.filters.list),
+      },
+    })));
+    setTodos((items) => {
+      const nextItems = items.map((todo) => ({
+        ...todo,
+        filters: {
+          ...todo.filters,
+          list: replaceLabel(todo.filters.list),
+        },
+      }));
+      localTodoStore
+        .upsertMany(nextItems.filter((todo) => !pendingDeleteIds.has(todo.id)))
+        .catch(() => undefined);
+      return nextItems;
+    });
+  }, [pendingDeleteIds]);
 
   const commitSearchKeywords = useCallback((rawKeywords: string) => {
     if (!searchKeywordEditTarget) {
@@ -6908,18 +7048,43 @@ export default function App() {
       )));
     } else {
       const { listIndex } = searchKeywordEditTarget;
+      const currentItem = listMenuTree[listIndex];
+      if (!currentItem) {
+        return;
+      }
+
+      const newLabel = formatListLabel(searchKeywordTitleDraft);
+      if (!newLabel) {
+        return;
+      }
+
+      const oldLabel = currentItem.label;
+      const labelChanged = oldLabel !== newLabel;
+      if (labelChanged) {
+        const hasDuplicate = collectListNodeLabels(listMenuTree).some(
+          (label) => label.toLocaleLowerCase() === newLabel.toLocaleLowerCase(),
+        );
+        if (hasDuplicate) {
+          return;
+        }
+
+        applyListLabelRename(oldLabel, newLabel);
+      }
+
       setListMenuTree((current) => {
         const next = current.map((item, itemIndex) => {
           if (itemIndex !== listIndex) {
             return item;
           }
 
+          let updated = labelChanged ? { ...item, label: newLabel } : item;
+
           if (!searchKeywords) {
-            const { searchKeywords: _removed, ...rest } = item;
+            const { searchKeywords: _removed, ...rest } = updated;
             return rest;
           }
 
-          return { ...item, searchKeywords };
+          return { ...updated, searchKeywords };
         });
         persistListMenuTree(next);
         return next;
@@ -6929,9 +7094,12 @@ export default function App() {
     closeSearchKeywordModal();
     triggerSubtleHaptic();
   }, [
+    applyListLabelRename,
     closeSearchKeywordModal,
+    listMenuTree,
     persistListMenuTree,
     searchKeywordEditTarget,
+    searchKeywordTitleDraft,
   ]);
 
   const focusPresetSaveInput = useCallback(() => {
@@ -6962,7 +7130,7 @@ export default function App() {
       return undefined;
     }
 
-    const clearFocusTimers = schedulePresetSearchKeywordInputFocus();
+    const clearFocusTimers = scheduleSearchKeywordModalInputFocus();
     const keyboardHideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     let keyboardHideFocusTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -6972,7 +7140,14 @@ export default function App() {
       }
 
       keyboardHideFocusTimer = setTimeout(
-        () => presetSearchKeywordInputRef.current?.focus(),
+        () => {
+          if (searchKeywordEditTarget?.kind === 'list') {
+            listSearchKeywordTitleInputRef.current?.focus();
+            return;
+          }
+
+          presetSearchKeywordInputRef.current?.focus();
+        },
         Platform.OS === 'ios' ? 80 : 0,
       );
     });
@@ -6984,7 +7159,11 @@ export default function App() {
         clearTimeout(keyboardHideFocusTimer);
       }
     };
-  }, [schedulePresetSearchKeywordInputFocus, searchKeywordModalVisible]);
+  }, [
+    scheduleSearchKeywordModalInputFocus,
+    searchKeywordEditTarget?.kind,
+    searchKeywordModalVisible,
+  ]);
 
   const applyMenuPreset = useCallback((
     preset: MenuPreset,
@@ -7520,20 +7699,26 @@ export default function App() {
 
     if (!todoSelectMode && sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
       lastFilterNavTapRef.current = 0;
-      clearNotificationTodoReveal();
-      setSelectedFilters(cloneTodoFilters());
-      setTodoSortMode('newest');
-      setTodoGroupMode('none');
-      setListOrderMode('alphabetical');
-      setOpenMenuPresetId(null);
-      setOpenQuickPresetNavSlotNumber(null);
-      triggerSubtleHaptic();
+      setActiveTodoMenuId(null);
+      setNavTab('calendar');
+      openFilterConfigModal();
       return;
     }
 
     lastFilterNavTapRef.current = timestamp;
+    if (!todoSelectMode && selectedFilterCount > 0) {
+      showTodoItems();
+      return;
+    }
+
     handleNavTabPress('calendar');
-  }, [clearNotificationTodoReveal, handleNavTabPress, todoSelectMode]);
+  }, [
+    handleNavTabPress,
+    openFilterConfigModal,
+    selectedFilterCount,
+    showTodoItems,
+    todoSelectMode,
+  ]);
 
   const handleSearchNavPress = useCallback((event: GestureResponderEvent) => {
     const timestamp = event.nativeEvent.timestamp || Date.now();
@@ -8328,9 +8513,10 @@ export default function App() {
         const isExpanded = !item.isCollapsed;
         const hasExpandedTodos = isExpanded && item.count > 0;
         const listIconName = item.node.iconName;
+        const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
-          <View>
+          <View key={headerLayoutKey} collapsable={false}>
             {renderVisibleTodoRowGap(item.gapBefore)}
             <View
               collapsable={false}
@@ -8359,7 +8545,7 @@ export default function App() {
                     pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
-                  <View style={styles.todoSectionHeaderMain}>
+                  <View collapsable={false} style={styles.todoSectionHeaderMain}>
                     {listIconName ? (
                       <MaterialCommunityIcons
                         color={THEME_ACCENT}
@@ -8564,9 +8750,10 @@ export default function App() {
       if (item.type === 'searchPresetHeader') {
         const isExpanded = !item.isCollapsed;
         const hasExpandedTodos = isExpanded && item.count > 0;
+        const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
-          <View>
+          <View key={headerLayoutKey} collapsable={false}>
             {renderVisibleTodoRowGap(item.gapBefore)}
             <View
               collapsable={false}
@@ -8595,7 +8782,7 @@ export default function App() {
                     pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
-                  <View style={styles.todoSectionHeaderMain}>
+                  <View collapsable={false} style={styles.todoSectionHeaderMain}>
                     <Text
                       numberOfLines={1}
                       style={[
@@ -8753,7 +8940,7 @@ export default function App() {
                 <View style={styles.todoSectionHeaderMeta}>
                   {renderTodoSectionAddButton(
                     `Add todo to ${item.label}`,
-                    getCreateFiltersForSectionHeader(item.id, item.label),
+                    getCreateFiltersForSectionHeader(item.id, item.label, selectedFilters),
                   )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
@@ -8928,6 +9115,7 @@ export default function App() {
       recentlyEditedTodoIds,
       repeatingTodoCompletionFeedbackIds,
       renderVisibleTodoRowGap,
+      selectedFilters,
       selectedTodoIds,
       setTodoDone,
       itemSearchHighlightQuery,
@@ -9369,7 +9557,7 @@ export default function App() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Opens filters; quick second tap clears selected filters"
+              accessibilityHint="Shows filtered results; quick double tap opens filters"
               accessibilityLabel="Filters"
               accessibilityState={{ selected: filterConfigModalVisible }}
               onPress={handleFilterNavPress}
@@ -11469,7 +11657,7 @@ export default function App() {
           animationType="fade"
           onRequestClose={closeSearchKeywordModal}
           onShow={() => {
-            schedulePresetSearchKeywordInputFocus();
+            scheduleSearchKeywordModalInputFocus();
           }}
           presentationStyle="overFullScreen"
           transparent
@@ -11491,9 +11679,39 @@ export default function App() {
             <View style={styles.presetSaveModalCenter}>
               <View style={styles.presetSaveModalCard}>
                 <Text numberOfLines={2} style={styles.presetSaveModalTitle}>
-                  {searchKeywordEditTitle}
+                  {searchKeywordEditTarget?.kind === 'list'
+                    ? 'Edit list'
+                    : searchKeywordEditTitle}
                 </Text>
-                <Text style={styles.presetSaveModalMessage}>
+                {searchKeywordEditTarget?.kind === 'list' ? (
+                  <TextInput
+                    ref={listSearchKeywordTitleInputRef}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    autoFocus
+                    onChangeText={setSearchKeywordTitleDraft}
+                    onPressIn={() => {
+                      listSearchKeywordTitleInputRef.current?.focus();
+                    }}
+                    onSubmitEditing={() => {
+                      presetSearchKeywordInputRef.current?.focus();
+                    }}
+                    placeholder="List name"
+                    placeholderTextColor="#A69D94"
+                    returnKeyType="next"
+                    selectTextOnFocus
+                    showSoftInputOnFocus
+                    style={styles.presetSaveModalInput}
+                    submitBehavior="submit"
+                    value={searchKeywordTitleDraft}
+                  />
+                ) : null}
+                <Text
+                  style={[
+                    styles.presetSaveModalMessage,
+                    searchKeywordEditTarget?.kind === 'list' && styles.presetSaveModalFieldMessage,
+                  ]}
+                >
                   {searchKeywordEditTarget?.kind === 'list'
                     ? 'Hidden words for matching this list from Search.'
                     : 'Hidden words for matching this preset from Search.'}
@@ -11502,7 +11720,7 @@ export default function App() {
                   ref={presetSearchKeywordInputRef}
                   autoCapitalize="sentences"
                   autoCorrect
-                  autoFocus
+                  autoFocus={searchKeywordEditTarget?.kind !== 'list'}
                   blurOnSubmit
                   multiline
                   numberOfLines={2}
@@ -11522,6 +11740,7 @@ export default function App() {
                   style={[
                     styles.presetSaveModalInput,
                     styles.presetSearchKeywordModalInput,
+                    searchKeywordEditTarget?.kind === 'list' && styles.presetSaveModalInputFollowUp,
                   ]}
                   submitBehavior="submit"
                   textAlignVertical="top"
@@ -11541,10 +11760,12 @@ export default function App() {
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
+                    disabled={searchKeywordModalSaveDisabled}
                     onPress={() => commitSearchKeywords(searchKeywordDraft)}
                     style={({ pressed }) => [
                       styles.presetSaveModalButton,
                       styles.presetSaveModalButtonPrimary,
+                      searchKeywordModalSaveDisabled && styles.settingsButtonDisabled,
                       pressed && styles.presetSaveModalButtonPressed,
                     ]}
                   >
@@ -11867,6 +12088,12 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
     marginTop: 6,
+  },
+  presetSaveModalFieldMessage: {
+    marginTop: 14,
+  },
+  presetSaveModalInputFollowUp: {
+    marginTop: 12,
   },
   presetSaveModalInput: {
     minHeight: 46,
@@ -13646,15 +13873,21 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   todoSectionHeaderPressable: {
+    alignSelf: 'stretch',
     flex: 1,
+    flexBasis: 0,
     flexShrink: 1,
+    justifyContent: 'center',
+    minHeight: 24,
     minWidth: 0,
   },
   todoSectionHeaderMain: {
     alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
     gap: 8,
     minHeight: 24,
+    minWidth: 0,
     width: '100%',
   },
   todoGroupHeaderPressed: {

@@ -21,6 +21,9 @@
       "package": "com.localtodo.app",
       "versionCode": 4,
       "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ],
       "icon": "./assets/icon.png"
     },
     "plugins": [

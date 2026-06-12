@@ -1,5 +1,10 @@
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import {
+  Alert,
+  Linking,
+  NativeModules,
+  Platform,
+} from 'react-native';
 
 import {
   resolveDateFilterValueDate,
@@ -17,8 +22,19 @@ const TODO_ALARM_CHANNEL_ID = 'todo-alarms';
 const TODO_ALARM_IDENTIFIER_PREFIX = 'local-todo:todo-alarm:';
 const MINIMUM_ONE_TIME_DELAY_MS = 1000;
 
+type ExactAlarmNativeModule = {
+  canScheduleExactAlarms?: () => Promise<boolean>;
+  openExactAlarmSettings?: () => Promise<void>;
+};
+
 let channelPromise: Promise<void> | null = null;
 let permissionPromise: Promise<boolean> | null = null;
+let exactAlarmPromptVisible = false;
+let exactAlarmPromptShown = false;
+
+const exactAlarmModule = NativeModules.LocalTodoExactAlarm as
+  | ExactAlarmNativeModule
+  | undefined;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -31,6 +47,82 @@ Notifications.setNotificationHandler({
 });
 
 const canScheduleNotifications = () => Platform.OS !== 'web';
+
+const canScheduleExactAlarms = async () => {
+  if (Platform.OS !== 'android') {
+    return true;
+  }
+
+  const checker = exactAlarmModule?.canScheduleExactAlarms;
+  if (!checker) {
+    return true;
+  }
+
+  return checker().catch(() => true);
+};
+
+const openExactAlarmSettings = async () => {
+  const opener = exactAlarmModule?.openExactAlarmSettings;
+  if (opener) {
+    await opener();
+    return;
+  }
+
+  await Linking.openSettings();
+};
+
+const showExactAlarmAccessPrompt = () => {
+  if (Platform.OS !== 'android' || exactAlarmPromptVisible || exactAlarmPromptShown) {
+    return;
+  }
+
+  exactAlarmPromptVisible = true;
+  exactAlarmPromptShown = true;
+  Alert.alert(
+    'Allow on-time reminders?',
+    'Android may delay todo alerts while Local Todo is closed unless Alarms & reminders access is allowed.',
+    [
+      {
+        onPress: () => {
+          exactAlarmPromptVisible = false;
+        },
+        style: 'cancel',
+        text: 'Not now',
+      },
+      {
+        onPress: () => {
+          exactAlarmPromptVisible = false;
+          openExactAlarmSettings().catch(() => undefined);
+        },
+        text: 'Open settings',
+      },
+    ],
+    {
+      onDismiss: () => {
+        exactAlarmPromptVisible = false;
+      },
+    },
+  );
+};
+
+const ensureExactAlarmAccess = async () => {
+  if (await canScheduleExactAlarms()) {
+    return true;
+  }
+
+  showExactAlarmAccessPrompt();
+  return false;
+};
+
+const ensureTodoAlarmSchedulingReady = async () => {
+  const hasPermission = await ensureNotificationPermission();
+  if (!hasPermission) {
+    return false;
+  }
+
+  await ensureNotificationChannel();
+  return ensureExactAlarmAccess();
+};
 
 const getTodoAlarmIdentifier = (todoId: string) =>
   `${TODO_ALARM_IDENTIFIER_PREFIX}${todoId}`;
@@ -344,18 +436,17 @@ export const syncTodoAlarm = async (todo: Todo) => {
     return;
   }
 
-  await cancelTodoAlarm(todo.id);
   const request = createTodoAlarmRequest(todo);
   if (!request) {
+    await cancelTodoAlarm(todo.id);
     return;
   }
 
-  const hasPermission = await ensureNotificationPermission();
-  if (!hasPermission) {
+  if (!(await ensureTodoAlarmSchedulingReady())) {
     return;
   }
 
-  await ensureNotificationChannel();
+  await cancelTodoAlarm(todo.id);
   await Notifications.scheduleNotificationAsync(request);
 };
 
@@ -393,12 +484,9 @@ export const reconcileTodoAlarms = async (todos: Todo[]) => {
     return;
   }
 
-  const hasPermission = await ensureNotificationPermission();
-  if (!hasPermission) {
+  if (!(await ensureTodoAlarmSchedulingReady())) {
     return;
   }
-
-  await ensureNotificationChannel();
 
   for (const request of requests) {
     await Notifications.cancelScheduledNotificationAsync(request.identifier!);

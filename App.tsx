@@ -84,6 +84,7 @@ import {
 } from './src/dates';
 import { localTodoStore } from './src/storage/todoStore';
 import {
+  cloneDeletedTodos,
   cloneTodo,
   cloneTodoFilters,
   getTodoTextMaxLength,
@@ -217,16 +218,30 @@ type SearchKeywordEditTarget =
   | { kind: 'list'; listIndex: number }
   | { kind: 'preset'; presetId: string };
 
-type TodoUndoAction = 'delete' | 'done';
-
-type TodoUndoItem = {
-  action: TodoUndoAction;
-  todo: Todo;
+type UndoSnapshot = {
+  dateLabelDisplayMode: DateLabelDisplayMode;
+  deletedTodos: DeletedTodo[];
+  filterColors: FilterColorSettings;
+  googleDriveBackupEnabled: boolean;
+  hideDoneTodos: boolean;
+  lastCreateTodoFilters: TodoFilters;
+  listMenuTree: ListMenuNode[];
+  listOrderMode: ListOrderMode;
+  menuPresets: MenuPreset[];
+  metaTagVisibility: MetaTagVisibility;
+  quickPresetNavIconNames: string[];
+  quickPresetNavPresetIds: Array<string | null>;
+  selectedFilters: TodoFilters;
+  showOverdueMetaTags: boolean;
+  todoGroupMode: TodoGroupMode;
+  todoSortMode: TodoSortMode;
+  todos: Todo[];
 };
 
-type TodoUndoState = {
+type UndoHistoryEntry = {
   id: number;
-  items: TodoUndoItem[];
+  label: string;
+  snapshot: UndoSnapshot;
 };
 
 type VisibleListMenuItem = {
@@ -686,7 +701,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
-const TODO_UNDO_DURATION_MS = 3000;
+const UNDO_HISTORY_LIMIT = 20;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -2302,7 +2317,8 @@ export default function App() {
   const [recentlyEditedTodoIds, setRecentlyEditedTodoIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [todoUndo, setTodoUndo] = useState<TodoUndoState | null>(null);
+  const [undoHistory, setUndoHistory] = useState<UndoHistoryEntry[]>([]);
+  const [undoToastEntryId, setUndoToastEntryId] = useState<number | null>(null);
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
@@ -2356,6 +2372,12 @@ export default function App() {
   const [googleDriveLastRestoreAt, setGoogleDriveLastRestoreAt] = useState<string | null>(null);
   const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
   const [listOrderMode, setListOrderMode] = useState<ListOrderMode>('alphabetical');
+  const deletedTodosRef = useRef<DeletedTodo[]>([]);
+  const dateLabelDisplayModeRef = useRef<DateLabelDisplayMode>(dateLabelDisplayMode);
+  const googleDriveBackupEnabledRef = useRef(googleDriveBackupEnabled);
+  const hideDoneTodosRef = useRef(hideDoneTodos);
+  const lastCreateTodoFiltersRef = useRef<TodoFilters>(lastCreateTodoFilters);
+  const listOrderModeRef = useRef<ListOrderMode>(listOrderMode);
   const listMenuTreeRef = useRef<ListMenuNode[]>([]);
   const [listMenuTree, setListMenuTree] = useState<ListMenuNode[]>(
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
@@ -2363,6 +2385,10 @@ export default function App() {
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
   const [quickPresetNavIconNames, setQuickPresetNavIconNames] = useState<string[]>([]);
   const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
+  const menuPresetsRef = useRef<MenuPreset[]>([]);
+  const metaTagVisibilityRef = useRef<MetaTagVisibility>(cloneMetaTagVisibility());
+  const quickPresetNavIconNamesRef = useRef<string[]>([]);
+  const quickPresetNavPresetIdsRef = useRef<Array<string | null>>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -2370,6 +2396,9 @@ export default function App() {
     () => new Set(),
   );
   const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
+  const selectedFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
+  const showOverdueMetaTagsRef = useRef(showOverdueMetaTags);
+  const todoGroupModeRef = useRef<TodoGroupMode>(todoGroupMode);
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -2381,6 +2410,7 @@ export default function App() {
   );
   const [toggleAllTodoSectionsRequest, setToggleAllTodoSectionsRequest] = useState(0);
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
+  const todoSortModeRef = useRef<TodoSortMode>(todoSortMode);
   const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
     () => cloneMetaTagVisibility(),
   );
@@ -2422,8 +2452,7 @@ export default function App() {
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
-  const todoUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const todoUndoSequenceRef = useRef(0);
+  const undoHistorySequenceRef = useRef(0);
   const todoAlarmResumeSyncAtRef = useRef(0);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -2438,7 +2467,21 @@ export default function App() {
   const autoBackupFailedStateKeyRef = useRef<string | null>(null);
   const autoBackupStateKeyRef = useRef<string | null>(null);
   todosRef.current = todos;
+  dateLabelDisplayModeRef.current = dateLabelDisplayMode;
+  deletedTodosRef.current = deletedTodos;
+  googleDriveBackupEnabledRef.current = googleDriveBackupEnabled;
+  hideDoneTodosRef.current = hideDoneTodos;
+  lastCreateTodoFiltersRef.current = lastCreateTodoFilters;
   listMenuTreeRef.current = listMenuTree;
+  listOrderModeRef.current = listOrderMode;
+  menuPresetsRef.current = menuPresets;
+  metaTagVisibilityRef.current = metaTagVisibility;
+  quickPresetNavIconNamesRef.current = quickPresetNavIconNames;
+  quickPresetNavPresetIdsRef.current = quickPresetNavPresetIds;
+  selectedFiltersRef.current = selectedFilters;
+  showOverdueMetaTagsRef.current = showOverdueMetaTags;
+  todoGroupModeRef.current = todoGroupMode;
+  todoSortModeRef.current = todoSortMode;
   filterColorsRef.current = filterColors;
   loadedRef.current = loaded;
   pendingDeleteIdsRef.current = pendingDeleteIds;
@@ -2506,6 +2549,10 @@ export default function App() {
   const googleDriveActionReady =
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
+  const undoHistoryCount = undoHistory.length;
+  const undoToastEntry = undoToastEntryId === null
+    ? null
+    : undoHistory.find((entry) => entry.id === undoToastEntryId) ?? null;
   const getInstantPressHandlers = useInstantPress();
 
   const clearNotificationTodoReveal = useCallback(() => {
@@ -2904,60 +2951,42 @@ export default function App() {
     startEditedTodoHighlights(targetIds);
   }, [startEditedTodoHighlights]);
 
-  const clearTodoUndoToast = useCallback(() => {
-    if (todoUndoTimerRef.current) {
-      clearTimeout(todoUndoTimerRef.current);
-      todoUndoTimerRef.current = null;
-    }
+  const captureUndoSnapshot = useCallback((): UndoSnapshot => ({
+    dateLabelDisplayMode: dateLabelDisplayModeRef.current,
+    deletedTodos: cloneDeletedTodos(deletedTodosRef.current),
+    filterColors: cloneFilterColors(filterColorsRef.current),
+    googleDriveBackupEnabled: googleDriveBackupEnabledRef.current,
+    hideDoneTodos: hideDoneTodosRef.current,
+    lastCreateTodoFilters: cloneTodoFilters(lastCreateTodoFiltersRef.current),
+    listMenuTree: cloneListMenuTree(listMenuTreeRef.current),
+    listOrderMode: listOrderModeRef.current,
+    menuPresets: cloneMenuPresets(menuPresetsRef.current),
+    metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
+    quickPresetNavIconNames: cloneQuickPresetNavIconNames(quickPresetNavIconNamesRef.current),
+    quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(quickPresetNavPresetIdsRef.current),
+    selectedFilters: cloneTodoFilters(selectedFiltersRef.current),
+    showOverdueMetaTags: showOverdueMetaTagsRef.current,
+    todoGroupMode: todoGroupModeRef.current,
+    todoSortMode: todoSortModeRef.current,
+    todos: todosRef.current.map(cloneTodo),
+  }), []);
 
-    setTodoUndo(null);
+  const clearUndoToast = useCallback(() => {
+    setUndoToastEntryId(null);
   }, []);
 
-  const scheduleTodoUndoDismiss = useCallback((toastId: number) => {
-    if (todoUndoTimerRef.current) {
-      clearTimeout(todoUndoTimerRef.current);
-    }
-
-    todoUndoTimerRef.current = setTimeout(() => {
-      todoUndoTimerRef.current = null;
-      setTodoUndo((current) => (
-        current?.id === toastId ? null : current
-      ));
-    }, TODO_UNDO_DURATION_MS);
-  }, []);
-
-  const showTodoUndoToast = useCallback((item: TodoUndoItem) => {
-    const toastId = todoUndoSequenceRef.current + 1;
-    todoUndoSequenceRef.current = toastId;
-    const undoItem = {
-      action: item.action,
-      todo: cloneTodo(item.todo),
+  const recordUndo = useCallback((label: string) => {
+    const entryId = undoHistorySequenceRef.current + 1;
+    undoHistorySequenceRef.current = entryId;
+    const entry: UndoHistoryEntry = {
+      id: entryId,
+      label,
+      snapshot: captureUndoSnapshot(),
     };
 
-    setTodoUndo((current) => {
-      const items = [
-        ...(current?.items ?? []).filter((currentItem) => (
-          currentItem.todo.id !== undoItem.todo.id
-        )),
-        undoItem,
-      ];
-
-      return { id: toastId, items };
-    });
-    scheduleTodoUndoDismiss(toastId);
-  }, [scheduleTodoUndoDismiss]);
-
-  const removeTodoUndoItem = useCallback((id: string) => {
-    setTodoUndo((current) => {
-      if (!current?.items.some((item) => item.todo.id === id)) {
-        return current;
-      }
-
-      const items = current.items.filter((item) => item.todo.id !== id);
-
-      return items.length > 0 ? { ...current, items } : null;
-    });
-  }, []);
+    setUndoHistory((current) => [entry, ...current].slice(0, UNDO_HISTORY_LIMIT));
+    setUndoToastEntryId(entryId);
+  }, [captureUndoSnapshot]);
 
   const flushPendingMenuEditedTodoHighlights = useCallback(() => {
     const targetIds = [...pendingMenuEditedTodoIdsRef.current]
@@ -2990,70 +3019,129 @@ export default function App() {
     });
   }, []);
 
-  const undoLastTodoAction = useCallback(() => {
-    if (!todoUndo?.items.length) {
+  const clearAllRepeatingTodoCompletionFeedback = useCallback(() => {
+    repeatingTodoCompletionTimersRef.current.forEach(clearTimeout);
+    repeatingTodoCompletionTimersRef.current.clear();
+    repeatingTodoCompletionFeedbackIdsRef.current = new Set();
+    setRepeatingTodoCompletionFeedbackIds(new Set());
+  }, []);
+
+  const restoreUndoSnapshot = useCallback((snapshot: UndoSnapshot) => {
+    const restoredTodos = snapshot.todos.map(cloneTodo);
+    const restoredDeletedTodos = cloneDeletedTodos(snapshot.deletedTodos);
+    const restoredFilterColors = cloneFilterColors(snapshot.filterColors);
+    const restoredLastCreateTodoFilters = cloneTodoFilters(snapshot.lastCreateTodoFilters);
+    const restoredListMenuTree = cloneListMenuTree(snapshot.listMenuTree);
+    const restoredMenuPresets = cloneMenuPresets(snapshot.menuPresets);
+    const restoredMetaTagVisibility = cloneMetaTagVisibility(snapshot.metaTagVisibility);
+    const restoredQuickPresetNavIconNames = cloneQuickPresetNavIconNames(
+      snapshot.quickPresetNavIconNames,
+    );
+    const restoredQuickPresetNavPresetIds = cloneQuickPresetNavPresetIds(
+      snapshot.quickPresetNavPresetIds,
+    );
+    const restoredSelectedFilters = cloneTodoFilters(snapshot.selectedFilters);
+    const restoredTodoIds = new Set(restoredTodos.map((todo) => todo.id));
+    const restoredDeletedTodoIds = new Set(restoredDeletedTodos.map((todo) => todo.id));
+    const restoredPresetIds = new Set(restoredMenuPresets.map((preset) => preset.id));
+    const restoredSettings = createSettingsSnapshot({
+      dateLabelDisplayMode: snapshot.dateLabelDisplayMode,
+      deletedTodos: restoredDeletedTodos,
+      filterColors: restoredFilterColors,
+      googleDriveBackupEnabled: snapshot.googleDriveBackupEnabled,
+      hideDoneTodos: snapshot.hideDoneTodos,
+      lastCreateTodoFilters: restoredLastCreateTodoFilters,
+      listMenuTree: restoredListMenuTree,
+      listOrderMode: snapshot.listOrderMode,
+      menuPresets: restoredMenuPresets,
+      metaTagVisibility: restoredMetaTagVisibility,
+      quickPresetNavIconNames: restoredQuickPresetNavIconNames,
+      quickPresetNavPresetIds: restoredQuickPresetNavPresetIds,
+      selectedFilters: restoredSelectedFilters,
+      showOverdueMetaTags: snapshot.showOverdueMetaTags,
+      todoGroupMode: snapshot.todoGroupMode,
+      todoSortMode: snapshot.todoSortMode,
+    });
+
+    autoBackupFailedStateKeyRef.current = null;
+    autoBackupStateKeyRef.current = null;
+    todosRef.current = restoredTodos;
+    deletedTodosRef.current = restoredDeletedTodos;
+    filterColorsRef.current = restoredFilterColors;
+    googleDriveBackupEnabledRef.current = snapshot.googleDriveBackupEnabled;
+    hideDoneTodosRef.current = snapshot.hideDoneTodos;
+    lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
+    listMenuTreeRef.current = restoredListMenuTree;
+    listOrderModeRef.current = snapshot.listOrderMode;
+    menuPresetsRef.current = restoredMenuPresets;
+    metaTagVisibilityRef.current = restoredMetaTagVisibility;
+    quickPresetNavIconNamesRef.current = restoredQuickPresetNavIconNames;
+    quickPresetNavPresetIdsRef.current = restoredQuickPresetNavPresetIds;
+    selectedFiltersRef.current = restoredSelectedFilters;
+    showOverdueMetaTagsRef.current = snapshot.showOverdueMetaTags;
+    todoGroupModeRef.current = snapshot.todoGroupMode;
+    todoSortModeRef.current = snapshot.todoSortMode;
+    pendingDeleteIdsRef.current = new Set();
+
+    clearAllRepeatingTodoCompletionFeedback();
+    setPendingDeleteIds(new Set());
+    setTodos(restoredTodos);
+    setDeletedTodos(restoredDeletedTodos);
+    setFilterColors(restoredFilterColors);
+    setGoogleDriveBackupEnabled(snapshot.googleDriveBackupEnabled);
+    setHideDoneTodos(snapshot.hideDoneTodos);
+    setDateLabelDisplayMode(snapshot.dateLabelDisplayMode);
+    setShowOverdueMetaTags(snapshot.showOverdueMetaTags);
+    setLastCreateTodoFilters(restoredLastCreateTodoFilters);
+    setListMenuTree(restoredListMenuTree);
+    setListOrderMode(snapshot.listOrderMode);
+    setMenuPresets(restoredMenuPresets);
+    setMetaTagVisibility(restoredMetaTagVisibility);
+    setQuickPresetNavIconNames(restoredQuickPresetNavIconNames);
+    setQuickPresetNavPresetIds(restoredQuickPresetNavPresetIds);
+    setSelectedFilters(restoredSelectedFilters);
+    setTodoGroupMode(snapshot.todoGroupMode);
+    setTodoSortMode(snapshot.todoSortMode);
+    setActiveTodoMenuId((current) => (current && restoredTodoIds.has(current) ? current : null));
+    setActiveTodoDetailId((current) => (current && restoredTodoIds.has(current) ? current : null));
+    setActiveDeletedTodoDetailId((current) => (
+      current && restoredDeletedTodoIds.has(current) ? current : null
+    ));
+    setSelectedTodoIds((current) => {
+      const next = new Set([...current].filter((id) => restoredTodoIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setEditingMenuPresetId((current) => (
+      current && restoredPresetIds.has(current) ? current : null
+    ));
+    setOpenMenuPresetId((current) => (
+      current && restoredPresetIds.has(current) ? current : null
+    ));
+    setOpenQuickPresetNavSlotNumber(null);
+
+    localTodoStore.replaceAll(restoredTodos).catch(() => undefined);
+    appSettingsStore.save(restoredSettings).catch(() => undefined);
+    reconcileTodoAlarms(restoredTodos).catch(() => undefined);
+    itemSearchResultsCacheRef.current.clear();
+  }, [clearAllRepeatingTodoCompletionFeedback, createSettingsSnapshot]);
+
+  const undoLastChange = useCallback(() => {
+    const [entry] = undoHistory;
+
+    if (!entry) {
+      clearUndoToast();
       return;
     }
 
-    const currentTodoIds = new Set(todosRef.current.map((todo) => todo.id));
-    const restoredDoneTodos = todoUndo.items
-      .filter((item) => (
-        item.action === 'done' &&
-        currentTodoIds.has(item.todo.id) &&
-        !pendingDeleteIdsRef.current.has(item.todo.id)
-      ))
-      .map((item) => cloneTodo(item.todo));
-    const restoredDeletedTodos = todoUndo.items
-      .filter((item) => (
-        item.action === 'delete' &&
-        !currentTodoIds.has(item.todo.id) &&
-        !pendingDeleteIdsRef.current.has(item.todo.id)
-      ))
-      .map((item) => cloneTodo(item.todo));
-    const restoredTodos = [...restoredDoneTodos, ...restoredDeletedTodos];
-
-    if (restoredTodos.length === 0) {
-      clearTodoUndoToast();
-      return;
-    }
-
-    const restoredDoneById = new Map(restoredDoneTodos.map((todo) => [todo.id, todo]));
-    const restoredDeletedIds = new Set(restoredDeletedTodos.map((todo) => todo.id));
-
-    restoredDoneTodos.forEach((todo) => {
-      clearRepeatingTodoCompletionFeedback(todo.id);
-    });
-
-    setTodos((current) => {
-      const existingIds = new Set(current.map((todo) => todo.id));
-      const deletedTodosToRestore = restoredDeletedTodos.filter((todo) => !existingIds.has(todo.id));
-      const updatedTodos = current.map((todo) => restoredDoneById.get(todo.id) ?? todo);
-
-      return deletedTodosToRestore.length > 0
-        ? [...deletedTodosToRestore, ...updatedTodos]
-        : updatedTodos;
-    });
-
-    if (restoredDeletedIds.size > 0) {
-      setDeletedTodos((current) => current.filter((todo) => !restoredDeletedIds.has(todo.id)));
-      setActiveDeletedTodoDetailId((current) => (
-        current && restoredDeletedIds.has(current) ? null : current
-      ));
-    }
-
-    restoredTodos.forEach((todo) => {
-      localTodoStore.upsert(todo).catch(() => undefined);
-      syncTodoAlarm(todo).catch(() => undefined);
-    });
-    highlightEditedTodos(restoredTodos.map((todo) => todo.id));
-    clearTodoUndoToast();
+    restoreUndoSnapshot(entry.snapshot);
+    setUndoHistory((current) => (
+      current[0]?.id === entry.id
+        ? current.slice(1)
+        : current.filter((item) => item.id !== entry.id)
+    ));
+    clearUndoToast();
     triggerSubtleHaptic();
-  }, [
-    clearRepeatingTodoCompletionFeedback,
-    clearTodoUndoToast,
-    highlightEditedTodos,
-    todoUndo,
-  ]);
+  }, [clearUndoToast, restoreUndoSnapshot, undoHistory]);
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -3111,10 +3199,6 @@ export default function App() {
     () => () => {
       editedTodoHighlightTimersRef.current.forEach(clearTimeout);
       editedTodoHighlightTimersRef.current.clear();
-      if (todoUndoTimerRef.current) {
-        clearTimeout(todoUndoTimerRef.current);
-        todoUndoTimerRef.current = null;
-      }
       repeatingTodoCompletionTimersRef.current.forEach(clearTimeout);
       repeatingTodoCompletionTimersRef.current.clear();
       if (suppressHeaderSearchFocusTimerRef.current) {
@@ -4135,6 +4219,7 @@ export default function App() {
       new Date(createdAt),
     );
 
+    recordUndo('Create todo');
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     if (!filtersEqual(selectedFilters, nextSelectedFilters)) {
       setSelectedFilters(nextSelectedFilters);
@@ -4162,6 +4247,7 @@ export default function App() {
     highlightNewlyCreatedTodo,
     listMenuTree,
     query,
+    recordUndo,
     resetCreateDrawerState,
     selectedFilters,
     todoTextMaxLength,
@@ -4259,7 +4345,7 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
-  const deleteTodo = useCallback((id: string) => {
+  const deleteTodo = useCallback((id: string, options: { skipUndo?: boolean } = {}) => {
     const todoToDelete = todos.find((todo) => todo.id === id);
 
     if (!todoToDelete || pendingDeleteIds.has(id)) {
@@ -4271,11 +4357,13 @@ export default function App() {
       deletedAt: Date.now(),
     };
 
+    if (!options.skipUndo) {
+      recordUndo('Delete todo');
+    }
     localTodoStore.delete(id).catch(() => undefined);
     cancelTodoAlarm(id).catch(() => undefined);
     clearRepeatingTodoCompletionFeedback(id);
     clearEditedTodoHighlights([id]);
-    showTodoUndoToast({ action: 'delete', todo: deletedTodo });
     setTodos((current) => current.filter((todo) => todo.id !== id));
     setDeletedTodos((current) => [
       deletedTodo,
@@ -4297,7 +4385,7 @@ export default function App() {
     clearEditedTodoHighlights,
     clearRepeatingTodoCompletionFeedback,
     pendingDeleteIds,
-    showTodoUndoToast,
+    recordUndo,
     todos,
   ]);
 
@@ -4318,6 +4406,7 @@ export default function App() {
       filters: cloneTodoFilters(deletedTodo.filters),
     };
 
+    recordUndo('Restore deleted todo');
     setTodos((current) => (
       current.some((todo) => todo.id === restoredTodo.id)
         ? current
@@ -4333,11 +4422,12 @@ export default function App() {
     localTodoStore.upsert(restoredTodo).catch(() => undefined);
     syncTodoAlarm(restoredTodo).catch(() => undefined);
     triggerSubtleHaptic();
-  }, [createSettingsSnapshot, deletedTodos, todos]);
+  }, [createSettingsSnapshot, deletedTodos, recordUndo, todos]);
 
   const addDevTestTodos = useCallback(() => {
     const testTodos = createDevTestTodos(collectListNodeLabels(listMenuTree));
 
+    recordUndo('Add test todos');
     setTodos((current) => {
       const withoutDev = current.filter((todo) => !isDevTestTodo(todo));
 
@@ -4354,9 +4444,14 @@ export default function App() {
       triggerSubtleHaptic();
       return next;
     });
-  }, [listMenuTree]);
+  }, [listMenuTree, recordUndo]);
 
   const clearDevTestTodos = useCallback(() => {
+    if (!todosRef.current.some(isDevTestTodo)) {
+      return;
+    }
+
+    recordUndo('Clear test todos');
     setTodos((current) => {
       const devTodos = current.filter(isDevTestTodo);
 
@@ -4374,7 +4469,7 @@ export default function App() {
       triggerSubtleHaptic();
       return next;
     });
-  }, []);
+  }, [recordUndo]);
 
   const deleteDeletedTodoPermanently = useCallback((id: string) => {
     const deletedTodo = deletedTodos.find((todo) => todo.id === id);
@@ -4393,6 +4488,7 @@ export default function App() {
           style: 'destructive',
           onPress: () => {
             const nextDeletedTodos = deletedTodos.filter((todo) => todo.id !== id);
+            recordUndo('Delete permanently');
             setDeletedTodos(nextDeletedTodos);
             setActiveDeletedTodoDetailId((current) => (current === id ? null : current));
             appSettingsStore.save(
@@ -4403,16 +4499,20 @@ export default function App() {
         },
       ],
     );
-  }, [createSettingsSnapshot, deletedTodos]);
+  }, [createSettingsSnapshot, deletedTodos, recordUndo]);
 
-  const setTodoDone = useCallback((id: string, done: boolean) => {
+  const setTodoDone = useCallback((
+    id: string,
+    done: boolean,
+    options: { skipUndo?: boolean } = {},
+  ) => {
     if (pendingDeleteIds.has(id) || repeatingTodoCompletionFeedbackIdsRef.current.has(id)) {
       return;
     }
 
     const updatedTodo = todosRef.current.find((todo) => todo.id === id);
-    if (!done) {
-      removeTodoUndoItem(id);
+    if (!updatedTodo || updatedTodo.done === done) {
+      return;
     }
 
     const repeatedNextTodo = done && updatedTodo
@@ -4420,15 +4520,20 @@ export default function App() {
       : null;
 
     if (repeatedNextTodo && updatedTodo) {
+      if (!options.skipUndo) {
+        recordUndo('Complete todo');
+      }
       setActiveTodoMenuId((current) => (current === id ? null : current));
       setActiveTodoDetailId((current) => (current === id ? null : current));
-      showTodoUndoToast({ action: 'done', todo: updatedTodo });
       scheduleRepeatingTodoRollForward(id);
       return;
     }
 
     const nextTodo = repeatedNextTodo ?? (updatedTodo ? { ...updatedTodo, done } : null);
 
+    if (!options.skipUndo) {
+      recordUndo(done ? 'Complete todo' : 'Reopen todo');
+    }
     setTodos((current) =>
       current.map((todo) => (
         todo.id === id && nextTodo ? nextTodo : todo
@@ -4446,9 +4551,6 @@ export default function App() {
         localTodoStore.updateDone(id, done).catch(() => undefined);
       }
       syncTodoAlarm(nextTodo).catch(() => undefined);
-      if (done && updatedTodo && !updatedTodo.done && nextTodo.done) {
-        showTodoUndoToast({ action: 'done', todo: updatedTodo });
-      }
     } else if (done) {
       cancelTodoAlarm(id).catch(() => undefined);
     }
@@ -4456,9 +4558,8 @@ export default function App() {
     hideDoneTodosForCurrentView,
     highlightEditedTodos,
     pendingDeleteIds,
-    removeTodoUndoItem,
+    recordUndo,
     scheduleRepeatingTodoRollForward,
-    showTodoUndoToast,
   ]);
 
   const deleteSelectedTodos = useCallback(() => {
@@ -4477,20 +4578,35 @@ export default function App() {
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            ids.forEach((id) => deleteTodo(id));
+            const deletableIds = ids.filter((id) => (
+              todosRef.current.some((todo) => todo.id === id) &&
+              !pendingDeleteIdsRef.current.has(id)
+            ));
+            if (deletableIds.length > 0) {
+              recordUndo(deletableIds.length === 1 ? 'Delete todo' : 'Delete selected todos');
+            }
+            deletableIds.forEach((id) => deleteTodo(id, { skipUndo: true }));
             exitTodoSelectMode();
             triggerSubtleHaptic();
           },
         },
       ],
     );
-  }, [deleteTodo, exitTodoSelectMode, selectedTodoIds]);
+  }, [deleteTodo, exitTodoSelectMode, recordUndo, selectedTodoIds]);
 
   const markSelectedTodosDone = useCallback((done: boolean) => {
-    selectedTodoIds.forEach((id) => setTodoDone(id, done));
+    const targetIds = [...selectedTodoIds].filter((id) => {
+      const todo = todosRef.current.find((item) => item.id === id);
+      return todo && !pendingDeleteIdsRef.current.has(id) && todo.done !== done;
+    });
+
+    if (targetIds.length > 0) {
+      recordUndo(done ? 'Complete selected todos' : 'Reopen selected todos');
+    }
+    targetIds.forEach((id) => setTodoDone(id, done, { skipUndo: true }));
     exitTodoSelectMode();
     triggerSubtleHaptic();
-  }, [exitTodoSelectMode, selectedTodoIds, setTodoDone]);
+  }, [exitTodoSelectMode, recordUndo, selectedTodoIds, setTodoDone]);
 
   const selectedTodosAllDone = useMemo(() => {
     if (selectedTodoIds.size === 0) {
@@ -4510,35 +4626,37 @@ export default function App() {
       return;
     }
 
-    setTodos((current) => {
-      const updatedTodos: Todo[] = [];
-      const nextTodos = current.map((todo) => {
-        if (!targetIds.has(todo.id)) {
-          return todo;
-        }
-
-        const rawNextFilters = updater(cloneTodoFilters(todo.filters));
-        const dateChanged = !filterValueListsEqual(rawNextFilters.date, todo.filters.date);
-        const nextFilters = normalizeTodoFilters(
-          rawNextFilters,
-          dateChanged ? Date.now() : undefined,
-        );
-        const updatedTodo = { ...todo, filters: nextFilters };
-        updatedTodos.push(updatedTodo);
-        return updatedTodo;
-      });
-
-      if (updatedTodos.length > 0) {
-        highlightEditedTodos(updatedTodos.map((todo) => todo.id));
-        localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
-        updatedTodos.forEach((todo) => {
-          syncTodoAlarm(todo).catch(() => undefined);
-        });
+    const updatedById = new Map<string, Todo>();
+    todosRef.current.forEach((todo) => {
+      if (!targetIds.has(todo.id)) {
+        return;
       }
 
-      return nextTodos;
+      const rawNextFilters = updater(cloneTodoFilters(todo.filters));
+      const dateChanged = !filterValueListsEqual(rawNextFilters.date, todo.filters.date);
+      const nextFilters = normalizeTodoFilters(
+        rawNextFilters,
+        dateChanged ? Date.now() : undefined,
+      );
+
+      if (!filtersEqual(todo.filters, nextFilters)) {
+        updatedById.set(todo.id, { ...todo, filters: nextFilters });
+      }
     });
-  }, [highlightEditedTodos, pendingDeleteIds]);
+
+    if (updatedById.size === 0) {
+      return;
+    }
+
+    const updatedTodos = [...updatedById.values()];
+    recordUndo(updatedTodos.length === 1 ? 'Change todo settings' : 'Change selected todos');
+    setTodos((current) => current.map((todo) => updatedById.get(todo.id) ?? todo));
+    highlightEditedTodos(updatedTodos.map((todo) => todo.id));
+    localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
+    updatedTodos.forEach((todo) => {
+      syncTodoAlarm(todo).catch(() => undefined);
+    });
+  }, [highlightEditedTodos, pendingDeleteIds, recordUndo]);
 
   const updateTodoPinnedForIds = useCallback((ids: string[], pinned: boolean) => {
     const targetIds = new Set(ids.filter((id) => !pendingDeleteIds.has(id)));
@@ -4547,26 +4665,23 @@ export default function App() {
       return;
     }
 
-    setTodos((current) => {
-      const updatedTodos: Todo[] = [];
-      const nextTodos = current.map((todo) => {
-        if (!targetIds.has(todo.id) || todo.pinned === pinned) {
-          return todo;
-        }
-
-        const updatedTodo = { ...todo, pinned };
-        updatedTodos.push(updatedTodo);
-        return updatedTodo;
-      });
-
-      if (updatedTodos.length > 0) {
-        highlightEditedTodos(updatedTodos.map((todo) => todo.id));
-        localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
+    const updatedById = new Map<string, Todo>();
+    todosRef.current.forEach((todo) => {
+      if (targetIds.has(todo.id) && todo.pinned !== pinned) {
+        updatedById.set(todo.id, { ...todo, pinned });
       }
-
-      return nextTodos;
     });
-  }, [highlightEditedTodos, pendingDeleteIds]);
+
+    if (updatedById.size === 0) {
+      return;
+    }
+
+    const updatedTodos = [...updatedById.values()];
+    recordUndo(pinned ? 'Pin todo' : 'Unpin todo');
+    setTodos((current) => current.map((todo) => updatedById.get(todo.id) ?? todo));
+    highlightEditedTodos(updatedTodos.map((todo) => todo.id));
+    localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
+  }, [highlightEditedTodos, pendingDeleteIds, recordUndo]);
 
   const getCurrentTodoEditTargetIds = useCallback(() => {
     if (activeTodoMenuIdRef.current) {
@@ -4618,8 +4733,14 @@ export default function App() {
     }
 
     clearNotificationTodoReveal();
-    setSelectedFilters((current) => updater(cloneTodoFilters(current)));
-  }, [clearNotificationTodoReveal, getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+    const nextFilters = updater(cloneTodoFilters(selectedFiltersRef.current));
+    if (filtersEqual(selectedFiltersRef.current, nextFilters)) {
+      return;
+    }
+
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
+  }, [clearNotificationTodoReveal, getCurrentTodoEditTargetIds, recordUndo, updateTodoFiltersForIds]);
 
   const closeDatePicker = useCallback(() => {
     setDatePickerVisible(false);
@@ -5619,6 +5740,7 @@ export default function App() {
       content: activeTodoDetailDraftContentForSave,
       text: activeTodoDetailDraftTextForSave,
     };
+    recordUndo('Edit todo');
     setTodos((current) =>
       current.map((todo) => (
         todo.id === todoId
@@ -5644,6 +5766,7 @@ export default function App() {
     activeTodoDetailDraftContentForSave,
     activeTodoDetailDraftTextForSave,
     highlightEditedTodos,
+    recordUndo,
     suppressNextHeaderSearchFocus,
   ]);
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
@@ -6330,12 +6453,19 @@ export default function App() {
 
   const toggleRepeatingItemsFilter = useCallback(() => {
     clearNotificationTodoReveal();
-    setSelectedFilters((current) => ({
-      ...current,
-      reminder: toggleRepeatingItemsFilterValue(current.reminder),
-    }));
+    const nextFilters = {
+      ...selectedFiltersRef.current,
+      reminder: toggleRepeatingItemsFilterValue(selectedFiltersRef.current.reminder),
+    };
+
+    if (filtersEqual(selectedFiltersRef.current, nextFilters)) {
+      return;
+    }
+
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal]);
+  }, [clearNotificationTodoReveal, recordUndo]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
     if (label === REPEATING_ITEMS_FILTER_VALUE) {
@@ -6466,12 +6596,22 @@ export default function App() {
     triggerSubtleHaptic();
   }, [updateCurrentTodoTargetFilters]);
 
-  const clearAppliedMenuPreset = useCallback(() => {
+  const clearAppliedMenuPreset = useCallback((options: { skipUndo?: boolean } = {}) => {
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters());
     } else {
+      const defaultFilters = cloneTodoFilters();
+      const hasDurableChange =
+        !filtersEqual(selectedFiltersRef.current, defaultFilters) ||
+        todoSortModeRef.current !== 'newest' ||
+        todoGroupModeRef.current !== 'none' ||
+        listOrderModeRef.current !== 'alphabetical';
+
+      if (hasDurableChange && !options.skipUndo) {
+        recordUndo('Clear filters');
+      }
       clearNotificationTodoReveal();
-      setSelectedFilters(cloneTodoFilters());
+      setSelectedFilters(defaultFilters);
       setTodoSortMode('newest');
       setTodoGroupMode('none');
       setListOrderMode('alphabetical');
@@ -6488,6 +6628,7 @@ export default function App() {
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
+    recordUndo,
     updateCurrentTodoTargetFilters,
   ]);
 
@@ -6511,6 +6652,7 @@ export default function App() {
       return;
     }
 
+    recordUndo('Change color');
     filterColorsRef.current = {
       ...filterColorsRef.current,
       [filterKey]: {
@@ -6534,9 +6676,13 @@ export default function App() {
       };
     });
     triggerSubtleHaptic();
-  }, []);
+  }, [recordUndo]);
 
   const selectTodoSortMode = useCallback((sortMode: TodoSortMode) => {
+    if (effectiveSortMode === sortMode) {
+      return;
+    }
+
     clearNotificationTodoReveal();
     const display = resolveListDisplaySettings(
       listMenuTree,
@@ -6545,6 +6691,7 @@ export default function App() {
       todoGroupMode,
     );
 
+    recordUndo('Change sort');
     if (display.listLabel) {
       setListMenuTree((current) => updateListNodeDisplaySettings(
         current,
@@ -6559,7 +6706,9 @@ export default function App() {
     triggerSubtleHaptic();
   }, [
     clearNotificationTodoReveal,
+    effectiveSortMode,
     listMenuTree,
+    recordUndo,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
@@ -6729,30 +6878,34 @@ export default function App() {
   }, [collapsedSearchListKey, collapsedSearchPresetKey, showSearchPresetSections]);
 
   const toggleMetaTagVisibility = useCallback((key: MetaTagKey) => {
+    recordUndo('Change meta tags');
     setMetaTagVisibility((current) => ({
       ...current,
       [key]: !current[key],
     }));
     triggerSubtleHaptic();
-  }, []);
+  }, [recordUndo]);
 
   const toggleHideDoneTodos = useCallback(() => {
     clearNotificationTodoReveal();
+    recordUndo('Change done visibility');
     setHideDoneTodos((current) => !current);
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal]);
+  }, [clearNotificationTodoReveal, recordUndo]);
 
   const toggleDateLabelDisplayMode = useCallback(() => {
+    recordUndo('Change date labels');
     setDateLabelDisplayMode((current) => (
       current === 'remaining' ? 'exact' : 'remaining'
     ));
     triggerSubtleHaptic();
-  }, []);
+  }, [recordUndo]);
 
   const toggleShowOverdueMetaTags = useCallback(() => {
+    recordUndo('Change overdue labels');
     setShowOverdueMetaTags((current) => !current);
     triggerSubtleHaptic();
-  }, []);
+  }, [recordUndo]);
 
   const getDateMenuDisplayLabel = useCallback(
     (menuLabel: string, dateLabels: string[]) =>
@@ -6761,6 +6914,10 @@ export default function App() {
   );
 
   const selectTodoGroupMode = useCallback((groupMode: TodoGroupMode) => {
+    if (effectiveGroupMode === groupMode) {
+      return;
+    }
+
     clearNotificationTodoReveal();
     const display = resolveListDisplaySettings(
       listMenuTree,
@@ -6769,6 +6926,7 @@ export default function App() {
       todoGroupMode,
     );
 
+    recordUndo('Change group');
     if (display.listLabel) {
       setListMenuTree((current) => updateListNodeDisplaySettings(
         current,
@@ -6783,7 +6941,9 @@ export default function App() {
     triggerSubtleHaptic();
   }, [
     clearNotificationTodoReveal,
+    effectiveGroupMode,
     listMenuTree,
+    recordUndo,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
@@ -6832,6 +6992,7 @@ export default function App() {
         todoGroupMode,
       );
 
+      recordUndo('Clear sort');
       if (display.listLabel) {
         setListMenuTree((current) => clearListNodeDisplaySettings(
           current,
@@ -6856,6 +7017,7 @@ export default function App() {
         todoGroupMode,
       );
 
+      recordUndo('Clear group');
       if (display.listLabel) {
         setListMenuTree((current) => clearListNodeDisplaySettings(
           current,
@@ -6872,6 +7034,11 @@ export default function App() {
     }
 
     if (section === 'metaTags') {
+      if (metaTagVisibilityMatchesDefault(metaTagVisibility)) {
+        return;
+      }
+
+      recordUndo('Clear meta tags');
       setMetaTagVisibility(cloneMetaTagVisibility(DEFAULT_META_TAG_VISIBILITY));
       triggerSubtleHaptic();
     }
@@ -6881,6 +7048,8 @@ export default function App() {
     clearNotificationTodoReveal,
     includeActiveTodoReminderRows,
     listMenuTree,
+    metaTagVisibility,
+    recordUndo,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
@@ -6895,6 +7064,7 @@ export default function App() {
     }
 
     const createdAt = Date.now();
+    recordUndo('Save preset');
     setMenuPresets((current) => [
       ...current,
       {
@@ -6915,6 +7085,7 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuFilters,
+    recordUndo,
   ]);
 
   const scheduleSearchKeywordModalInputFocus = useCallback(() => {
@@ -7038,6 +7209,13 @@ export default function App() {
 
     if (searchKeywordEditTarget.kind === 'preset') {
       const { presetId } = searchKeywordEditTarget;
+      const currentPreset = menuPresets.find((preset) => preset.id === presetId);
+      if ((currentPreset?.searchKeywords ?? '') === searchKeywords) {
+        closeSearchKeywordModal();
+        return;
+      }
+
+      recordUndo('Edit preset keywords');
       setMenuPresets((current) => current.map((preset) => (
         preset.id === presetId
           ? {
@@ -7060,6 +7238,12 @@ export default function App() {
 
       const oldLabel = currentItem.label;
       const labelChanged = oldLabel !== newLabel;
+      const currentKeywords = currentItem.searchKeywords ?? '';
+      if (!labelChanged && currentKeywords === searchKeywords) {
+        closeSearchKeywordModal();
+        return;
+      }
+
       if (labelChanged) {
         const hasDuplicate = collectListNodeLabels(listMenuTree).some(
           (label) => label.toLocaleLowerCase() === newLabel.toLocaleLowerCase(),
@@ -7068,7 +7252,10 @@ export default function App() {
           return;
         }
 
+        recordUndo('Edit list');
         applyListLabelRename(oldLabel, newLabel);
+      } else {
+        recordUndo('Edit list');
       }
 
       setListMenuTree((current) => {
@@ -7097,7 +7284,9 @@ export default function App() {
     applyListLabelRename,
     closeSearchKeywordModal,
     listMenuTree,
+    menuPresets,
     persistListMenuTree,
+    recordUndo,
     searchKeywordEditTarget,
     searchKeywordTitleDraft,
   ]);
@@ -7174,6 +7363,15 @@ export default function App() {
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
     } else {
+      const hasDurableChange =
+        !filtersEqual(selectedFiltersRef.current, nextFilters) ||
+        listOrderModeRef.current !== preset.listOrderMode ||
+        todoGroupModeRef.current !== preset.todoGroupMode ||
+        todoSortModeRef.current !== preset.todoSortMode;
+
+      if (hasDurableChange) {
+        recordUndo('Apply preset');
+      }
       clearNotificationTodoReveal();
       setSelectedFilters((current) => (
         filtersEqual(current, nextFilters) ? current : nextFilters
@@ -7196,6 +7394,7 @@ export default function App() {
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
+    recordUndo,
     updateCurrentTodoTargetFilters,
   ]);
 
@@ -7214,6 +7413,24 @@ export default function App() {
       return;
     }
 
+    const currentPreset = menuPresets.find((preset) => preset.id === editingMenuPresetId);
+    if (!currentPreset) {
+      return;
+    }
+
+    const hasChanges =
+      !filtersEqual(currentPreset.filters, menuFilters) ||
+      currentPreset.listOrderMode !== listOrderMode ||
+      currentPreset.todoGroupMode !== effectiveGroupMode ||
+      currentPreset.todoSortMode !== effectiveSortMode;
+
+    if (!hasChanges) {
+      setEditingMenuPresetId(null);
+      setMenuMode('presets');
+      return;
+    }
+
+    recordUndo('Update preset');
     setMenuPresets((current) => current.map((preset) => (
       preset.id === editingMenuPresetId
         ? {
@@ -7234,9 +7451,30 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuFilters,
+    menuPresets,
+    recordUndo,
   ]);
 
   const saveOpenMenuPreset = useCallback((presetId: string) => {
+    const currentPreset = menuPresets.find((preset) => preset.id === presetId);
+    if (!currentPreset) {
+      return;
+    }
+
+    const hasChanges =
+      !filtersEqual(currentPreset.filters, selectedFilters) ||
+      currentPreset.listOrderMode !== listOrderMode ||
+      currentPreset.todoGroupMode !== effectiveGroupMode ||
+      currentPreset.todoSortMode !== effectiveSortMode;
+
+    if (!hasChanges) {
+      setOpenMenuPresetId(presetId);
+      setEditingMenuPresetId(null);
+      setMenuMode('main');
+      return;
+    }
+
+    recordUndo('Update preset');
     setMenuPresets((current) => current.map((preset) => (
       preset.id === presetId
         ? {
@@ -7256,6 +7494,8 @@ export default function App() {
     effectiveGroupMode,
     effectiveSortMode,
     listOrderMode,
+    menuPresets,
+    recordUndo,
     selectedFilters,
   ]);
 
@@ -7336,6 +7576,7 @@ export default function App() {
       ),
     );
 
+    recordUndo('Delete preset');
     setMenuPresets((current) => current.filter((preset) => preset.id !== id));
     setQuickPresetNavPresetIds((current) => (
       current.length === 0
@@ -7348,7 +7589,7 @@ export default function App() {
     setOpenMenuPresetId((current) => (current === id ? null : current));
 
     if (shouldResetView) {
-      clearAppliedMenuPreset();
+      clearAppliedMenuPreset({ skipUndo: true });
       return;
     }
 
@@ -7361,6 +7602,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     openMenuPresetId,
+    recordUndo,
     selectedFilters,
   ]);
 
@@ -7371,23 +7613,30 @@ export default function App() {
       return;
     }
 
-    setListMenuTree((current) => {
-      const duplicate = current.some(
-        (item) => item.label.toLocaleLowerCase() === label.toLocaleLowerCase(),
-      );
-      if (duplicate) {
-        return current;
-      }
+    const duplicate = listMenuTree.some(
+      (item) => item.label.toLocaleLowerCase() === label.toLocaleLowerCase(),
+    );
+    if (duplicate) {
+      return;
+    }
 
+    recordUndo('Add list');
+    setListMenuTree((current) => {
       const next = [{ label }, ...current];
       persistListMenuTree(next);
       return next;
     });
     setNewListName('');
     triggerSubtleHaptic();
-  }, [newListName, persistListMenuTree]);
+  }, [listMenuTree, newListName, persistListMenuTree, recordUndo]);
 
   const setSettingsListIcon = useCallback((index: number, iconName: string | null) => {
+    const currentItem = listMenuTreeRef.current[index];
+    if (!currentItem || (currentItem.iconName ?? null) === iconName) {
+      return;
+    }
+
+    recordUndo('Change list icon');
     setListMenuTree((current) => {
       const next = current.map((item, itemIndex) => {
         if (itemIndex !== index) {
@@ -7405,9 +7654,14 @@ export default function App() {
       return next;
     });
     triggerSubtleHaptic();
-  }, [persistListMenuTree]);
+  }, [persistListMenuTree, recordUndo]);
 
   const toggleSettingsListNavbarPinned = useCallback((index: number) => {
+    if (!listMenuTreeRef.current[index]) {
+      return;
+    }
+
+    recordUndo('Change list navbar');
     setListMenuTree((current) => {
       const next = current.map((item, itemIndex) => {
         if (itemIndex !== index) {
@@ -7422,13 +7676,18 @@ export default function App() {
       return next;
     });
     triggerSubtleHaptic();
-  }, [persistListMenuTree]);
+  }, [persistListMenuTree, recordUndo]);
 
   const swapSettingsListItems = useCallback((indexA: number, indexB: number) => {
     if (indexA === indexB) {
       return;
     }
 
+    if (!listMenuTreeRef.current[indexA] || !listMenuTreeRef.current[indexB]) {
+      return;
+    }
+
+    recordUndo('Reorder lists');
     setListOrderMode('manual');
     setListMenuTree((current) => {
       const itemA = current[indexA];
@@ -7445,7 +7704,7 @@ export default function App() {
       return next;
     });
     void persistAppSettings({ listOrderMode: 'manual' });
-  }, [persistAppSettings, persistListMenuTree]);
+  }, [persistAppSettings, persistListMenuTree, recordUndo]);
 
   const handleSettingsListSwap = useCallback((
     fromIndex: number,
@@ -7455,6 +7714,11 @@ export default function App() {
   }, [swapSettingsListItems]);
 
   const removeSettingsList = useCallback((index: number) => {
+    if (!listMenuTreeRef.current[index]) {
+      return;
+    }
+
+    recordUndo('Delete list');
     setSettingsListReorderCancelNonce((current) => current + 1);
     setSettingsListIconPickerIndex((current) => (
       current === null || current === index ? null : current > index ? current - 1 : current
@@ -7499,7 +7763,7 @@ export default function App() {
       return next;
     });
     triggerSubtleHaptic();
-  }, [pendingDeleteIds, persistListMenuTree]);
+  }, [pendingDeleteIds, persistListMenuTree, recordUndo]);
 
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
@@ -7766,9 +8030,10 @@ export default function App() {
   }, [listMenuOpen, navTab]);
 
   const toggleGoogleDriveBackup = useCallback(() => {
+    recordUndo('Change auto backup');
     setGoogleDriveBackupEnabled((current) => !current);
     triggerSubtleHaptic();
-  }, []);
+  }, [recordUndo]);
 
   const disconnectGoogleDrive = useCallback(async () => {
     setGoogleDriveBusy(true);
@@ -8042,6 +8307,7 @@ export default function App() {
     }
 
     const restoredAt = new Date().toISOString();
+    recordUndo('Restore backup');
     autoBackupStateKeyRef.current = null;
     autoBackupFailedStateKeyRef.current = null;
     setPendingDeleteIds(new Set());
@@ -8092,7 +8358,7 @@ export default function App() {
       `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
     );
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal]);
+  }, [clearNotificationTodoReveal, recordUndo]);
 
   const runGoogleDriveAction = useCallback(async (
     action: GoogleDriveAction,
@@ -9424,12 +9690,18 @@ export default function App() {
 
         </View>
 
-        {todoUndo ? (
-          <View pointerEvents="box-none" style={styles.todoUndoToastLayer}>
+        {undoToastEntry ? (
+          <View style={styles.todoUndoToastLayer}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Undo last todo action"
-              onPress={undoLastTodoAction}
+              accessibilityLabel="Dismiss undo"
+              onPress={clearUndoToast}
+              style={StyleSheet.absoluteFill}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Undo ${undoToastEntry.label}`}
+              onPress={undoLastChange}
               style={({ pressed }) => [
                 styles.todoUndoButton,
                 pressed && styles.todoUndoButtonPressed,
@@ -10974,17 +11246,45 @@ export default function App() {
                 <Text style={styles.settingsTitle}>Settings</Text>
                 <Text style={styles.settingsSubtitle}>Preferences</Text>
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close settings"
-                onPress={closeSettingsModal}
-                style={({ pressed }) => [
-                  styles.settingsCloseButton,
-                  pressed && styles.settingsCloseButtonPressed,
-                ]}
-              >
-                <Text style={styles.settingsCloseIcon}>×</Text>
-              </Pressable>
+              <View style={styles.settingsHeaderActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Undo last change"
+                  accessibilityState={{ disabled: undoHistoryCount === 0 }}
+                  disabled={undoHistoryCount === 0}
+                  onPress={undoLastChange}
+                  style={({ pressed }) => [
+                    styles.settingsUndoButton,
+                    undoHistoryCount === 0 && styles.settingsUndoButtonDisabled,
+                    pressed && styles.settingsUndoButtonPressed,
+                  ]}
+                >
+                  <Ionicons
+                    color={undoHistoryCount === 0 ? '#B8B0A8' : NAV_ACCENT}
+                    name="arrow-undo"
+                    size={16}
+                  />
+                  <Text
+                    style={[
+                      styles.settingsUndoButtonText,
+                      undoHistoryCount === 0 && styles.settingsUndoButtonTextDisabled,
+                    ]}
+                  >
+                    {undoHistoryCount > 0 ? `Undo ${undoHistoryCount}` : 'Undo'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close settings"
+                  onPress={closeSettingsModal}
+                  style={({ pressed }) => [
+                    styles.settingsCloseButton,
+                    pressed && styles.settingsCloseButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.settingsCloseIcon}>×</Text>
+                </Pressable>
+              </View>
             </View>
 
             <GestureScrollView
@@ -11443,6 +11743,11 @@ export default function App() {
                               accessibilityState={{ selected }}
                               key={mode}
                               onPress={() => {
+                                if (listOrderMode === mode) {
+                                  return;
+                                }
+
+                                recordUndo('Change list order');
                                 setListOrderMode(mode);
                                 if (mode === 'alphabetical') {
                                   setSettingsListReorderCancelNonce((current) => current + 1);
@@ -12167,6 +12472,11 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  settingsHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
   settingsTitle: {
     color: THEME_TEXT,
     fontSize: 24,
@@ -12201,6 +12511,37 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: FONT_REGULAR,
     lineHeight: 28,
+  },
+  settingsUndoButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#D6E0FF',
+    borderRadius: 21,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 6,
+    height: 42,
+    justifyContent: 'center',
+    minWidth: 88,
+    paddingHorizontal: 12,
+  },
+  settingsUndoButtonDisabled: {
+    backgroundColor: '#F4F0EA',
+    borderColor: '#E8E2DA',
+  },
+  settingsUndoButtonPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.97 }],
+  },
+  settingsUndoButtonText: {
+    color: NAV_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  settingsUndoButtonTextDisabled: {
+    color: '#B8B0A8',
   },
   settingsBody: {
     flex: 1,
@@ -13088,10 +13429,13 @@ const styles = StyleSheet.create({
   },
   todoUndoToastLayer: {
     alignItems: 'center',
-    bottom: BOTTOM_NAV_RESERVED_HEIGHT + 10,
+    bottom: 0,
+    justifyContent: 'flex-end',
     left: 0,
+    paddingBottom: BOTTOM_NAV_RESERVED_HEIGHT + 10,
     position: 'absolute',
     right: 0,
+    top: 0,
     zIndex: 17,
     elevation: 6,
   },

@@ -1,5 +1,4 @@
 import {
-  resolveDateFilterValueDate,
   startOfDay,
   toISODateString,
 } from './dates';
@@ -15,28 +14,8 @@ export const getEffectiveTodoDateLabels = (
     return todo.filters.date;
   }
 
-  const today = startOfDay(now);
-  const todayLabel = toISODateString(today);
-
   if (todo.filters.date.length === 0) {
-    return [todayLabel];
-  }
-
-  const bestDate = todo.filters.date.reduce<Date | null>((currentBest, label) => {
-    const resolvedDate = resolveDateFilterValueDate(label, now, todo.createdAt);
-    if (!resolvedDate) {
-      return currentBest;
-    }
-
-    if (!currentBest || resolvedDate.getTime() < currentBest.getTime()) {
-      return resolvedDate;
-    }
-
-    return currentBest;
-  }, null);
-
-  if (bestDate && bestDate.getTime() < today.getTime()) {
-    return [todayLabel];
+    return [toISODateString(startOfDay(now))];
   }
 
   return todo.filters.date;

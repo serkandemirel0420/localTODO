@@ -1705,8 +1705,8 @@ const todoMatchesDateFilterGroup = (
   }
 
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
-  if (todoRepeats) {
-    return hasRepeatingFilter;
+  if (hasRepeatingFilter && todoRepeats) {
+    return true;
   }
 
   if (!hasDateFilters) {
@@ -1720,6 +1720,22 @@ const todoMatchesDateFilterGroup = (
     todo.createdAt,
   );
 };
+
+const getOptionalSelectedFilters = (
+  filters: SelectedFilters,
+  requiredFilters: SelectedFilters,
+): SelectedFilters => ({
+  date: filters.date.filter((value) => !isFilterValueRequired(requiredFilters, 'date', value)),
+  list: filters.list.filter((value) => !isFilterValueRequired(requiredFilters, 'list', value)),
+  priority: filters.priority.filter((value) => (
+    !isFilterValueRequired(requiredFilters, 'priority', value)
+  )),
+  reminder: filters.reminder.filter((value) => (
+    value === REPEATING_ITEMS_FILTER_VALUE
+      ? !hasRepeatingItemsFilter(requiredFilters.reminder)
+      : !requiredFilters.reminder.includes(value)
+  )),
+});
 
 const todoMatchesRequiredFilters = (
   todo: Todo,
@@ -1752,6 +1768,37 @@ const todoMatchesRequiredFilters = (
   );
 };
 
+const todoMatchesAnyOptionalFilter = (
+  todo: Todo,
+  optionalFilters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+  now = new Date(),
+): boolean => {
+  if (!hasAnyRequiredFilters(optionalFilters)) {
+    return true;
+  }
+
+  const effectiveDateLabels = optionalFilters.date.length > 0
+    ? getEffectiveTodoDateLabels(todo, now)
+    : [];
+  const optionalReminderValues = removeRepeatingItemsFilter(optionalFilters.reminder);
+
+  return (
+    optionalFilters.list.some((value) => (
+      todoMatchesSelectedListFilters([value], todo.filters.list, listMenuTree)
+    )) ||
+    optionalFilters.date.some((value) => (
+      todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
+    )) ||
+    optionalFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
+    optionalReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
+    (
+      hasRepeatingItemsFilter(optionalFilters.reminder) &&
+      hasTodoRepeat(todo.filters.reminder)
+    )
+  );
+};
+
 const todoMatchesFilters = (
   todo: Todo,
   filters: SelectedFilters,
@@ -1759,27 +1806,12 @@ const todoMatchesFilters = (
   now = new Date(),
   requiredFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
 ) => {
-  return FILTER_KEYS.every((filterKey) => {
-    const values = filters[filterKey];
+  const optionalFilters = getOptionalSelectedFilters(filters, requiredFilters);
 
-    if (filterKey === 'list') {
-      if (values.length === 0) {
-        return true;
-      }
-
-      return todoMatchesSelectedListFilters(values, todo.filters.list, listMenuTree);
-    }
-
-    if (filterKey === 'date') {
-      return todoMatchesDateFilterGroup(todo, filters, now);
-    }
-
-    if (values.length === 0) {
-      return true;
-    }
-
-    return values.some((value) => todo.filters[filterKey].includes(value));
-  }) && todoMatchesRequiredFilters(todo, requiredFilters, listMenuTree, now);
+  return (
+    todoMatchesRequiredFilters(todo, requiredFilters, listMenuTree, now) &&
+    todoMatchesAnyOptionalFilter(todo, optionalFilters, listMenuTree, now)
+  );
 };
 
 const getFiltersAfterCreateReveal = (

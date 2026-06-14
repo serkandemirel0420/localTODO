@@ -694,6 +694,10 @@ const GOOGLE_REDIRECT_SCHEME = isDevAppVariant ? 'com.localtodo.app.dev' : 'com.
 const MISSING_GOOGLE_CLIENT_ID = 'missing-google-client-id.apps.googleusercontent.com';
 const GOOGLE_SIGN_IN_REQUIRED_MESSAGE = 'Google sign in is required.';
 const GOOGLE_SESSION_EXPIRED_MESSAGE = 'Google session expired. Sign in again.';
+const getAndroidGoogleSignInConfig = () => ({
+  scopes: GOOGLE_AUTH_SCOPES,
+  ...(GOOGLE_WEB_CLIENT_ID ? { webClientId: GOOGLE_WEB_CLIENT_ID } : {}),
+});
 const LIST_MENU_ROW_HEIGHT = 52;
 const LIST_MENU_ICON_HIT_SLOP = 14;
 const SETTINGS_SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
@@ -8448,9 +8452,7 @@ export default function App() {
     const { GoogleSignin } = nativeGoogleSignIn;
 
     try {
-      GoogleSignin.configure({
-        scopes: GOOGLE_AUTH_SCOPES,
-      });
+      GoogleSignin.configure(getAndroidGoogleSignInConfig());
 
       setGoogleDriveBackupStatus('Refreshing Google Drive access...');
 
@@ -8561,21 +8563,27 @@ export default function App() {
     const { GoogleSignin } = nativeGoogleSignIn;
 
     try {
-      GoogleSignin.configure({
-        scopes: GOOGLE_AUTH_SCOPES,
-      });
+      GoogleSignin.configure(getAndroidGoogleSignInConfig());
       setGoogleDriveBackupStatus('Checking Google Play services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true }).catch((error) => {
         throw normalizeNativeGoogleSignInError(error, 'Checking Google Play services');
       });
 
-      setGoogleDriveBackupStatus('Opening Google account picker...');
-      await GoogleSignin.signOut().catch(() => undefined);
-      const signInResult = await GoogleSignin.signIn().catch((error) => {
-        throw normalizeNativeGoogleSignInError(error, 'Opening Google account picker');
-      });
-      if (signInResult.type === 'cancelled') {
-        throw new Error('Google sign in cancelled');
+      let shouldOpenAccountPicker = true;
+      if (GoogleSignin.hasPreviousSignIn()) {
+        setGoogleDriveBackupStatus('Using saved Google account...');
+        const silentResult = await GoogleSignin.signInSilently().catch(() => null);
+        shouldOpenAccountPicker = silentResult?.type !== 'success';
+      }
+
+      if (shouldOpenAccountPicker) {
+        setGoogleDriveBackupStatus('Opening Google account picker...');
+        const signInResult = await GoogleSignin.signIn().catch((error) => {
+          throw normalizeNativeGoogleSignInError(error, 'Opening Google account picker');
+        });
+        if (signInResult.type === 'cancelled') {
+          throw new Error('Google sign in cancelled');
+        }
       }
 
       setGoogleDriveBackupStatus('Requesting Google Drive permission...');

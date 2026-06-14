@@ -2710,7 +2710,7 @@ export default function App() {
   const undoHistoryCount = undoHistory.length;
   const undoToastEntry = undoToastEntryId === null
     ? null
-    : undoHistory.find((entry) => entry.id === undoToastEntryId) ?? null;
+    : undoHistory.find((entry) => entry.id === undoToastEntryId) ?? undoHistory[0] ?? null;
   const getInstantPressHandlers = useInstantPress();
 
   const clearNotificationTodoReveal = useCallback(() => {
@@ -5791,6 +5791,7 @@ export default function App() {
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       recentlyEditedTodoKey,
+      repeatingTodoCompletionFeedbackKey,
       searchQueryKey: query.trim(),
       selectedTodoKey,
     }),
@@ -13874,8 +13875,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
     top: 0,
-    zIndex: 17,
-    elevation: 6,
+    zIndex: 40,
+    elevation: 12,
   },
   todoUndoButton: {
     alignItems: 'center',
@@ -13891,7 +13892,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.14,
     shadowRadius: 10,
-    elevation: 6,
+    elevation: 12,
   },
   todoUndoButtonPressed: {
     opacity: 0.82,

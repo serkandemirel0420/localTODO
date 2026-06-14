@@ -5,6 +5,7 @@ import {
   normalizeDeletedTodos,
   normalizeTodo,
   normalizeTodoFilters,
+  pruneTodoFilters,
   type DeletedTodo,
   type Todo,
   type TodoFilters,
@@ -62,6 +63,7 @@ export type BackupMenuPreset = {
   label: string;
   searchKeywords?: string;
   filters: TodoFilters;
+  requiredFilters: TodoFilters;
   listOrderMode: BackupListOrderMode;
   todoGroupMode: BackupTodoGroupMode;
   todoSortMode: BackupTodoSortMode;
@@ -86,6 +88,7 @@ export type BackupSettings = {
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
+  requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
   todoGroupMode: BackupTodoGroupMode;
@@ -237,6 +240,7 @@ const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
     label: preset.label,
     ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
     filters: cloneTodoFilters(preset.filters),
+    requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
     listOrderMode: preset.listOrderMode,
     todoGroupMode: preset.todoGroupMode,
     todoSortMode: preset.todoSortMode,
@@ -304,12 +308,14 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
       const searchKeywords = typeof item.searchKeywords === 'string'
         ? item.searchKeywords.replace(/\s+/g, ' ').trim()
         : '';
+      const filters = normalizeTodoFilters(item.filters);
 
       return {
         id,
         label,
         ...(searchKeywords ? { searchKeywords } : {}),
-        filters: normalizeTodoFilters(item.filters),
+        filters,
+        requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
         listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
         todoGroupMode: normalizeBackupTodoGroupMode(item.todoGroupMode),
         todoSortMode: normalizeBackupTodoSortMode(item.todoSortMode),
@@ -397,6 +403,7 @@ export const createBackupPayload = (
       quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames),
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
+      requiredFilters: pruneTodoFilters(settings.requiredFilters, settings.selectedFilters),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
       showOverdueMetaTags: settings.showOverdueMetaTags,
       todoGroupMode: settings.todoGroupMode,
@@ -427,6 +434,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       ? settings.quickPresetDefaultsVersion
       : 0,
   );
+  const selectedFilters = normalizeTodoFilters(settings.selectedFilters);
 
   return {
     app: 'localTODO',
@@ -452,7 +460,8 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
       quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
       quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
-      selectedFilters: normalizeTodoFilters(settings.selectedFilters),
+      requiredFilters: pruneTodoFilters(normalizeTodoFilters(settings.requiredFilters), selectedFilters),
+      selectedFilters,
       showOverdueMetaTags: settings.showOverdueMetaTags !== false,
       todoGroupMode: normalizeBackupTodoGroupMode(settings.todoGroupMode),
       todoSortMode: normalizeBackupTodoSortMode(settings.todoSortMode),

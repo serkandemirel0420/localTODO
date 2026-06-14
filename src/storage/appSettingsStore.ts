@@ -20,6 +20,7 @@ import {
   formatListLabel,
   normalizeDeletedTodos,
   normalizeTodoFilters,
+  pruneTodoFilters,
   type DeletedTodo,
   type TodoFilters,
 } from '../todos';
@@ -54,6 +55,7 @@ export type StoredMenuPreset = {
   label: string;
   searchKeywords?: string;
   filters: TodoFilters;
+  requiredFilters: TodoFilters;
   listOrderMode: ListOrderMode;
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
@@ -84,6 +86,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-status',
     label: 'Status',
     filters: { date: [], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'status',
     todoSortMode: 'newest',
@@ -93,6 +96,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-priority',
     label: 'Priority',
     filters: { date: [], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'priority',
     todoSortMode: 'priority',
@@ -107,6 +111,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
       priority: [],
       reminder: [REPEATING_ITEMS_FILTER_VALUE],
     },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -116,6 +121,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-lists',
     label: 'Lists',
     filters: { date: [], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'list',
     todoSortMode: 'date',
@@ -125,6 +131,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-date',
     label: 'Date',
     filters: { date: [], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -134,6 +141,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-today',
     label: 'Today',
     filters: { date: ['Today'], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -143,6 +151,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-tomorrow',
     label: 'Tomorrow',
     filters: { date: ['Tomorrow'], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -152,6 +161,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-high',
     label: 'High',
     filters: { date: [], list: [], priority: ['High'], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'priority',
     todoSortMode: 'priority',
@@ -161,6 +171,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-later',
     label: 'Later',
     filters: { date: ['Later'], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -170,6 +181,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     id: 'starter-newest',
     label: 'Newest',
     filters: { date: [], list: [], priority: [], reminder: [] },
+    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
     listOrderMode: 'alphabetical',
     todoGroupMode: 'none',
     todoSortMode: 'newest',
@@ -248,6 +260,7 @@ export type AppSettings = {
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
+  requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
   todoGroupMode: TodoGroupMode;
@@ -273,6 +286,7 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
     label: preset.label,
     ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
     filters: cloneTodoFilters(preset.filters),
+    requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
     listOrderMode: preset.listOrderMode,
     todoGroupMode: preset.todoGroupMode,
     todoSortMode: preset.todoSortMode,
@@ -402,6 +416,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
   quickPresetNavIconNames: cloneQuickPresetNavIconNames(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES),
   quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
+  requiredFilters: cloneTodoFilters(),
   selectedFilters: cloneTodoFilters(),
   showOverdueMetaTags: true,
   todoGroupMode: 'none',
@@ -815,12 +830,14 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         ? item.createdAt
         : 0;
       const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
+      const filters = normalizeTodoFilters(item.filters);
 
       return {
         id,
         label,
         ...(searchKeywords ? { searchKeywords } : {}),
-        filters: normalizeTodoFilters(item.filters),
+        filters,
+        requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
         listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
         todoGroupMode: normalizeTodoGroupMode(item.todoGroupMode),
         todoSortMode: normalizeTodoSortMode(item.todoSortMode),
@@ -846,6 +863,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(
         DEFAULT_APP_SETTINGS.quickPresetNavPresetIds,
       ),
+      requiredFilters: cloneTodoFilters(),
       selectedFilters: cloneTodoFilters(),
       showOverdueMetaTags: true,
       todoGroupMode: 'none',
@@ -865,6 +883,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     ),
     normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
   );
+  const selectedFilters = normalizeTodoFilters(value.selectedFilters);
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
@@ -886,7 +905,8 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
     quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
     quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
-    selectedFilters: normalizeTodoFilters(value.selectedFilters),
+    requiredFilters: pruneTodoFilters(normalizeTodoFilters(value.requiredFilters), selectedFilters),
+    selectedFilters,
     showOverdueMetaTags: value.showOverdueMetaTags !== false,
     todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
     todoSortMode: normalizeTodoSortMode(value.todoSortMode),

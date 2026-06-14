@@ -91,6 +91,7 @@ import {
   makeTodo,
   normalizeTodoContent,
   normalizeTodoFilters,
+  pruneTodoFilters,
   formatListLabel,
   normalizeTodoText,
   truncateTodoText,
@@ -231,6 +232,7 @@ type UndoSnapshot = {
   metaTagVisibility: MetaTagVisibility;
   quickPresetNavIconNames: string[];
   quickPresetNavPresetIds: Array<string | null>;
+  requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
   todoGroupMode: TodoGroupMode;
@@ -1501,6 +1503,85 @@ const dateFilterValuesIncludeExactDay = (
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
 
+const hasAnyRequiredFilters = (filters: TodoFilters): boolean =>
+  filters.date.length > 0 ||
+  filters.list.length > 0 ||
+  filters.priority.length > 0 ||
+  filters.reminder.length > 0;
+
+const isFilterValueRequired = (
+  filters: TodoFilters,
+  filterKey: FilterKey,
+  value: string,
+): boolean => {
+  if (value === REPEATING_ITEMS_FILTER_VALUE) {
+    return hasRepeatingItemsFilter(filters.reminder);
+  }
+
+  const filterValue = filterKey === 'date' ? formatDateFilterValue(value) : value;
+  return filters[filterKey].some((item) => (
+    filterKey === 'date'
+      ? formatDateFilterValue(item) === filterValue
+      : item === filterValue
+  ));
+};
+
+const addFilterValueToRequiredFilters = (
+  filters: TodoFilters,
+  filterKey: FilterKey,
+  value: string,
+): TodoFilters => {
+  const clonedFilters = cloneTodoFilters(filters);
+
+  if (value === REPEATING_ITEMS_FILTER_VALUE) {
+    return hasRepeatingItemsFilter(filters.reminder)
+      ? clonedFilters
+      : {
+          ...clonedFilters,
+          reminder: [...clonedFilters.reminder, REPEATING_ITEMS_FILTER_VALUE],
+        };
+  }
+
+  if (isFilterValueRequired(filters, filterKey, value)) {
+    return clonedFilters;
+  }
+
+  const storedValue = filterKey === 'date' ? formatDateFilterValue(value) : value;
+  return {
+    ...clonedFilters,
+    [filterKey]: [...clonedFilters[filterKey], storedValue || value],
+  };
+};
+
+const removeFilterValueFromRequiredFilters = (
+  filters: TodoFilters,
+  filterKey: FilterKey,
+  value: string,
+): TodoFilters => {
+  const clonedFilters = cloneTodoFilters(filters);
+
+  if (value === REPEATING_ITEMS_FILTER_VALUE) {
+    return { ...clonedFilters, reminder: removeRepeatingItemsFilter(clonedFilters.reminder) };
+  }
+
+  const formattedValue = filterKey === 'date'
+    ? formatDateFilterValue(value)
+    : value;
+  const nextValues = clonedFilters[filterKey].filter((item) => {
+    if (filterKey !== 'date') {
+      return item !== value;
+    }
+
+    if (formattedValue === CUSTOM_DATE_LABEL) {
+      return !isCustomDateLabel(item);
+    }
+
+    return formatDateFilterValue(item) !== formattedValue;
+  });
+
+  return { ...clonedFilters, [filterKey]: nextValues };
+};
+
 const getSharedTodoFilters = (items: Todo[]): TodoFilters => {
   if (items.length === 0) {
     return cloneTodoFilters();
@@ -1545,11 +1626,13 @@ const getMergedTodoFilters = (items: Todo[]): TodoFilters => {
 const menuPresetMatchesState = (
   preset: MenuPreset,
   filters: SelectedFilters,
+  requiredFilters: SelectedFilters,
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
 ): boolean =>
   filtersEqual(preset.filters, filters) &&
+  filtersEqual(preset.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
   preset.todoSortMode === sortMode &&
   preset.todoGroupMode === groupMode &&
   preset.listOrderMode === orderMode;
@@ -1559,15 +1642,18 @@ const formatPresetCount = (count: number, label: string) =>
 
 const formatPresetSummary = (
   filters: SelectedFilters,
+  requiredFilters: SelectedFilters,
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
 ) => {
+  const requiredFilterCount = countFilters(pruneTodoFilters(requiredFilters, filters));
   const parts = [
     filters.list.length > 0 ? formatPresetCount(filters.list.length, 'list') : null,
     filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
     filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
     hasRepeatingItemsFilter(filters.reminder) ? REPEATING_ITEMS_FILTER_LABEL : null,
+    requiredFilterCount > 0 ? `${requiredFilterCount} must` : null,
     `Sort ${TODO_SORT_LABELS[sortMode]}`,
     `Group ${TODO_GROUP_LABELS[groupMode]}`,
     orderMode === 'alphabetical' ? 'Lists A to Z' : 'Manual lists',
@@ -1581,6 +1667,7 @@ const getQuickPresetNavDetail = (
   dateLabelDisplayMode: DateLabelDisplayMode,
 ) => {
   const activeFilterItems = buildActiveFilterItems(preset.filters, dateLabelDisplayMode);
+  const requiredFilterItems = buildActiveFilterItems(preset.requiredFilters, dateLabelDisplayMode);
   const filterParts = FILTER_KEYS.flatMap((filterKey) => {
     const labels = activeFilterItems
       .filter((item) => item.filterKey === filterKey)
@@ -1590,7 +1677,9 @@ const getQuickPresetNavDetail = (
       ? [`${FILTER_KIND_LABELS[filterKey]} (${labels.join(', ')})`]
       : [];
   });
+  const requiredFilterLabels = requiredFilterItems.map((item) => item.displayLabel);
   const viewParts = [
+    requiredFilterLabels.length > 0 ? `Must (${requiredFilterLabels.join(', ')})` : null,
     preset.todoGroupMode !== 'none' ? `Group (${TODO_GROUP_LABELS[preset.todoGroupMode]})` : null,
     `Sort (${TODO_SORT_LABELS[preset.todoSortMode]})`,
     preset.listOrderMode === 'manual' ? 'Lists (Manual)' : null,
@@ -1632,11 +1721,43 @@ const todoMatchesDateFilterGroup = (
   );
 };
 
+const todoMatchesRequiredFilters = (
+  todo: Todo,
+  requiredFilters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+  now = new Date(),
+): boolean => {
+  if (!hasAnyRequiredFilters(requiredFilters)) {
+    return true;
+  }
+
+  const effectiveDateLabels = requiredFilters.date.length > 0
+    ? getEffectiveTodoDateLabels(todo, now)
+    : [];
+  const requiredReminderValues = removeRepeatingItemsFilter(requiredFilters.reminder);
+
+  return (
+    requiredFilters.list.every((value) => (
+      todoMatchesSelectedListFilters([value], todo.filters.list, listMenuTree)
+    )) &&
+    requiredFilters.date.every((value) => (
+      todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
+    )) &&
+    requiredFilters.priority.every((value) => todo.filters.priority.includes(value)) &&
+    requiredReminderValues.every((value) => todo.filters.reminder.includes(value)) &&
+    (
+      !hasRepeatingItemsFilter(requiredFilters.reminder) ||
+      hasTodoRepeat(todo.filters.reminder)
+    )
+  );
+};
+
 const todoMatchesFilters = (
   todo: Todo,
   filters: SelectedFilters,
   listMenuTree: ListMenuNode[],
   now = new Date(),
+  requiredFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
 ) => {
   return FILTER_KEYS.every((filterKey) => {
     const values = filters[filterKey];
@@ -1658,7 +1779,7 @@ const todoMatchesFilters = (
     }
 
     return values.some((value) => todo.filters[filterKey].includes(value));
-  });
+  }) && todoMatchesRequiredFilters(todo, requiredFilters, listMenuTree, now);
 };
 
 const getFiltersAfterCreateReveal = (
@@ -2397,6 +2518,7 @@ export default function App() {
   );
   const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
   const selectedFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
+  const requiredFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
   const showOverdueMetaTagsRef = useRef(showOverdueMetaTags);
   const todoGroupModeRef = useRef<TodoGroupMode>(todoGroupMode);
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
@@ -2422,6 +2544,9 @@ export default function App() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
+  );
+  const [requiredFilters, setRequiredFilters] = useState<SelectedFilters>(
+    () => cloneTodoFilters(),
   );
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
@@ -2479,6 +2604,7 @@ export default function App() {
   quickPresetNavIconNamesRef.current = quickPresetNavIconNames;
   quickPresetNavPresetIdsRef.current = quickPresetNavPresetIds;
   selectedFiltersRef.current = selectedFilters;
+  requiredFiltersRef.current = requiredFilters;
   showOverdueMetaTagsRef.current = showOverdueMetaTags;
   todoGroupModeRef.current = todoGroupMode;
   todoSortModeRef.current = todoSortMode;
@@ -2665,8 +2791,13 @@ export default function App() {
           settings.listMenuTree,
           settings.lastCreateTodoFilters,
         );
+        const nextRequiredFilters = pruneTodoFilters(
+          settings.requiredFilters,
+          settings.selectedFilters,
+        );
 
         setSelectedFilters(settings.selectedFilters);
+        setRequiredFilters(nextRequiredFilters);
         setDeletedTodos(settings.deletedTodos);
         setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
         setFilterColors(settings.filterColors);
@@ -2726,6 +2857,7 @@ export default function App() {
     quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
@@ -2751,6 +2883,7 @@ export default function App() {
     metaTagVisibility,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
@@ -2964,6 +3097,7 @@ export default function App() {
     metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
     quickPresetNavIconNames: cloneQuickPresetNavIconNames(quickPresetNavIconNamesRef.current),
     quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(quickPresetNavPresetIdsRef.current),
+    requiredFilters: pruneTodoFilters(requiredFiltersRef.current, selectedFiltersRef.current),
     selectedFilters: cloneTodoFilters(selectedFiltersRef.current),
     showOverdueMetaTags: showOverdueMetaTagsRef.current,
     todoGroupMode: todoGroupModeRef.current,
@@ -3041,6 +3175,10 @@ export default function App() {
       snapshot.quickPresetNavPresetIds,
     );
     const restoredSelectedFilters = cloneTodoFilters(snapshot.selectedFilters);
+    const restoredRequiredFilters = pruneTodoFilters(
+      snapshot.requiredFilters,
+      restoredSelectedFilters,
+    );
     const restoredTodoIds = new Set(restoredTodos.map((todo) => todo.id));
     const restoredDeletedTodoIds = new Set(restoredDeletedTodos.map((todo) => todo.id));
     const restoredPresetIds = new Set(restoredMenuPresets.map((preset) => preset.id));
@@ -3057,6 +3195,7 @@ export default function App() {
       metaTagVisibility: restoredMetaTagVisibility,
       quickPresetNavIconNames: restoredQuickPresetNavIconNames,
       quickPresetNavPresetIds: restoredQuickPresetNavPresetIds,
+      requiredFilters: restoredRequiredFilters,
       selectedFilters: restoredSelectedFilters,
       showOverdueMetaTags: snapshot.showOverdueMetaTags,
       todoGroupMode: snapshot.todoGroupMode,
@@ -3078,6 +3217,7 @@ export default function App() {
     quickPresetNavIconNamesRef.current = restoredQuickPresetNavIconNames;
     quickPresetNavPresetIdsRef.current = restoredQuickPresetNavPresetIds;
     selectedFiltersRef.current = restoredSelectedFilters;
+    requiredFiltersRef.current = restoredRequiredFilters;
     showOverdueMetaTagsRef.current = snapshot.showOverdueMetaTags;
     todoGroupModeRef.current = snapshot.todoGroupMode;
     todoSortModeRef.current = snapshot.todoSortMode;
@@ -3100,6 +3240,7 @@ export default function App() {
     setQuickPresetNavIconNames(restoredQuickPresetNavIconNames);
     setQuickPresetNavPresetIds(restoredQuickPresetNavPresetIds);
     setSelectedFilters(restoredSelectedFilters);
+    setRequiredFilters(restoredRequiredFilters);
     setTodoGroupMode(snapshot.todoGroupMode);
     setTodoSortMode(snapshot.todoSortMode);
     setActiveTodoMenuId((current) => (current && restoredTodoIds.has(current) ? current : null));
@@ -4012,6 +4153,7 @@ export default function App() {
         selectedFilters,
         listMenuTree,
         now,
+        requiredFilters,
       ));
   }, [
     hideDoneTodosForCurrentView,
@@ -4022,6 +4164,7 @@ export default function App() {
     searchMatchedTodoIds,
     searchMode,
     searchQuery,
+    requiredFilters,
     selectedFilters,
     todos,
     todosById,
@@ -4218,11 +4361,15 @@ export default function App() {
       listMenuTree,
       new Date(createdAt),
     );
+    const nextRequiredFilters = pruneTodoFilters(requiredFilters, nextSelectedFilters);
 
     recordUndo('Create todo');
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     if (!filtersEqual(selectedFilters, nextSelectedFilters)) {
       setSelectedFilters(nextSelectedFilters);
+    }
+    if (!filtersEqual(requiredFilters, nextRequiredFilters)) {
+      setRequiredFilters(nextRequiredFilters);
     }
     clearNotificationTodoReveal();
     if (query.trim()) {
@@ -4248,6 +4395,7 @@ export default function App() {
     listMenuTree,
     query,
     recordUndo,
+    requiredFilters,
     resetCreateDrawerState,
     selectedFilters,
     todoTextMaxLength,
@@ -4734,12 +4882,17 @@ export default function App() {
 
     clearNotificationTodoReveal();
     const nextFilters = updater(cloneTodoFilters(selectedFiltersRef.current));
-    if (filtersEqual(selectedFiltersRef.current, nextFilters)) {
+    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters)
+    ) {
       return;
     }
 
     recordUndo('Change filters');
     setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
   }, [clearNotificationTodoReveal, getCurrentTodoEditTargetIds, recordUndo, updateTodoFiltersForIds]);
 
   const closeDatePicker = useCallback(() => {
@@ -5369,6 +5522,7 @@ export default function App() {
     return menuPresets.find((preset) => menuPresetMatchesState(
       preset,
       selectedFilters,
+      requiredFilters,
       effectiveSortMode,
       effectiveGroupMode,
       listOrderMode,
@@ -5379,6 +5533,7 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuPresets,
+    requiredFilters,
     selectedFilters,
   ]);
   const menuPresetById = useMemo(
@@ -5772,6 +5927,7 @@ export default function App() {
   const menuFilters = activeTodoMenuFilters ?? selectedFilters;
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
   const includeActiveTodoReminderRows = hasTodoEditTargets;
+  const menuRequiredFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : requiredFilters;
   const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
   const selectedFilterCount = countFilters(selectedFilters);
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
@@ -5790,7 +5946,13 @@ export default function App() {
             return total;
           }
 
-          return todoMatchesFilters(todo, preset.filters, listMenuTree, now)
+          return todoMatchesFilters(
+            todo,
+            preset.filters,
+            listMenuTree,
+            now,
+            preset.requiredFilters,
+          )
             ? total + 1
             : total;
         }, 0);
@@ -5882,7 +6044,13 @@ export default function App() {
           return false;
         }
 
-        return todoMatchesFilters(todo, item.preset.filters, listMenuTree, now);
+        return todoMatchesFilters(
+          todo,
+          item.preset.filters,
+          listMenuTree,
+          now,
+          item.preset.requiredFilters,
+        );
       });
 
       todosByPresetId.set(item.preset.id, presetTodos);
@@ -5989,6 +6157,7 @@ export default function App() {
   const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
   const currentPresetSummary = formatPresetSummary(
     menuFilters,
+    menuRequiredFilters,
     effectiveSortMode,
     effectiveGroupMode,
     listOrderMode,
@@ -6006,6 +6175,7 @@ export default function App() {
       !menuPresetMatchesState(
         openMenuPreset,
         selectedFilters,
+        requiredFilters,
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
@@ -6102,6 +6272,7 @@ export default function App() {
           preset: latestMenuPreset,
           summary: formatPresetSummary(
             latestMenuPreset.filters,
+            latestMenuPreset.requiredFilters,
             latestMenuPreset.todoSortMode,
             latestMenuPreset.todoGroupMode,
             latestMenuPreset.listOrderMode,
@@ -6131,6 +6302,7 @@ export default function App() {
           preset,
           summary: formatPresetSummary(
             preset.filters,
+            preset.requiredFilters,
             preset.todoSortMode,
             preset.todoGroupMode,
             preset.listOrderMode,
@@ -6457,13 +6629,18 @@ export default function App() {
       ...selectedFiltersRef.current,
       reminder: toggleRepeatingItemsFilterValue(selectedFiltersRef.current.reminder),
     };
+    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
 
-    if (filtersEqual(selectedFiltersRef.current, nextFilters)) {
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters)
+    ) {
       return;
     }
 
     recordUndo('Change filters');
     setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, recordUndo]);
 
@@ -6497,6 +6674,105 @@ export default function App() {
     toggleFilterValue,
     toggleRepeatingItemsFilter,
   ]);
+
+  const toggleRequiredFilterValue = useCallback((filterKey: FilterKey, value: string) => {
+    if (hasTodoEditTargets) {
+      return;
+    }
+
+    const formattedValue = filterKey === 'date'
+      ? formatDateFilterValue(value)
+      : value;
+    const storedValue = value === REPEATING_ITEMS_FILTER_VALUE
+      ? value
+      : formattedValue || value;
+    const currentlyRequired = isFilterValueRequired(
+      requiredFiltersRef.current,
+      filterKey,
+      value,
+    );
+    const ensureSelected = (current: SelectedFilters): SelectedFilters => {
+      if (value === REPEATING_ITEMS_FILTER_VALUE) {
+        return hasRepeatingItemsFilter(current.reminder)
+          ? current
+          : { ...current, reminder: [...current.reminder, REPEATING_ITEMS_FILTER_VALUE] };
+      }
+
+      if (isFilterValueRequired(current, filterKey, value)) {
+        return current;
+      }
+
+      return { ...current, [filterKey]: [...current[filterKey], storedValue] };
+    };
+    const nextFilters = ensureSelected(cloneTodoFilters(selectedFiltersRef.current));
+    const nextRequiredFilters = currentlyRequired
+      ? removeFilterValueFromRequiredFilters(requiredFiltersRef.current, filterKey, value)
+      : addFilterValueToRequiredFilters(requiredFiltersRef.current, filterKey, storedValue);
+    const prunedRequiredFilters = pruneTodoFilters(nextRequiredFilters, nextFilters);
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters)
+    ) {
+      return;
+    }
+
+    clearNotificationTodoReveal();
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(prunedRequiredFilters);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, hasTodoEditTargets, recordUndo]);
+
+  const toggleRequiredListMenuItem = useCallback((item: VisibleListMenuItem) => {
+    if (hasTodoEditTargets) {
+      return;
+    }
+
+    const currentlyRequired = isFilterValueRequired(requiredFiltersRef.current, 'list', item.label);
+    const ensureSelected = (current: SelectedFilters): SelectedFilters => {
+      if (isListMenuItemSelected(item, current.list, listMenuTree)) {
+        return current;
+      }
+
+      if (item.isSubsection && item.parentLabel) {
+        const parentNode = findListMenuNode(listMenuTree, item.parentLabel);
+        const siblingLabels = parentNode?.children?.map((child) => child.label) ?? [];
+        const withoutFamily = current.list.filter(
+          (label) => label !== item.parentLabel && !siblingLabels.includes(label),
+        );
+
+        return { ...current, list: [...withoutFamily, item.label] };
+      }
+
+      const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
+        child.label
+      )) ?? [];
+      const withoutFamily = current.list.filter(
+        (label) => label !== item.label && !childLabels.includes(label),
+      );
+
+      return { ...current, list: [...withoutFamily, item.label] };
+    };
+    const nextFilters = ensureSelected(cloneTodoFilters(selectedFiltersRef.current));
+    const nextRequiredFilters = currentlyRequired
+      ? removeFilterValueFromRequiredFilters(requiredFiltersRef.current, 'list', item.label)
+      : addFilterValueToRequiredFilters(requiredFiltersRef.current, 'list', item.label);
+    const prunedRequiredFilters = pruneTodoFilters(nextRequiredFilters, nextFilters);
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters)
+    ) {
+      return;
+    }
+
+    clearNotificationTodoReveal();
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(prunedRequiredFilters);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, hasTodoEditTargets, listMenuTree, recordUndo]);
 
   const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
     const toggleValue = (current: SelectedFilters): SelectedFilters => {
@@ -6603,6 +6879,7 @@ export default function App() {
       const defaultFilters = cloneTodoFilters();
       const hasDurableChange =
         !filtersEqual(selectedFiltersRef.current, defaultFilters) ||
+        !filtersEqual(requiredFiltersRef.current, defaultFilters) ||
         todoSortModeRef.current !== 'newest' ||
         todoGroupModeRef.current !== 'none' ||
         listOrderModeRef.current !== 'alphabetical';
@@ -6612,6 +6889,7 @@ export default function App() {
       }
       clearNotificationTodoReveal();
       setSelectedFilters(defaultFilters);
+      setRequiredFilters(defaultFilters);
       setTodoSortMode('newest');
       setTodoGroupMode('none');
       setListOrderMode('alphabetical');
@@ -7071,6 +7349,7 @@ export default function App() {
         id: `preset-${createdAt}-${Math.random().toString(36).slice(2)}`,
         label,
         filters: cloneTodoFilters(menuFilters),
+        requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
         listOrderMode,
         todoGroupMode: effectiveGroupMode,
         todoSortMode: effectiveSortMode,
@@ -7085,6 +7364,7 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuFilters,
+    menuRequiredFilters,
     recordUndo,
   ]);
 
@@ -7143,6 +7423,10 @@ export default function App() {
       ...filters,
       list: replaceLabel(filters.list),
     }));
+    setRequiredFilters((filters) => ({
+      ...filters,
+      list: replaceLabel(filters.list),
+    }));
     setLastCreateTodoFilters((filters) => ({
       ...filters,
       list: replaceLabel(filters.list),
@@ -7176,6 +7460,10 @@ export default function App() {
       filters: {
         ...preset.filters,
         list: replaceLabel(preset.filters.list),
+      },
+      requiredFilters: {
+        ...preset.requiredFilters,
+        list: replaceLabel(preset.requiredFilters.list),
       },
     })));
     setDeletedTodos((current) => current.map((todo) => ({
@@ -7359,22 +7647,17 @@ export default function App() {
     options?: { closeMenu?: boolean; haptic?: boolean },
   ) => {
     const nextFilters = cloneTodoFilters(preset.filters);
+    const nextRequiredFilters = pruneTodoFilters(preset.requiredFilters, nextFilters);
 
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
     } else {
-      const hasDurableChange =
-        !filtersEqual(selectedFiltersRef.current, nextFilters) ||
-        listOrderModeRef.current !== preset.listOrderMode ||
-        todoGroupModeRef.current !== preset.todoGroupMode ||
-        todoSortModeRef.current !== preset.todoSortMode;
-
-      if (hasDurableChange) {
-        recordUndo('Apply preset');
-      }
       clearNotificationTodoReveal();
       setSelectedFilters((current) => (
         filtersEqual(current, nextFilters) ? current : nextFilters
+      ));
+      setRequiredFilters((current) => (
+        filtersEqual(current, nextRequiredFilters) ? current : nextRequiredFilters
       ));
       setListOrderMode(preset.listOrderMode);
       setTodoGroupMode(preset.todoGroupMode);
@@ -7394,7 +7677,6 @@ export default function App() {
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
-    recordUndo,
     updateCurrentTodoTargetFilters,
   ]);
 
@@ -7420,6 +7702,10 @@ export default function App() {
 
     const hasChanges =
       !filtersEqual(currentPreset.filters, menuFilters) ||
+      !filtersEqual(
+        currentPreset.requiredFilters,
+        pruneTodoFilters(menuRequiredFilters, menuFilters),
+      ) ||
       currentPreset.listOrderMode !== listOrderMode ||
       currentPreset.todoGroupMode !== effectiveGroupMode ||
       currentPreset.todoSortMode !== effectiveSortMode;
@@ -7436,6 +7722,7 @@ export default function App() {
         ? {
             ...preset,
             filters: cloneTodoFilters(menuFilters),
+            requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
             listOrderMode,
             todoGroupMode: effectiveGroupMode,
             todoSortMode: effectiveSortMode,
@@ -7451,6 +7738,7 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuFilters,
+    menuRequiredFilters,
     menuPresets,
     recordUndo,
   ]);
@@ -7463,6 +7751,10 @@ export default function App() {
 
     const hasChanges =
       !filtersEqual(currentPreset.filters, selectedFilters) ||
+      !filtersEqual(
+        currentPreset.requiredFilters,
+        pruneTodoFilters(requiredFilters, selectedFilters),
+      ) ||
       currentPreset.listOrderMode !== listOrderMode ||
       currentPreset.todoGroupMode !== effectiveGroupMode ||
       currentPreset.todoSortMode !== effectiveSortMode;
@@ -7480,6 +7772,7 @@ export default function App() {
         ? {
             ...preset,
             filters: cloneTodoFilters(selectedFilters),
+            requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
             listOrderMode,
             todoGroupMode: effectiveGroupMode,
             todoSortMode: effectiveSortMode,
@@ -7496,6 +7789,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     recordUndo,
+    requiredFilters,
     selectedFilters,
   ]);
 
@@ -7570,6 +7864,7 @@ export default function App() {
       menuPresetMatchesState(
         removed,
         selectedFilters,
+        requiredFilters,
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
@@ -7603,6 +7898,7 @@ export default function App() {
     menuPresets,
     openMenuPresetId,
     recordUndo,
+    requiredFilters,
     selectedFilters,
   ]);
 
@@ -7734,10 +8030,25 @@ export default function App() {
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
+      setRequiredFilters((filters) => ({
+        ...filters,
+        list: filters.list.filter((label) => !removedLabels.has(label)),
+      }));
       setLastCreateTodoFilters((filters) => ({
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
+      setMenuPresets((currentPresets) => currentPresets.map((preset) => ({
+        ...preset,
+        filters: {
+          ...preset.filters,
+          list: preset.filters.list.filter((label) => !removedLabels.has(label)),
+        },
+        requiredFilters: {
+          ...preset.requiredFilters,
+          list: preset.requiredFilters.list.filter((label) => !removedLabels.has(label)),
+        },
+      })));
       setTodos((items) => {
         const nextItems = items.map((todo) => ({
           ...todo,
@@ -7790,6 +8101,24 @@ export default function App() {
         : `${selectedTodoCount} selected`;
     }
 
+    const activePresetTitle =
+      openMenuPreset &&
+      !hasTodoEditTargets &&
+      menuPresetMatchesState(
+        openMenuPreset,
+        selectedFilters,
+        requiredFilters,
+        effectiveSortMode,
+        effectiveGroupMode,
+        listOrderMode,
+      )
+        ? openMenuPreset.label
+        : null;
+
+    if (activePresetTitle) {
+      return activePresetTitle;
+    }
+
     const activeListTitle =
       activeListDisplay.listLabel
       ?? (selectedFilters.list.length === 1 ? selectedFilters.list[0] : null);
@@ -7803,7 +8132,19 @@ export default function App() {
     }
 
     return 'TODO';
-  }, [activeListDisplay.listLabel, menuMode, selectedFilters.list, selectedTodoCount, todoSelectMode]);
+  }, [
+    activeListDisplay.listLabel,
+    effectiveGroupMode,
+    effectiveSortMode,
+    hasTodoEditTargets,
+    listOrderMode,
+    menuMode,
+    openMenuPreset,
+    requiredFilters,
+    selectedFilters,
+    selectedTodoCount,
+    todoSelectMode,
+  ]);
 
   const focusHeaderSearchInput = useCallback(() => {
     searchInputRef.current?.blur();
@@ -8257,6 +8598,7 @@ export default function App() {
       quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
+      requiredFilters,
       selectedFilters,
       showOverdueMetaTags,
       todoGroupMode,
@@ -8289,6 +8631,7 @@ export default function App() {
     pendingDeleteIds,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
@@ -8316,7 +8659,12 @@ export default function App() {
     reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
     clearNotificationTodoReveal();
     setDeletedTodos(backup.payload.settings.deletedTodos);
-    setSelectedFilters(normalizeTodoFilters(backup.payload.settings.selectedFilters));
+    const restoredSelectedFilters = normalizeTodoFilters(backup.payload.settings.selectedFilters);
+    setSelectedFilters(restoredSelectedFilters);
+    setRequiredFilters(pruneTodoFilters(
+      backup.payload.settings.requiredFilters,
+      restoredSelectedFilters,
+    ));
     setFilterConfigUiState(cloneFilterConfigUiState(backup.payload.settings.filterConfigUiState));
     setFilterColors(backup.payload.settings.filterColors);
     setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
@@ -10075,12 +10423,22 @@ export default function App() {
                                       : formatDateFilterLabel(item.label)
                                   )
                                   : item.label;
+                              const isRequired = !hasTodoEditTargets && isFilterValueRequired(
+                                menuRequiredFilters,
+                                item.filterKey,
+                                item.label,
+                              );
 
                               return (
                                 <View style={styles.listMenuRow}>
                                   <Pressable
                                     accessibilityRole="button"
                                     onPress={() => removeFilter(item.filterKey, item.label)}
+                                    onLongPress={
+                                      !hasTodoEditTargets
+                                        ? () => toggleRequiredFilterValue(item.filterKey, item.label)
+                                        : undefined
+                                    }
                                     style={({ pressed }) => [
                                       styles.listMenuRowMainPress,
                                       pressed && styles.listMenuRowPressed,
@@ -10096,6 +10454,14 @@ export default function App() {
                                         ]}
                                       />
                                       <Text style={styles.listMenuRowTitle}>{displayLabel}</Text>
+                                      {isRequired ? (
+                                        <Ionicons
+                                          color={colorTheme?.text ?? THEME_ACCENT}
+                                          name="pin"
+                                          size={14}
+                                          style={styles.listMenuRequiredPin}
+                                        />
+                                      ) : null}
                                     </View>
                                   </Pressable>
                                   <View style={styles.listMenuSubmenuZone}>
@@ -10429,6 +10795,15 @@ export default function App() {
                                 : isRepeatingItemsValue
                                   ? `Clear ${REPEATING_ITEMS_FILTER_LABEL}`
                                 : `Clear ${displayLabel}`;
+                            const canRequireValue =
+                              !hasTodoEditTargets &&
+                              item.label !== CUSTOM_DATE_LABEL &&
+                              (!isReminderValue || isRepeatingItemsValue);
+                            const isRequired = canRequireValue && isFilterValueRequired(
+                              menuRequiredFilters,
+                              item.filterKey,
+                              item.label,
+                            );
 
                             return (
                               <View style={styles.listMenuSelectableRow}>
@@ -10439,6 +10814,11 @@ export default function App() {
                                       ? handleDateMenuLabelPress(item.label)
                                       : toggleFilterValue(item.filterKey, item.label)
                                   )}
+                                  onLongPress={
+                                    canRequireValue
+                                      ? () => toggleRequiredFilterValue(item.filterKey, item.label)
+                                      : undefined
+                                  }
                                   style={({ pressed }) => [
                                     styles.listMenuRow,
                                     (isSelected || pressed) && styles.listMenuRowSelected,
@@ -10458,6 +10838,14 @@ export default function App() {
                                       ]}
                                     />
                                     <Text style={styles.listMenuRowTitle}>{displayLabel}</Text>
+                                    {isRequired ? (
+                                      <Ionicons
+                                        color={colorTheme?.text ?? THEME_ACCENT}
+                                        name="pin"
+                                        size={14}
+                                        style={styles.listMenuRequiredPin}
+                                      />
+                                    ) : null}
                                   </View>
                                 </Pressable>
                                 <Pressable
@@ -10517,6 +10905,11 @@ export default function App() {
                           const listIconName = item.isSubsection
                             ? undefined
                             : findListMenuNode(listMenuTree, item.label)?.iconName;
+                          const isRequired = !hasTodoEditTargets && isFilterValueRequired(
+                            menuRequiredFilters,
+                            'list',
+                            item.label,
+                          );
 
                           return (
                             <View style={styles.listMenuSelectableRow}>
@@ -10528,6 +10921,11 @@ export default function App() {
                                     : item.label
                                 }
                                 onPress={() => toggleListMenuItem(item)}
+                                onLongPress={
+                                  !hasTodoEditTargets
+                                    ? () => toggleRequiredListMenuItem(item)
+                                    : undefined
+                                }
                                 style={({ pressed }) => [
                                   styles.listMenuRow,
                                   item.depth > 0 && styles.listMenuRowIndented,
@@ -10567,6 +10965,14 @@ export default function App() {
                                   >
                                     {item.label}
                                   </Text>
+                                  {isRequired ? (
+                                    <Ionicons
+                                      color={listColorTheme?.text ?? THEME_ACCENT}
+                                      name="pin"
+                                      size={14}
+                                      style={styles.listMenuRequiredPin}
+                                    />
+                                  ) : null}
                                 </View>
                               </Pressable>
                               <Pressable
@@ -13959,6 +14365,9 @@ const styles = StyleSheet.create({
   filterTypeTextNoColor: {
     color: '#8F877F',
   },
+  listMenuRequiredPin: {
+    flexShrink: 0,
+  },
   listMenuValueText: {
     color: THEME_TEXT_SECONDARY,
     fontSize: 12,
@@ -14065,6 +14474,7 @@ const styles = StyleSheet.create({
   },
   listMenuRowTitle: {
     color: '#2A2520',
+    flexShrink: 1,
     fontSize: 15,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,

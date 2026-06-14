@@ -79,6 +79,26 @@ export const normalizeTodoFilters = (
   };
 };
 
+const keepSelectedFilterValues = (values: string[], selectedValues: string[]) => {
+  const selectedSet = new Set(selectedValues);
+  return values.filter((value) => selectedSet.has(value));
+};
+
+export const pruneTodoFilters = (
+  filters: TodoFilters,
+  selectedFilters: TodoFilters,
+): TodoFilters => {
+  const normalizedFilters = normalizeTodoFilters(filters);
+  const normalizedSelectedFilters = normalizeTodoFilters(selectedFilters);
+
+  return {
+    date: keepSelectedFilterValues(normalizedFilters.date, normalizedSelectedFilters.date),
+    list: keepSelectedFilterValues(normalizedFilters.list, normalizedSelectedFilters.list),
+    priority: keepSelectedFilterValues(normalizedFilters.priority, normalizedSelectedFilters.priority),
+    reminder: keepSelectedFilterValues(normalizedFilters.reminder, normalizedSelectedFilters.reminder),
+  };
+};
+
 /** Matches `styles.todoText` and list row layout in App.tsx */
 export const TODO_TEXT_FONT_SIZE = 16;
 export const TODO_TEXT_LINE_COUNT = 2;

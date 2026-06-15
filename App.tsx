@@ -186,16 +186,20 @@ import {
   decodeTodoReminder,
   encodeTodoReminder,
   getDatePickerMenuDisplayLabel,
+  hasNotRepeatingItemsFilter,
   hasRepeatingItemsFilter,
   hasTodoReminderTime,
   hasTodoRepeat,
   isDatePickerMenuItemSelected,
   isReminderPickerMenuLabel,
   REMINDER_PICKER_LABEL,
+  NOT_REPEATING_ITEMS_FILTER_LABEL,
+  NOT_REPEATING_ITEMS_FILTER_VALUE,
   REPEATING_ITEMS_FILTER_LABEL,
   REPEATING_ITEMS_FILTER_VALUE,
-  removeRepeatingItemsFilter,
+  removeRepeatStatusFilters,
   REPEAT_PICKER_LABEL,
+  toggleNotRepeatingItemsFilterValue,
   toggleRepeatingItemsFilterValue,
   type ReminderTime,
   type RepeatPreset,
@@ -232,6 +236,7 @@ type UndoSnapshot = {
   metaTagVisibility: MetaTagVisibility;
   quickPresetNavIconNames: string[];
   quickPresetNavPresetIds: Array<string | null>;
+  avoidedFilters: TodoFilters;
   requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
@@ -424,18 +429,48 @@ const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
   priority: 'priority',
 };
 
+const REPEAT_STATUS_FILTER_ITEMS = [
+  {
+    displayLabel: REPEATING_ITEMS_FILTER_LABEL,
+    id: 'repeating-items',
+    value: REPEATING_ITEMS_FILTER_VALUE,
+  },
+  {
+    displayLabel: NOT_REPEATING_ITEMS_FILTER_LABEL,
+    id: 'not-repeating-items',
+    value: NOT_REPEATING_ITEMS_FILTER_VALUE,
+  },
+];
+
+const isRepeatStatusFilterValue = (value: string) =>
+  value === REPEATING_ITEMS_FILTER_VALUE ||
+  value === NOT_REPEATING_ITEMS_FILTER_VALUE;
+
+const getRepeatStatusFilterDisplayLabel = (value: string) => (
+  value === NOT_REPEATING_ITEMS_FILTER_VALUE
+    ? NOT_REPEATING_ITEMS_FILTER_LABEL
+    : REPEATING_ITEMS_FILTER_LABEL
+);
+
+const hasRepeatStatusFilter = (values: string[]) =>
+  hasRepeatingItemsFilter(values) || hasNotRepeatingItemsFilter(values);
+
+const countRepeatStatusFilters = (values: string[]) =>
+  REPEAT_STATUS_FILTER_ITEMS.filter((item) => values.includes(item.value)).length;
+
 const countDateMenuSelections = (
   filters: TodoFilters,
   includeReminderRows: boolean,
 ) =>
   filters.date.length +
-  (!includeReminderRows && hasRepeatingItemsFilter(filters.reminder) ? 1 : 0) +
+  (!includeReminderRows ? countRepeatStatusFilters(filters.reminder) : 0) +
   (includeReminderRows && hasTodoReminderTime(filters.reminder) ? 1 : 0) +
   (includeReminderRows && hasTodoRepeat(filters.reminder) ? 1 : 0);
 
 const menuSectionCanClear = (
   menuMode: MenuMode,
   filters: TodoFilters,
+  avoidedFilters: TodoFilters,
   activeFilterCount: number,
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
@@ -451,10 +486,13 @@ const menuSectionCanClear = (
   const filterKey = MENU_SECTION_FILTER_KEYS[menuMode];
   if (filterKey) {
     if (filterKey === 'date') {
-      return countDateMenuSelections(filters, includeReminderRows) > 0;
+      return (
+        countDateMenuSelections(filters, includeReminderRows) +
+        countDateMenuSelections(avoidedFilters, includeReminderRows)
+      ) > 0;
     }
 
-    return filters[filterKey].length > 0;
+    return filters[filterKey].length + avoidedFilters[filterKey].length > 0;
   }
 
   if (menuMode === 'presets') {
@@ -1120,14 +1158,16 @@ const buildActiveFilterItems = (
         value,
       })),
     ),
-    ...(hasRepeatingItemsFilter(filters.reminder)
-      ? [{
-          displayLabel: REPEATING_ITEMS_FILTER_LABEL,
-          filterKey: 'date' as const,
-          id: 'search-filter-repeating-items',
-          value: REPEATING_ITEMS_FILTER_VALUE,
-        }]
-      : []),
+    ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
+      filters.reminder.includes(item.value)
+        ? [{
+            displayLabel: item.displayLabel,
+            filterKey: 'date' as const,
+            id: `search-filter-${item.id}`,
+            value: item.value,
+          }]
+        : []
+    )),
   ];
 
 type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
@@ -1215,7 +1255,7 @@ const getCreateTodoFilters = (
   const priorityLabel = normalized.priority.find((label) => (
     label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
   ));
-  const reminderValues = removeRepeatingItemsFilter(normalized.reminder);
+  const reminderValues = removeRepeatStatusFilters(normalized.reminder);
 
   return {
     date: normalized.date[0] ? [normalized.date[0]] : [],
@@ -1231,7 +1271,7 @@ const hasRememberedCreateDraftFilters = (
 ) => {
   const normalized = normalizeTodoFilters(filters);
   const knownListLabels = new Set(collectListNodeLabels(listMenuTree));
-  const reminderValues = removeRepeatingItemsFilter(normalized.reminder);
+  const reminderValues = removeRepeatStatusFilters(normalized.reminder);
 
   return (
     normalized.date.length > 0 ||
@@ -1507,19 +1547,21 @@ const dateFilterValuesIncludeExactDay = (
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
 
-const hasAnyRequiredFilters = (filters: TodoFilters): boolean =>
+const hasAnyFilterValues = (filters: TodoFilters): boolean =>
   filters.date.length > 0 ||
   filters.list.length > 0 ||
   filters.priority.length > 0 ||
   filters.reminder.length > 0;
 
-const isFilterValueRequired = (
+const hasAnyRequiredFilters = hasAnyFilterValues;
+
+const isFilterValueInFilters = (
   filters: TodoFilters,
   filterKey: FilterKey,
   value: string,
 ): boolean => {
-  if (value === REPEATING_ITEMS_FILTER_VALUE) {
-    return hasRepeatingItemsFilter(filters.reminder);
+  if (isRepeatStatusFilterValue(value)) {
+    return filters.reminder.includes(value);
   }
 
   const filterValue = filterKey === 'date' ? formatDateFilterValue(value) : value;
@@ -1530,6 +1572,9 @@ const isFilterValueRequired = (
   ));
 };
 
+const isFilterValueRequired = isFilterValueInFilters;
+const isFilterValueAvoided = isFilterValueInFilters;
+
 const addFilterValueToRequiredFilters = (
   filters: TodoFilters,
   filterKey: FilterKey,
@@ -1537,12 +1582,12 @@ const addFilterValueToRequiredFilters = (
 ): TodoFilters => {
   const clonedFilters = cloneTodoFilters(filters);
 
-  if (value === REPEATING_ITEMS_FILTER_VALUE) {
-    return hasRepeatingItemsFilter(filters.reminder)
+  if (isRepeatStatusFilterValue(value)) {
+    return filters.reminder.includes(value)
       ? clonedFilters
       : {
           ...clonedFilters,
-          reminder: [...clonedFilters.reminder, REPEATING_ITEMS_FILTER_VALUE],
+          reminder: [...removeRepeatStatusFilters(clonedFilters.reminder), value],
         };
   }
 
@@ -1564,8 +1609,11 @@ const removeFilterValueFromRequiredFilters = (
 ): TodoFilters => {
   const clonedFilters = cloneTodoFilters(filters);
 
-  if (value === REPEATING_ITEMS_FILTER_VALUE) {
-    return { ...clonedFilters, reminder: removeRepeatingItemsFilter(clonedFilters.reminder) };
+  if (isRepeatStatusFilterValue(value)) {
+    return {
+      ...clonedFilters,
+      reminder: clonedFilters.reminder.filter((item) => item !== value),
+    };
   }
 
   const formattedValue = filterKey === 'date'
@@ -1585,6 +1633,21 @@ const removeFilterValueFromRequiredFilters = (
 
   return { ...clonedFilters, [filterKey]: nextValues };
 };
+
+const addFilterValueToAvoidedFilters = addFilterValueToRequiredFilters;
+const removeFilterValueFromAvoidedFilters = removeFilterValueFromRequiredFilters;
+
+const removeSelectedValuesFromAvoidedFilters = (
+  filters: TodoFilters,
+  selectedFilters: TodoFilters,
+): TodoFilters => ({
+  date: filters.date.filter((value) => !selectedFilters.date.some((selectedValue) => (
+    formatDateFilterValue(selectedValue) === formatDateFilterValue(value)
+  ))),
+  list: filters.list.filter((value) => !selectedFilters.list.includes(value)),
+  priority: filters.priority.filter((value) => !selectedFilters.priority.includes(value)),
+  reminder: filters.reminder.filter((value) => !selectedFilters.reminder.includes(value)),
+});
 
 const getSharedTodoFilters = (items: Todo[]): TodoFilters => {
   if (items.length === 0) {
@@ -1631,12 +1694,14 @@ const menuPresetMatchesState = (
   preset: MenuPreset,
   filters: SelectedFilters,
   requiredFilters: SelectedFilters,
+  avoidedFilters: SelectedFilters,
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
 ): boolean =>
   filtersEqual(preset.filters, filters) &&
   filtersEqual(preset.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
+  filtersEqual(preset.avoidedFilters, avoidedFilters) &&
   preset.todoSortMode === sortMode &&
   preset.todoGroupMode === groupMode &&
   preset.listOrderMode === orderMode;
@@ -1647,17 +1712,21 @@ const formatPresetCount = (count: number, label: string) =>
 const formatPresetSummary = (
   filters: SelectedFilters,
   requiredFilters: SelectedFilters,
+  avoidedFilters: SelectedFilters,
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
 ) => {
   const requiredFilterCount = countFilters(pruneTodoFilters(requiredFilters, filters));
+  const avoidedFilterCount = countFilters(avoidedFilters);
   const parts = [
     filters.list.length > 0 ? formatPresetCount(filters.list.length, 'list') : null,
     filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
     filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
     hasRepeatingItemsFilter(filters.reminder) ? REPEATING_ITEMS_FILTER_LABEL : null,
+    hasNotRepeatingItemsFilter(filters.reminder) ? NOT_REPEATING_ITEMS_FILTER_LABEL : null,
     requiredFilterCount > 0 ? `${requiredFilterCount} must` : null,
+    avoidedFilterCount > 0 ? `${avoidedFilterCount} avoid` : null,
     `Sort ${TODO_SORT_LABELS[sortMode]}`,
     `Group ${TODO_GROUP_LABELS[groupMode]}`,
     orderMode === 'alphabetical' ? 'Lists A to Z' : 'Manual lists',
@@ -1672,6 +1741,7 @@ const getQuickPresetNavDetail = (
 ) => {
   const activeFilterItems = buildActiveFilterItems(preset.filters, dateLabelDisplayMode);
   const requiredFilterItems = buildActiveFilterItems(preset.requiredFilters, dateLabelDisplayMode);
+  const avoidedFilterItems = buildActiveFilterItems(preset.avoidedFilters, dateLabelDisplayMode);
   const filterParts = FILTER_KEYS.flatMap((filterKey) => {
     const labels = activeFilterItems
       .filter((item) => item.filterKey === filterKey)
@@ -1682,8 +1752,10 @@ const getQuickPresetNavDetail = (
       : [];
   });
   const requiredFilterLabels = requiredFilterItems.map((item) => item.displayLabel);
+  const avoidedFilterLabels = avoidedFilterItems.map((item) => item.displayLabel);
   const viewParts = [
     requiredFilterLabels.length > 0 ? `Must (${requiredFilterLabels.join(', ')})` : null,
+    avoidedFilterLabels.length > 0 ? `Avoid (${avoidedFilterLabels.join(', ')})` : null,
     preset.todoGroupMode !== 'none' ? `Group (${TODO_GROUP_LABELS[preset.todoGroupMode]})` : null,
     `Sort (${TODO_SORT_LABELS[preset.todoSortMode]})`,
     preset.listOrderMode === 'manual' ? 'Lists (Manual)' : null,
@@ -1703,13 +1775,17 @@ const todoMatchesDateFilterGroup = (
 ) => {
   const hasDateFilters = filters.date.length > 0;
   const hasRepeatingFilter = hasRepeatingItemsFilter(filters.reminder);
+  const hasNotRepeatingFilter = hasNotRepeatingItemsFilter(filters.reminder);
 
-  if (!hasDateFilters && !hasRepeatingFilter) {
+  if (!hasDateFilters && !hasRepeatingFilter && !hasNotRepeatingFilter) {
     return true;
   }
 
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
   if (hasRepeatingFilter && todoRepeats) {
+    return true;
+  }
+  if (hasNotRepeatingFilter && !todoRepeats) {
     return true;
   }
 
@@ -1735,9 +1811,7 @@ const getOptionalSelectedFilters = (
     !isFilterValueRequired(requiredFilters, 'priority', value)
   )),
   reminder: filters.reminder.filter((value) => (
-    value === REPEATING_ITEMS_FILTER_VALUE
-      ? !hasRepeatingItemsFilter(requiredFilters.reminder)
-      : !requiredFilters.reminder.includes(value)
+    !requiredFilters.reminder.includes(value)
   )),
 });
 
@@ -1754,7 +1828,8 @@ const todoMatchesRequiredFilters = (
   const effectiveDateLabels = requiredFilters.date.length > 0
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
-  const requiredReminderValues = removeRepeatingItemsFilter(requiredFilters.reminder);
+  const requiredReminderValues = removeRepeatStatusFilters(requiredFilters.reminder);
+  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
 
   return (
     requiredFilters.list.every((value) => (
@@ -1767,7 +1842,47 @@ const todoMatchesRequiredFilters = (
     requiredReminderValues.every((value) => todo.filters.reminder.includes(value)) &&
     (
       !hasRepeatingItemsFilter(requiredFilters.reminder) ||
-      hasTodoRepeat(todo.filters.reminder)
+      todoRepeats
+    ) &&
+    (
+      !hasNotRepeatingItemsFilter(requiredFilters.reminder) ||
+      !todoRepeats
+    )
+  );
+};
+
+const todoMatchesAvoidedFilters = (
+  todo: Todo,
+  avoidedFilters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+  now = new Date(),
+): boolean => {
+  if (!hasAnyFilterValues(avoidedFilters)) {
+    return false;
+  }
+
+  const effectiveDateLabels = avoidedFilters.date.length > 0
+    ? getEffectiveTodoDateLabels(todo, now)
+    : [];
+  const avoidedReminderValues = removeRepeatStatusFilters(avoidedFilters.reminder);
+  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
+
+  return (
+    avoidedFilters.list.some((value) => (
+      todoMatchesSelectedListFilters([value], todo.filters.list, listMenuTree)
+    )) ||
+    avoidedFilters.date.some((value) => (
+      todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
+    )) ||
+    avoidedFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
+    avoidedReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
+    (
+      hasRepeatingItemsFilter(avoidedFilters.reminder) &&
+      todoRepeats
+    ) ||
+    (
+      hasNotRepeatingItemsFilter(avoidedFilters.reminder) &&
+      !todoRepeats
     )
   );
 };
@@ -1785,7 +1900,8 @@ const todoMatchesAnyOptionalFilter = (
   const effectiveDateLabels = optionalFilters.date.length > 0
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
-  const optionalReminderValues = removeRepeatingItemsFilter(optionalFilters.reminder);
+  const optionalReminderValues = removeRepeatStatusFilters(optionalFilters.reminder);
+  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
 
   return (
     optionalFilters.list.some((value) => (
@@ -1798,7 +1914,11 @@ const todoMatchesAnyOptionalFilter = (
     optionalReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
     (
       hasRepeatingItemsFilter(optionalFilters.reminder) &&
-      hasTodoRepeat(todo.filters.reminder)
+      todoRepeats
+    ) ||
+    (
+      hasNotRepeatingItemsFilter(optionalFilters.reminder) &&
+      !todoRepeats
     )
   );
 };
@@ -1809,10 +1929,12 @@ const todoMatchesFilters = (
   listMenuTree: ListMenuNode[],
   now = new Date(),
   requiredFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
+  avoidedFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
 ) => {
   const optionalFilters = getOptionalSelectedFilters(filters, requiredFilters);
 
   return (
+    !todoMatchesAvoidedFilters(todo, avoidedFilters, listMenuTree, now) &&
     todoMatchesRequiredFilters(todo, requiredFilters, listMenuTree, now) &&
     todoMatchesAnyOptionalFilter(todo, optionalFilters, listMenuTree, now)
   );
@@ -1835,8 +1957,8 @@ const getFiltersAfterCreateReveal = (
       ? [...filters.list]
       : [],
     priority: priorityMatches ? [...filters.priority] : [],
-    reminder: !dateGroupMatches && hasRepeatingItemsFilter(filters.reminder)
-      ? removeRepeatingItemsFilter(filters.reminder)
+    reminder: !dateGroupMatches && hasRepeatStatusFilter(filters.reminder)
+      ? removeRepeatStatusFilters(filters.reminder)
       : [...filters.reminder],
   };
 };
@@ -2555,6 +2677,7 @@ export default function App() {
   const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
   const selectedFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
   const requiredFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
+  const avoidedFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
   const showOverdueMetaTagsRef = useRef(showOverdueMetaTags);
   const todoGroupModeRef = useRef<TodoGroupMode>(todoGroupMode);
   const [collapsedTodoGroupIds, setCollapsedTodoGroupIds] = useState<Set<string>>(
@@ -2582,6 +2705,9 @@ export default function App() {
     EMPTY_SELECTED_FILTERS,
   );
   const [requiredFilters, setRequiredFilters] = useState<SelectedFilters>(
+    () => cloneTodoFilters(),
+  );
+  const [avoidedFilters, setAvoidedFilters] = useState<SelectedFilters>(
     () => cloneTodoFilters(),
   );
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
@@ -2641,6 +2767,7 @@ export default function App() {
   quickPresetNavPresetIdsRef.current = quickPresetNavPresetIds;
   selectedFiltersRef.current = selectedFilters;
   requiredFiltersRef.current = requiredFilters;
+  avoidedFiltersRef.current = avoidedFilters;
   showOverdueMetaTagsRef.current = showOverdueMetaTags;
   todoGroupModeRef.current = todoGroupMode;
   todoSortModeRef.current = todoSortMode;
@@ -2834,6 +2961,7 @@ export default function App() {
 
         setSelectedFilters(settings.selectedFilters);
         setRequiredFilters(nextRequiredFilters);
+        setAvoidedFilters(settings.avoidedFilters);
         setDeletedTodos(settings.deletedTodos);
         setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
         setFilterColors(settings.filterColors);
@@ -2893,6 +3021,7 @@ export default function App() {
     quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    avoidedFilters,
     requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
     selectedFilters,
     showOverdueMetaTags,
@@ -2919,6 +3048,7 @@ export default function App() {
     metaTagVisibility,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
@@ -3133,6 +3263,7 @@ export default function App() {
     metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
     quickPresetNavIconNames: cloneQuickPresetNavIconNames(quickPresetNavIconNamesRef.current),
     quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(quickPresetNavPresetIdsRef.current),
+    avoidedFilters: cloneTodoFilters(avoidedFiltersRef.current),
     requiredFilters: pruneTodoFilters(requiredFiltersRef.current, selectedFiltersRef.current),
     selectedFilters: cloneTodoFilters(selectedFiltersRef.current),
     showOverdueMetaTags: showOverdueMetaTagsRef.current,
@@ -3211,6 +3342,7 @@ export default function App() {
       snapshot.quickPresetNavPresetIds,
     );
     const restoredSelectedFilters = cloneTodoFilters(snapshot.selectedFilters);
+    const restoredAvoidedFilters = cloneTodoFilters(snapshot.avoidedFilters);
     const restoredRequiredFilters = pruneTodoFilters(
       snapshot.requiredFilters,
       restoredSelectedFilters,
@@ -3231,6 +3363,7 @@ export default function App() {
       metaTagVisibility: restoredMetaTagVisibility,
       quickPresetNavIconNames: restoredQuickPresetNavIconNames,
       quickPresetNavPresetIds: restoredQuickPresetNavPresetIds,
+      avoidedFilters: restoredAvoidedFilters,
       requiredFilters: restoredRequiredFilters,
       selectedFilters: restoredSelectedFilters,
       showOverdueMetaTags: snapshot.showOverdueMetaTags,
@@ -3254,6 +3387,7 @@ export default function App() {
     quickPresetNavPresetIdsRef.current = restoredQuickPresetNavPresetIds;
     selectedFiltersRef.current = restoredSelectedFilters;
     requiredFiltersRef.current = restoredRequiredFilters;
+    avoidedFiltersRef.current = restoredAvoidedFilters;
     showOverdueMetaTagsRef.current = snapshot.showOverdueMetaTags;
     todoGroupModeRef.current = snapshot.todoGroupMode;
     todoSortModeRef.current = snapshot.todoSortMode;
@@ -3277,6 +3411,7 @@ export default function App() {
     setQuickPresetNavPresetIds(restoredQuickPresetNavPresetIds);
     setSelectedFilters(restoredSelectedFilters);
     setRequiredFilters(restoredRequiredFilters);
+    setAvoidedFilters(restoredAvoidedFilters);
     setTodoGroupMode(snapshot.todoGroupMode);
     setTodoSortMode(snapshot.todoSortMode);
     setActiveTodoMenuId((current) => (current && restoredTodoIds.has(current) ? current : null));
@@ -4190,6 +4325,7 @@ export default function App() {
         listMenuTree,
         now,
         requiredFilters,
+        avoidedFilters,
       ));
   }, [
     hideDoneTodosForCurrentView,
@@ -4200,6 +4336,7 @@ export default function App() {
     searchMatchedTodoIds,
     searchMode,
     searchQuery,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
     todos,
@@ -4919,9 +5056,14 @@ export default function App() {
     clearNotificationTodoReveal();
     const nextFilters = updater(cloneTodoFilters(selectedFiltersRef.current));
     const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = removeSelectedValuesFromAvoidedFilters(
+      avoidedFiltersRef.current,
+      nextFilters,
+    );
     if (
       filtersEqual(selectedFiltersRef.current, nextFilters) &&
-      filtersEqual(requiredFiltersRef.current, nextRequiredFilters)
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
     ) {
       return;
     }
@@ -4929,6 +5071,7 @@ export default function App() {
     recordUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
   }, [clearNotificationTodoReveal, getCurrentTodoEditTargetIds, recordUndo, updateTodoFiltersForIds]);
 
   const closeDatePicker = useCallback(() => {
@@ -5559,6 +5702,7 @@ export default function App() {
       preset,
       selectedFilters,
       requiredFilters,
+      avoidedFilters,
       effectiveSortMode,
       effectiveGroupMode,
       listOrderMode,
@@ -5569,6 +5713,7 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuPresets,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
   ]);
@@ -5965,8 +6110,10 @@ export default function App() {
   const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
   const includeActiveTodoReminderRows = hasTodoEditTargets;
   const menuRequiredFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : requiredFilters;
-  const activeFilterCount = countFilters(menuFilters, includeActiveTodoReminderRows);
-  const selectedFilterCount = countFilters(selectedFilters);
+  const menuAvoidedFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : avoidedFilters;
+  const activeFilterCount =
+    countFilters(menuFilters, includeActiveTodoReminderRows) + countFilters(menuAvoidedFilters);
+  const selectedFilterCount = countFilters(selectedFilters) + countFilters(avoidedFilters);
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
   const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
@@ -5989,6 +6136,7 @@ export default function App() {
             listMenuTree,
             now,
             preset.requiredFilters,
+            preset.avoidedFilters,
           )
             ? total + 1
             : total;
@@ -6087,6 +6235,7 @@ export default function App() {
           listMenuTree,
           now,
           item.preset.requiredFilters,
+          item.preset.avoidedFilters,
         );
       });
 
@@ -6195,6 +6344,7 @@ export default function App() {
   const currentPresetSummary = formatPresetSummary(
     menuFilters,
     menuRequiredFilters,
+    menuAvoidedFilters,
     effectiveSortMode,
     effectiveGroupMode,
     listOrderMode,
@@ -6213,6 +6363,7 @@ export default function App() {
         openMenuPreset,
         selectedFilters,
         requiredFilters,
+        avoidedFilters,
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
@@ -6245,32 +6396,58 @@ export default function App() {
           type: 'value' as const,
         })),
         ...(!includeActiveTodoReminderRows
-          ? [{
+          ? REPEAT_STATUS_FILTER_ITEMS.map((item) => ({
               filterKey: 'date' as const,
-              id: 'date-repeating-items',
-              label: REPEATING_ITEMS_FILTER_VALUE,
+              id: `date-${item.id}`,
+              label: item.value,
               type: 'value' as const,
-            }]
+            }))
           : []),
       ];
     }
 
     if (menuMode === 'filters') {
-      return [
+      const activeRows = [
         ...FILTER_KEYS.flatMap((filterKey) => menuFilters[filterKey].map((label) => ({
           filterKey,
           id: `filter-${filterKey}-${label}`,
           label,
           type: 'filter' as const,
         }))),
-        ...(hasRepeatingItemsFilter(menuFilters.reminder)
-          ? [{
-              filterKey: 'date' as const,
-              id: 'filter-repeating-items',
-              label: REPEATING_ITEMS_FILTER_VALUE,
-              type: 'filter' as const,
-            }]
-          : []),
+        ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
+          menuFilters.reminder.includes(item.value)
+            ? [{
+                filterKey: 'date' as const,
+                id: `filter-${item.id}`,
+                label: item.value,
+                type: 'filter' as const,
+              }]
+            : []
+        )),
+      ];
+      const activeRowKeys = new Set(activeRows.map((item) => `${item.filterKey}:${item.label}`));
+      const avoidedRows = [
+        ...FILTER_KEYS.flatMap((filterKey) => menuAvoidedFilters[filterKey].map((label) => ({
+          filterKey,
+          id: `filter-avoid-${filterKey}-${label}`,
+          label,
+          type: 'filter' as const,
+        }))),
+        ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
+          menuAvoidedFilters.reminder.includes(item.value)
+            ? [{
+                filterKey: 'date' as const,
+                id: `filter-avoid-${item.id}`,
+                label: item.value,
+                type: 'filter' as const,
+              }]
+            : []
+        )),
+      ].filter((item) => !activeRowKeys.has(`${item.filterKey}:${item.label}`));
+
+      return [
+        ...activeRows,
+        ...avoidedRows,
       ];
     }
 
@@ -6310,6 +6487,7 @@ export default function App() {
           summary: formatPresetSummary(
             latestMenuPreset.filters,
             latestMenuPreset.requiredFilters,
+            latestMenuPreset.avoidedFilters,
             latestMenuPreset.todoSortMode,
             latestMenuPreset.todoGroupMode,
             latestMenuPreset.listOrderMode,
@@ -6340,6 +6518,7 @@ export default function App() {
           summary: formatPresetSummary(
             preset.filters,
             preset.requiredFilters,
+            preset.avoidedFilters,
             preset.todoSortMode,
             preset.todoGroupMode,
             preset.listOrderMode,
@@ -6423,23 +6602,23 @@ export default function App() {
       },
       ...(pinActionRow ? [pinActionRow] : []),
       {
-        count: menuFilters.list.length || undefined,
+        count: (menuFilters.list.length + menuAvoidedFilters.list.length) || undefined,
         id: 'main-lists',
         label: 'Lists',
         menuMode: 'lists',
         type: 'menu',
       },
       {
-        count: menuFilters.priority.length || undefined,
+        count: (menuFilters.priority.length + menuAvoidedFilters.priority.length) || undefined,
         id: 'main-priority',
         label: 'Priority',
         menuMode: 'priority',
         type: 'menu',
       },
       {
-        count: countDateMenuSelections(
-          menuFilters,
-          includeActiveTodoReminderRows,
+        count: (
+          countDateMenuSelections(menuFilters, includeActiveTodoReminderRows) +
+          countDateMenuSelections(menuAvoidedFilters, includeActiveTodoReminderRows)
         ) || undefined,
         id: 'main-date',
         label: 'Date',
@@ -6505,6 +6684,7 @@ export default function App() {
     includeActiveTodoReminderRows,
     latestMenuPreset,
     listOrderMode,
+    menuAvoidedFilters,
     menuFilters,
     menuMode,
     menuPresets,
@@ -6667,10 +6847,15 @@ export default function App() {
       reminder: toggleRepeatingItemsFilterValue(selectedFiltersRef.current.reminder),
     };
     const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = removeSelectedValuesFromAvoidedFilters(
+      avoidedFiltersRef.current,
+      nextFilters,
+    );
 
     if (
       filtersEqual(selectedFiltersRef.current, nextFilters) &&
-      filtersEqual(requiredFiltersRef.current, nextRequiredFilters)
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
     ) {
       return;
     }
@@ -6678,12 +6863,45 @@ export default function App() {
     recordUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, recordUndo]);
+
+  const toggleNotRepeatingItemsFilter = useCallback(() => {
+    clearNotificationTodoReveal();
+    const nextFilters = {
+      ...selectedFiltersRef.current,
+      reminder: toggleNotRepeatingItemsFilterValue(selectedFiltersRef.current.reminder),
+    };
+    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = removeSelectedValuesFromAvoidedFilters(
+      avoidedFiltersRef.current,
+      nextFilters,
+    );
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+    ) {
+      return;
+    }
+
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, recordUndo]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
     if (label === REPEATING_ITEMS_FILTER_VALUE) {
       toggleRepeatingItemsFilter();
+      return;
+    }
+
+    if (label === NOT_REPEATING_ITEMS_FILTER_VALUE) {
+      toggleNotRepeatingItemsFilter();
       return;
     }
 
@@ -6708,6 +6926,7 @@ export default function App() {
     openActiveTodoReminderModal,
     openActiveTodoRepeatModal,
     openDatePicker,
+    toggleNotRepeatingItemsFilter,
     toggleFilterValue,
     toggleRepeatingItemsFilter,
   ]);
@@ -6720,7 +6939,7 @@ export default function App() {
     const formattedValue = filterKey === 'date'
       ? formatDateFilterValue(value)
       : value;
-    const storedValue = value === REPEATING_ITEMS_FILTER_VALUE
+    const storedValue = isRepeatStatusFilterValue(value)
       ? value
       : formattedValue || value;
     const currentlyRequired = isFilterValueRequired(
@@ -6728,11 +6947,16 @@ export default function App() {
       filterKey,
       value,
     );
+    const currentlyAvoided = isFilterValueAvoided(
+      avoidedFiltersRef.current,
+      filterKey,
+      value,
+    );
     const ensureSelected = (current: SelectedFilters): SelectedFilters => {
-      if (value === REPEATING_ITEMS_FILTER_VALUE) {
-        return hasRepeatingItemsFilter(current.reminder)
+      if (isRepeatStatusFilterValue(value)) {
+        return current.reminder.includes(value)
           ? current
-          : { ...current, reminder: [...current.reminder, REPEATING_ITEMS_FILTER_VALUE] };
+          : { ...current, reminder: [...removeRepeatStatusFilters(current.reminder), value] };
       }
 
       if (isFilterValueRequired(current, filterKey, value)) {
@@ -6741,15 +6965,28 @@ export default function App() {
 
       return { ...current, [filterKey]: [...current[filterKey], storedValue] };
     };
-    const nextFilters = ensureSelected(cloneTodoFilters(selectedFiltersRef.current));
+    const currentFilters = cloneTodoFilters(selectedFiltersRef.current);
+    const nextFilters = currentlyAvoided
+      ? currentFilters
+      : currentlyRequired
+        ? removeFilterValueFromRequiredFilters(currentFilters, filterKey, value)
+        : ensureSelected(currentFilters);
     const nextRequiredFilters = currentlyRequired
       ? removeFilterValueFromRequiredFilters(requiredFiltersRef.current, filterKey, value)
-      : addFilterValueToRequiredFilters(requiredFiltersRef.current, filterKey, storedValue);
+      : currentlyAvoided
+        ? requiredFiltersRef.current
+        : addFilterValueToRequiredFilters(requiredFiltersRef.current, filterKey, storedValue);
     const prunedRequiredFilters = pruneTodoFilters(nextRequiredFilters, nextFilters);
+    const nextAvoidedFilters = currentlyAvoided
+      ? removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, filterKey, value)
+      : currentlyRequired
+        ? addFilterValueToAvoidedFilters(avoidedFiltersRef.current, filterKey, storedValue)
+        : removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, filterKey, value);
 
     if (
       filtersEqual(selectedFiltersRef.current, nextFilters) &&
-      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters)
+      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
     ) {
       return;
     }
@@ -6758,6 +6995,7 @@ export default function App() {
     recordUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(prunedRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, hasTodoEditTargets, recordUndo]);
 
@@ -6767,6 +7005,7 @@ export default function App() {
     }
 
     const currentlyRequired = isFilterValueRequired(requiredFiltersRef.current, 'list', item.label);
+    const currentlyAvoided = isFilterValueAvoided(avoidedFiltersRef.current, 'list', item.label);
     const ensureSelected = (current: SelectedFilters): SelectedFilters => {
       if (isListMenuItemSelected(item, current.list, listMenuTree)) {
         return current;
@@ -6791,15 +7030,45 @@ export default function App() {
 
       return { ...current, list: [...withoutFamily, item.label] };
     };
-    const nextFilters = ensureSelected(cloneTodoFilters(selectedFiltersRef.current));
+    const removeSelectedListItem = (current: SelectedFilters): SelectedFilters => {
+      if (item.isSubsection) {
+        return {
+          ...current,
+          list: current.list.filter((label) => label !== item.label),
+        };
+      }
+
+      const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
+        child.label
+      )) ?? [];
+
+      return {
+        ...current,
+        list: current.list.filter((label) => label !== item.label && !childLabels.includes(label)),
+      };
+    };
+    const currentFilters = cloneTodoFilters(selectedFiltersRef.current);
+    const nextFilters = currentlyAvoided
+      ? currentFilters
+      : currentlyRequired
+        ? removeSelectedListItem(currentFilters)
+        : ensureSelected(currentFilters);
     const nextRequiredFilters = currentlyRequired
       ? removeFilterValueFromRequiredFilters(requiredFiltersRef.current, 'list', item.label)
-      : addFilterValueToRequiredFilters(requiredFiltersRef.current, 'list', item.label);
+      : currentlyAvoided
+        ? requiredFiltersRef.current
+        : addFilterValueToRequiredFilters(requiredFiltersRef.current, 'list', item.label);
     const prunedRequiredFilters = pruneTodoFilters(nextRequiredFilters, nextFilters);
+    const nextAvoidedFilters = currentlyAvoided
+      ? removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, 'list', item.label)
+      : currentlyRequired
+        ? addFilterValueToAvoidedFilters(avoidedFiltersRef.current, 'list', item.label)
+        : removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, 'list', item.label);
 
     if (
       filtersEqual(selectedFiltersRef.current, nextFilters) &&
-      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters)
+      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
     ) {
       return;
     }
@@ -6808,6 +7077,7 @@ export default function App() {
     recordUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(prunedRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, hasTodoEditTargets, listMenuTree, recordUndo]);
 
@@ -6877,14 +7147,50 @@ export default function App() {
       };
     };
 
-    updateCurrentTodoTargetFilters(removeValue);
+    const targetIds = getCurrentTodoEditTargetIds();
+    if (targetIds.length > 0) {
+      updateTodoFiltersForIds(targetIds, removeValue);
+      triggerSubtleHaptic();
+      return;
+    }
+
+    clearNotificationTodoReveal();
+    const nextFilters = removeValue(cloneTodoFilters(selectedFiltersRef.current));
+    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = removeFilterValueFromAvoidedFilters(
+      avoidedFiltersRef.current,
+      'list',
+      item.label,
+    );
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+    ) {
+      return;
+    }
+
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
-  }, [listMenuTree, updateCurrentTodoTargetFilters]);
+  }, [
+    clearNotificationTodoReveal,
+    getCurrentTodoEditTargetIds,
+    listMenuTree,
+    recordUndo,
+    updateTodoFiltersForIds,
+  ]);
 
   const removeFilter = useCallback((filterKey: FilterKey, value: string) => {
     const removeValue = (current: SelectedFilters) => {
-      if (value === REPEATING_ITEMS_FILTER_VALUE) {
-        return { ...current, reminder: removeRepeatingItemsFilter(current.reminder) };
+      if (isRepeatStatusFilterValue(value)) {
+        return {
+          ...current,
+          reminder: current.reminder.filter((item) => item !== value),
+        };
       }
 
       const formattedValue = filterKey === 'date'
@@ -6905,9 +7211,41 @@ export default function App() {
       return { ...current, [filterKey]: nextValues };
     };
 
-    updateCurrentTodoTargetFilters(removeValue);
+    const targetIds = getCurrentTodoEditTargetIds();
+    if (targetIds.length > 0) {
+      updateTodoFiltersForIds(targetIds, removeValue);
+      triggerSubtleHaptic();
+      return;
+    }
+
+    clearNotificationTodoReveal();
+    const nextFilters = removeValue(cloneTodoFilters(selectedFiltersRef.current));
+    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = removeFilterValueFromAvoidedFilters(
+      avoidedFiltersRef.current,
+      filterKey,
+      value,
+    );
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+    ) {
+      return;
+    }
+
+    recordUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
-  }, [updateCurrentTodoTargetFilters]);
+  }, [
+    clearNotificationTodoReveal,
+    getCurrentTodoEditTargetIds,
+    recordUndo,
+    updateTodoFiltersForIds,
+  ]);
 
   const clearAppliedMenuPreset = useCallback((options: { skipUndo?: boolean } = {}) => {
     if (hasTodoEditTargets) {
@@ -6917,6 +7255,7 @@ export default function App() {
       const hasDurableChange =
         !filtersEqual(selectedFiltersRef.current, defaultFilters) ||
         !filtersEqual(requiredFiltersRef.current, defaultFilters) ||
+        !filtersEqual(avoidedFiltersRef.current, defaultFilters) ||
         todoSortModeRef.current !== 'newest' ||
         todoGroupModeRef.current !== 'none' ||
         listOrderModeRef.current !== 'alphabetical';
@@ -6927,6 +7266,7 @@ export default function App() {
       clearNotificationTodoReveal();
       setSelectedFilters(defaultFilters);
       setRequiredFilters(defaultFilters);
+      setAvoidedFilters(defaultFilters);
       setTodoSortMode('newest');
       setTodoGroupMode('none');
       setListOrderMode('alphabetical');
@@ -7277,11 +7617,33 @@ export default function App() {
         if (filterKey === 'date') {
           nextFilters.reminder = includeActiveTodoReminderRows
             ? []
-            : removeRepeatingItemsFilter(current.reminder);
+            : removeRepeatStatusFilters(current.reminder);
         }
 
         return nextFilters;
       };
+
+      if (!hasTodoEditTargets) {
+        clearNotificationTodoReveal();
+        const nextFilters = clearKey(cloneTodoFilters(selectedFiltersRef.current));
+        const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+        const nextAvoidedFilters = clearKey(cloneTodoFilters(avoidedFiltersRef.current));
+
+        if (
+          filtersEqual(selectedFiltersRef.current, nextFilters) &&
+          filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+          filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+        ) {
+          return;
+        }
+
+        recordUndo('Change filters');
+        setSelectedFilters(nextFilters);
+        setRequiredFilters(nextRequiredFilters);
+        setAvoidedFilters(nextAvoidedFilters);
+        triggerSubtleHaptic();
+        return;
+      }
 
       updateCurrentTodoTargetFilters(clearKey);
       triggerSubtleHaptic();
@@ -7361,6 +7723,7 @@ export default function App() {
     clearAppliedMenuPreset,
     clearFilters,
     clearNotificationTodoReveal,
+    hasTodoEditTargets,
     includeActiveTodoReminderRows,
     listMenuTree,
     metaTagVisibility,
@@ -7387,6 +7750,7 @@ export default function App() {
         label,
         filters: cloneTodoFilters(menuFilters),
         requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+        avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
         listOrderMode,
         todoGroupMode: effectiveGroupMode,
         todoSortMode: effectiveSortMode,
@@ -7402,6 +7766,7 @@ export default function App() {
     listOrderMode,
     menuFilters,
     menuRequiredFilters,
+    menuAvoidedFilters,
     recordUndo,
   ]);
 
@@ -7464,6 +7829,10 @@ export default function App() {
       ...filters,
       list: replaceLabel(filters.list),
     }));
+    setAvoidedFilters((filters) => ({
+      ...filters,
+      list: replaceLabel(filters.list),
+    }));
     setLastCreateTodoFilters((filters) => ({
       ...filters,
       list: replaceLabel(filters.list),
@@ -7501,6 +7870,10 @@ export default function App() {
       requiredFilters: {
         ...preset.requiredFilters,
         list: replaceLabel(preset.requiredFilters.list),
+      },
+      avoidedFilters: {
+        ...preset.avoidedFilters,
+        list: replaceLabel(preset.avoidedFilters.list),
       },
     })));
     setDeletedTodos((current) => current.map((todo) => ({
@@ -7685,6 +8058,7 @@ export default function App() {
   ) => {
     const nextFilters = cloneTodoFilters(preset.filters);
     const nextRequiredFilters = pruneTodoFilters(preset.requiredFilters, nextFilters);
+    const nextAvoidedFilters = cloneTodoFilters(preset.avoidedFilters);
 
     if (hasTodoEditTargets) {
       updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
@@ -7695,6 +8069,9 @@ export default function App() {
       ));
       setRequiredFilters((current) => (
         filtersEqual(current, nextRequiredFilters) ? current : nextRequiredFilters
+      ));
+      setAvoidedFilters((current) => (
+        filtersEqual(current, nextAvoidedFilters) ? current : nextAvoidedFilters
       ));
       setListOrderMode(preset.listOrderMode);
       setTodoGroupMode(preset.todoGroupMode);
@@ -7743,6 +8120,7 @@ export default function App() {
         currentPreset.requiredFilters,
         pruneTodoFilters(menuRequiredFilters, menuFilters),
       ) ||
+      !filtersEqual(currentPreset.avoidedFilters, menuAvoidedFilters) ||
       currentPreset.listOrderMode !== listOrderMode ||
       currentPreset.todoGroupMode !== effectiveGroupMode ||
       currentPreset.todoSortMode !== effectiveSortMode;
@@ -7760,6 +8138,7 @@ export default function App() {
             ...preset,
             filters: cloneTodoFilters(menuFilters),
             requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+            avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
             listOrderMode,
             todoGroupMode: effectiveGroupMode,
             todoSortMode: effectiveSortMode,
@@ -7776,6 +8155,7 @@ export default function App() {
     listOrderMode,
     menuFilters,
     menuRequiredFilters,
+    menuAvoidedFilters,
     menuPresets,
     recordUndo,
   ]);
@@ -7792,6 +8172,7 @@ export default function App() {
         currentPreset.requiredFilters,
         pruneTodoFilters(requiredFilters, selectedFilters),
       ) ||
+      !filtersEqual(currentPreset.avoidedFilters, avoidedFilters) ||
       currentPreset.listOrderMode !== listOrderMode ||
       currentPreset.todoGroupMode !== effectiveGroupMode ||
       currentPreset.todoSortMode !== effectiveSortMode;
@@ -7810,6 +8191,7 @@ export default function App() {
             ...preset,
             filters: cloneTodoFilters(selectedFilters),
             requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
+            avoidedFilters: cloneTodoFilters(avoidedFilters),
             listOrderMode,
             todoGroupMode: effectiveGroupMode,
             todoSortMode: effectiveSortMode,
@@ -7826,6 +8208,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     recordUndo,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
   ]);
@@ -7902,6 +8285,7 @@ export default function App() {
         removed,
         selectedFilters,
         requiredFilters,
+        avoidedFilters,
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
@@ -7935,6 +8319,7 @@ export default function App() {
     menuPresets,
     openMenuPresetId,
     recordUndo,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
   ]);
@@ -8071,6 +8456,10 @@ export default function App() {
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
       }));
+      setAvoidedFilters((filters) => ({
+        ...filters,
+        list: filters.list.filter((label) => !removedLabels.has(label)),
+      }));
       setLastCreateTodoFilters((filters) => ({
         ...filters,
         list: filters.list.filter((label) => !removedLabels.has(label)),
@@ -8084,6 +8473,10 @@ export default function App() {
         requiredFilters: {
           ...preset.requiredFilters,
           list: preset.requiredFilters.list.filter((label) => !removedLabels.has(label)),
+        },
+        avoidedFilters: {
+          ...preset.avoidedFilters,
+          list: preset.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
         },
       })));
       setTodos((items) => {
@@ -8145,6 +8538,7 @@ export default function App() {
         openMenuPreset,
         selectedFilters,
         requiredFilters,
+        avoidedFilters,
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
@@ -8177,6 +8571,7 @@ export default function App() {
     listOrderMode,
     menuMode,
     openMenuPreset,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
     selectedTodoCount,
@@ -8639,6 +9034,7 @@ export default function App() {
       quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
+      avoidedFilters,
       requiredFilters,
       selectedFilters,
       showOverdueMetaTags,
@@ -8672,6 +9068,7 @@ export default function App() {
     pendingDeleteIds,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    avoidedFilters,
     requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
@@ -8706,6 +9103,7 @@ export default function App() {
       backup.payload.settings.requiredFilters,
       restoredSelectedFilters,
     ));
+    setAvoidedFilters(normalizeTodoFilters(backup.payload.settings.avoidedFilters));
     setFilterConfigUiState(cloneFilterConfigUiState(backup.payload.settings.filterConfigUiState));
     setFilterColors(backup.payload.settings.filterColors);
     setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
@@ -10455,8 +10853,8 @@ export default function App() {
 
                             if (item.type === 'filter') {
                               const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
-                              const displayLabel = item.label === REPEATING_ITEMS_FILTER_VALUE
-                                ? REPEATING_ITEMS_FILTER_LABEL
+                              const displayLabel = isRepeatStatusFilterValue(item.label)
+                                ? getRepeatStatusFilterDisplayLabel(item.label)
                                 : item.filterKey === 'date'
                                   ? (
                                     dateLabelDisplayMode === 'remaining'
@@ -10466,6 +10864,11 @@ export default function App() {
                                   : item.label;
                               const isRequired = !hasTodoEditTargets && isFilterValueRequired(
                                 menuRequiredFilters,
+                                item.filterKey,
+                                item.label,
+                              );
+                              const isAvoided = !hasTodoEditTargets && isFilterValueAvoided(
+                                menuAvoidedFilters,
                                 item.filterKey,
                                 item.label,
                               );
@@ -10503,16 +10906,26 @@ export default function App() {
                                           style={styles.listMenuRequiredPin}
                                         />
                                       ) : null}
+                                      {isAvoided ? (
+                                        <Ionicons
+                                          color={THEME_DANGER}
+                                          name="ban"
+                                          size={14}
+                                          style={styles.listMenuRequiredPin}
+                                        />
+                                      ) : null}
                                     </View>
                                   </Pressable>
                                   <View style={styles.listMenuSubmenuZone}>
                                     <Text style={[
                                       styles.filterTypeText,
-                                      colorTheme
+                                      isAvoided
+                                        ? styles.filterTypeTextAvoided
+                                        : colorTheme
                                         ? { color: colorTheme.text }
                                         : styles.filterTypeTextNoColor,
                                     ]}>
-                                      {item.filterKey}
+                                      {isAvoided ? 'avoid' : item.filterKey}
                                     </Text>
                                     <Pressable
                                       accessibilityRole="button"
@@ -10722,6 +11135,7 @@ export default function App() {
   	                            const canClearSection = menuSectionCanClear(
   	                              item.menuMode,
   	                              menuFilters,
+                                  menuAvoidedFilters,
   	                              activeFilterCount,
   	                              effectiveSortMode,
   	                              effectiveGroupMode,
@@ -10790,14 +11204,14 @@ export default function App() {
                             }
 
                             const isDateValue = item.filterKey === 'date';
-                            const isRepeatingItemsValue =
-                              isDateValue && item.label === REPEATING_ITEMS_FILTER_VALUE;
+                            const isRepeatStatusValue =
+                              isDateValue && isRepeatStatusFilterValue(item.label);
                             const isReminderValue =
                               isDateValue && (
-                                isReminderPickerMenuLabel(item.label) || isRepeatingItemsValue
+                                isReminderPickerMenuLabel(item.label) || isRepeatStatusValue
                               );
-                            const isSelected = isRepeatingItemsValue
-                              ? hasRepeatingItemsFilter(menuSelectionFilters.reminder)
+                            const isSelected = isRepeatStatusValue
+                              ? menuSelectionFilters.reminder.includes(item.label)
                               : isDateValue
                                 ? isDatePickerMenuItemSelected(
                                   item.label,
@@ -10806,8 +11220,8 @@ export default function App() {
                                   isDateMenuItemSelected,
                                 )
                                 : menuSelectionFilters[item.filterKey].includes(item.label);
-                            const displayLabel = isRepeatingItemsValue
-                              ? REPEATING_ITEMS_FILTER_LABEL
+                            const displayLabel = isRepeatStatusValue
+                              ? getRepeatStatusFilterDisplayLabel(item.label)
                               : isDateValue
                                 ? getDatePickerMenuDisplayLabel(
                                   item.label,
@@ -10833,15 +11247,20 @@ export default function App() {
                               ? 'Clear reminder time'
                               : item.label === REPEAT_PICKER_LABEL
                                 ? 'Clear repeating'
-                                : isRepeatingItemsValue
-                                  ? `Clear ${REPEATING_ITEMS_FILTER_LABEL}`
+                                : isRepeatStatusValue
+                                  ? `Clear ${displayLabel}`
                                 : `Clear ${displayLabel}`;
                             const canRequireValue =
                               !hasTodoEditTargets &&
                               item.label !== CUSTOM_DATE_LABEL &&
-                              (!isReminderValue || isRepeatingItemsValue);
+                              (!isReminderValue || isRepeatStatusValue);
                             const isRequired = canRequireValue && isFilterValueRequired(
                               menuRequiredFilters,
+                              item.filterKey,
+                              item.label,
+                            );
+                            const isAvoided = canRequireValue && isFilterValueAvoided(
+                              menuAvoidedFilters,
                               item.filterKey,
                               item.label,
                             );
@@ -10862,7 +11281,8 @@ export default function App() {
                                   }
                                   style={({ pressed }) => [
                                     styles.listMenuRow,
-                                    (isSelected || pressed) && styles.listMenuRowSelected,
+                                    (isSelected || isAvoided || pressed) && styles.listMenuRowSelected,
+                                    isAvoided && styles.listMenuRowAvoided,
                                     colorTheme && (isSelected || pressed) && {
                                       backgroundColor: colorTheme.tint,
                                       borderBottomColor: colorTheme.border,
@@ -10887,14 +11307,27 @@ export default function App() {
                                         style={styles.listMenuRequiredPin}
                                       />
                                     ) : null}
+                                    {isAvoided ? (
+                                      <Ionicons
+                                        color={THEME_DANGER}
+                                        name="ban"
+                                        size={14}
+                                        style={styles.listMenuRequiredPin}
+                                      />
+                                    ) : null}
                                   </View>
                                 </Pressable>
                                 <Pressable
                                   accessibilityRole="button"
                                   accessibilityLabel={clearAccessibilityLabel}
-                                  disabled={!isSelected}
+                                  disabled={!isSelected && !isAvoided}
                                   hitSlop={LIST_MENU_ICON_HIT_SLOP}
                                   onPress={() => {
+                                    if (isAvoided) {
+                                      removeFilter(item.filterKey, item.label);
+                                      return;
+                                    }
+
                                     if (item.label === REMINDER_PICKER_LABEL) {
                                       clearActiveTodoReminderTime();
                                       return;
@@ -10905,7 +11338,7 @@ export default function App() {
                                       return;
                                     }
 
-                                    if (isRepeatingItemsValue) {
+                                    if (isRepeatStatusValue) {
                                       removeFilter(item.filterKey, item.label);
                                       return;
                                     }
@@ -10914,11 +11347,11 @@ export default function App() {
                                       removeFilter(item.filterKey, clearValue);
                                     }
                                   }}
-                                  pointerEvents={isSelected ? 'auto' : 'none'}
+                                  pointerEvents={isSelected || isAvoided ? 'auto' : 'none'}
                                   style={({ pressed }) => [
                                     styles.listMenuClearButton,
                                     styles.listMenuClearButtonOverlay,
-                                    { opacity: isSelected ? 1 : 0 },
+                                    { opacity: isSelected || isAvoided ? 1 : 0 },
                                     pressed && styles.listMenuClearButtonPressed,
                                   ]}
                                 >
@@ -10951,6 +11384,11 @@ export default function App() {
                             'list',
                             item.label,
                           );
+                          const isAvoided = !hasTodoEditTargets && isFilterValueAvoided(
+                            menuAvoidedFilters,
+                            'list',
+                            item.label,
+                          );
 
                           return (
                             <View style={styles.listMenuSelectableRow}>
@@ -10970,7 +11408,8 @@ export default function App() {
                                 style={({ pressed }) => [
                                   styles.listMenuRow,
                                   item.depth > 0 && styles.listMenuRowIndented,
-                                  (isSelected || pressed) && styles.listMenuRowSelected,
+                                  (isSelected || isAvoided || pressed) && styles.listMenuRowSelected,
+                                  isAvoided && styles.listMenuRowAvoided,
                                   listColorTheme && (isSelected || pressed) && {
                                     backgroundColor: listColorTheme.tint,
                                     borderBottomColor: listColorTheme.border,
@@ -11014,19 +11453,27 @@ export default function App() {
                                       style={styles.listMenuRequiredPin}
                                     />
                                   ) : null}
+                                  {isAvoided ? (
+                                    <Ionicons
+                                      color={THEME_DANGER}
+                                      name="ban"
+                                      size={14}
+                                      style={styles.listMenuRequiredPin}
+                                    />
+                                  ) : null}
                                 </View>
                               </Pressable>
                               <Pressable
                                 accessibilityRole="button"
                                 accessibilityLabel={`Clear ${item.label}`}
-                                disabled={!isSelected}
+                                disabled={!isSelected && !isAvoided}
                                 hitSlop={LIST_MENU_ICON_HIT_SLOP}
                                 onPress={() => removeListMenuItem(item)}
-                                pointerEvents={isSelected ? 'auto' : 'none'}
+                                pointerEvents={isSelected || isAvoided ? 'auto' : 'none'}
                                 style={({ pressed }) => [
                                   styles.listMenuClearButton,
                                   styles.listMenuClearButtonOverlay,
-                                  { opacity: isSelected ? 1 : 0 },
+                                  { opacity: isSelected || isAvoided ? 1 : 0 },
                                   pressed && styles.listMenuClearButtonPressed,
                                 ]}
                               >
@@ -11655,6 +12102,7 @@ export default function App() {
         />
 
         <FilterConfigScreen
+          avoidedFilters={avoidedFilters}
           dateLabelDisplayMode={dateLabelDisplayMode}
           filterColors={filterColors}
           filters={selectedFilters}
@@ -11675,6 +12123,7 @@ export default function App() {
           onSelectSort={selectTodoSortMode}
           onShowResults={showTodoItems}
           onToggleFilter={toggleFilterValue}
+          onToggleNotRepeatingItemsFilter={toggleNotRepeatingItemsFilter}
           onToggleRepeatingItemsFilter={toggleRepeatingItemsFilter}
           onToggleListItem={toggleListMenuItem}
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
@@ -14368,6 +14817,10 @@ const styles = StyleSheet.create({
   listMenuRowSelected: {
     backgroundColor: THEME_ACCENT_SOFT,
   },
+  listMenuRowAvoided: {
+    backgroundColor: '#FDECEC',
+    borderBottomColor: '#F4C8C8',
+  },
   clearFiltersRow: {
     marginTop: 2,
   },
@@ -14405,6 +14858,9 @@ const styles = StyleSheet.create({
   },
   filterTypeTextNoColor: {
     color: '#8F877F',
+  },
+  filterTypeTextAvoided: {
+    color: THEME_DANGER,
   },
   listMenuRequiredPin: {
     flexShrink: 0,

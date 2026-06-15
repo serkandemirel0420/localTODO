@@ -64,6 +64,7 @@ export type BackupMenuPreset = {
   searchKeywords?: string;
   filters: TodoFilters;
   requiredFilters: TodoFilters;
+  avoidedFilters: TodoFilters;
   listOrderMode: BackupListOrderMode;
   todoGroupMode: BackupTodoGroupMode;
   todoSortMode: BackupTodoSortMode;
@@ -88,6 +89,7 @@ export type BackupSettings = {
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
+  avoidedFilters: TodoFilters;
   requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
@@ -241,6 +243,7 @@ const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
     ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
     filters: cloneTodoFilters(preset.filters),
     requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
+    avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
     listOrderMode: preset.listOrderMode,
     todoGroupMode: preset.todoGroupMode,
     todoSortMode: preset.todoSortMode,
@@ -316,6 +319,7 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
         ...(searchKeywords ? { searchKeywords } : {}),
         filters,
         requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
+        avoidedFilters: normalizeTodoFilters(item.avoidedFilters),
         listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
         todoGroupMode: normalizeBackupTodoGroupMode(item.todoGroupMode),
         todoSortMode: normalizeBackupTodoSortMode(item.todoSortMode),
@@ -403,6 +407,7 @@ export const createBackupPayload = (
       quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames),
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
+      avoidedFilters: cloneTodoFilters(settings.avoidedFilters),
       requiredFilters: pruneTodoFilters(settings.requiredFilters, settings.selectedFilters),
       selectedFilters: cloneTodoFilters(settings.selectedFilters),
       showOverdueMetaTags: settings.showOverdueMetaTags,
@@ -460,6 +465,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
       quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
       quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
+      avoidedFilters: normalizeTodoFilters(settings.avoidedFilters),
       requiredFilters: pruneTodoFilters(normalizeTodoFilters(settings.requiredFilters), selectedFilters),
       selectedFilters,
       showOverdueMetaTags: settings.showOverdueMetaTags !== false,

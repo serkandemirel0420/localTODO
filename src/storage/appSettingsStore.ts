@@ -56,6 +56,7 @@ export type StoredMenuPreset = {
   searchKeywords?: string;
   filters: TodoFilters;
   requiredFilters: TodoFilters;
+  avoidedFilters: TodoFilters;
   listOrderMode: ListOrderMode;
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
@@ -87,6 +88,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Status',
     filters: { date: [], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'status',
     todoSortMode: 'newest',
@@ -97,6 +99,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Priority',
     filters: { date: [], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'priority',
     todoSortMode: 'priority',
@@ -112,6 +115,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
       reminder: [REPEATING_ITEMS_FILTER_VALUE],
     },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -122,6 +126,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Lists',
     filters: { date: [], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'list',
     todoSortMode: 'date',
@@ -132,6 +137,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Date',
     filters: { date: [], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -142,6 +148,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Today',
     filters: { date: ['Today'], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -152,6 +159,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Tomorrow',
     filters: { date: ['Tomorrow'], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -162,6 +170,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'High',
     filters: { date: [], list: [], priority: ['High'], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'priority',
     todoSortMode: 'priority',
@@ -172,6 +181,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Later',
     filters: { date: ['Later'], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'date',
     todoSortMode: 'date',
@@ -182,6 +192,7 @@ const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Newest',
     filters: { date: [], list: [], priority: [], reminder: [] },
     requiredFilters: { date: [], list: [], priority: [], reminder: [] },
+    avoidedFilters: cloneTodoFilters(),
     listOrderMode: 'alphabetical',
     todoGroupMode: 'none',
     todoSortMode: 'newest',
@@ -260,6 +271,7 @@ export type AppSettings = {
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
+  avoidedFilters: TodoFilters;
   requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
@@ -287,6 +299,7 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
     ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
     filters: cloneTodoFilters(preset.filters),
     requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
+    avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
     listOrderMode: preset.listOrderMode,
     todoGroupMode: preset.todoGroupMode,
     todoSortMode: preset.todoSortMode,
@@ -416,6 +429,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
   quickPresetNavIconNames: cloneQuickPresetNavIconNames(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES),
   quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
+  avoidedFilters: cloneTodoFilters(),
   requiredFilters: cloneTodoFilters(),
   selectedFilters: cloneTodoFilters(),
   showOverdueMetaTags: true,
@@ -838,6 +852,7 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         ...(searchKeywords ? { searchKeywords } : {}),
         filters,
         requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
+        avoidedFilters: normalizeTodoFilters(item.avoidedFilters),
         listOrderMode: item.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
         todoGroupMode: normalizeTodoGroupMode(item.todoGroupMode),
         todoSortMode: normalizeTodoSortMode(item.todoSortMode),
@@ -863,6 +878,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(
         DEFAULT_APP_SETTINGS.quickPresetNavPresetIds,
       ),
+      avoidedFilters: cloneTodoFilters(),
       requiredFilters: cloneTodoFilters(),
       selectedFilters: cloneTodoFilters(),
       showOverdueMetaTags: true,
@@ -905,6 +921,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
     quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
     quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
+    avoidedFilters: normalizeTodoFilters(value.avoidedFilters),
     requiredFilters: pruneTodoFilters(normalizeTodoFilters(value.requiredFilters), selectedFilters),
     selectedFilters,
     showOverdueMetaTags: value.showOverdueMetaTags !== false,

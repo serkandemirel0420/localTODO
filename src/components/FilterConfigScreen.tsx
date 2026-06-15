@@ -37,9 +37,7 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
-  hasNotRepeatingItemsFilter,
   hasRepeatingItemsFilter,
-  NOT_REPEATING_ITEMS_FILTER_LABEL,
   REPEATING_ITEMS_FILTER_LABEL,
 } from '../reminders';
 import {
@@ -98,7 +96,6 @@ type FilterConfigScreenProps = {
   onShowResults: () => void;
   onToggleFilter: (filterKey: FilterKey, value: string) => void;
   onToggleRepeatingItemsFilter: () => void;
-  onToggleNotRepeatingItemsFilter: () => void;
   onDateMenuPress: (label: string) => void;
   onRemoveFilter: (filterKey: FilterKey, value: string) => void;
   onToggleListItem: (item: FilterConfigListItem) => void;
@@ -206,7 +203,6 @@ export const FilterConfigScreen = ({
   onShowResults,
   onToggleFilter,
   onToggleRepeatingItemsFilter,
-  onToggleNotRepeatingItemsFilter,
   onDateMenuPress,
   onRemoveFilter,
   onToggleListItem,
@@ -231,9 +227,7 @@ export const FilterConfigScreen = ({
   const getDateMenuDisplayLabel = (menuLabel: string) =>
     getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
   const repeatingItemsFilterActive = hasRepeatingItemsFilter(filters.reminder);
-  const notRepeatingItemsFilterActive = hasNotRepeatingItemsFilter(filters.reminder);
   const repeatingItemsFilterAvoided = hasRepeatingItemsFilter(avoidedFilters.reminder);
-  const notRepeatingItemsFilterAvoided = hasNotRepeatingItemsFilter(avoidedFilters.reminder);
   const activeListFilterLabels = [
     ...filters.list,
     ...avoidedFilters.list.map((value) => `Avoid ${value}`),
@@ -245,10 +239,8 @@ export const FilterConfigScreen = ({
   const activeDateFilterLabels = [
     ...filters.date.map((value) => formatActiveDateLabel(value)),
     ...(repeatingItemsFilterActive ? [REPEATING_ITEMS_FILTER_LABEL] : []),
-    ...(notRepeatingItemsFilterActive ? [NOT_REPEATING_ITEMS_FILTER_LABEL] : []),
     ...avoidedFilters.date.map((value) => `Avoid ${formatActiveDateLabel(value)}`),
     ...(repeatingItemsFilterAvoided ? [`Avoid ${REPEATING_ITEMS_FILTER_LABEL}`] : []),
-    ...(notRepeatingItemsFilterAvoided ? [`Avoid ${NOT_REPEATING_ITEMS_FILTER_LABEL}`] : []),
   ];
   const oneHandedScrollOffset = useMemo(
     () => Math.max(
@@ -580,12 +572,6 @@ export const FilterConfigScreen = ({
               REPEATING_ITEMS_FILTER_LABEL,
               repeatingItemsFilterActive,
               onToggleRepeatingItemsFilter,
-            )}
-            {renderOptionRow(
-              'date-not-repeating-items',
-              NOT_REPEATING_ITEMS_FILTER_LABEL,
-              notRepeatingItemsFilterActive,
-              onToggleNotRepeatingItemsFilter,
             )}
           </AccordionSection>
 

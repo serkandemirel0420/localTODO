@@ -52,6 +52,7 @@ type TodoMetaTagsProps = {
   dateLabelAnchor?: DateLabelAnchor;
   dateLabel?: string;
   dateLabelDisplayMode?: DateLabelDisplayMode;
+  dateStatusKey: string;
   done?: boolean;
   filterColors: FilterColorSettings;
   listLabel?: string;

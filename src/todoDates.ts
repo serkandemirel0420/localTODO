@@ -15,7 +15,11 @@ export const getEffectiveTodoDateLabels = (
   }
 
   if (todo.filters.date.length === 0) {
-    return [toISODateString(startOfDay(now))];
+    const fallbackDate = Number.isFinite(todo.createdAt)
+      ? new Date(todo.createdAt)
+      : now;
+
+    return [toISODateString(startOfDay(fallbackDate))];
   }
 
   return todo.filters.date;

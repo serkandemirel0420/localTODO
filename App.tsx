@@ -186,20 +186,16 @@ import {
   decodeTodoReminder,
   encodeTodoReminder,
   getDatePickerMenuDisplayLabel,
-  hasNotRepeatingItemsFilter,
   hasRepeatingItemsFilter,
   hasTodoReminderTime,
   hasTodoRepeat,
   isDatePickerMenuItemSelected,
   isReminderPickerMenuLabel,
   REMINDER_PICKER_LABEL,
-  NOT_REPEATING_ITEMS_FILTER_LABEL,
-  NOT_REPEATING_ITEMS_FILTER_VALUE,
   REPEATING_ITEMS_FILTER_LABEL,
   REPEATING_ITEMS_FILTER_VALUE,
   removeRepeatStatusFilters,
   REPEAT_PICKER_LABEL,
-  toggleNotRepeatingItemsFilterValue,
   toggleRepeatingItemsFilterValue,
   type ReminderTime,
   type RepeatPreset,
@@ -215,6 +211,20 @@ import {
 } from './src/todoOptions';
 
 WebBrowser.maybeCompleteAuthSession();
+
+const DATE_STATUS_REFRESH_BUFFER_MS = 1000;
+
+const getDateStatusKey = (date = new Date()) => toISODateString(startOfDay(date));
+
+const getMillisecondsUntilNextDateStatusRefresh = (date = new Date()) => {
+  const nextDay = startOfDay(date);
+  nextDay.setDate(nextDay.getDate() + 1);
+
+  return Math.max(
+    DATE_STATUS_REFRESH_BUFFER_MS,
+    nextDay.getTime() - date.getTime() + DATE_STATUS_REFRESH_BUFFER_MS,
+  );
+};
 
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
@@ -435,25 +445,15 @@ const REPEAT_STATUS_FILTER_ITEMS = [
     id: 'repeating-items',
     value: REPEATING_ITEMS_FILTER_VALUE,
   },
-  {
-    displayLabel: NOT_REPEATING_ITEMS_FILTER_LABEL,
-    id: 'not-repeating-items',
-    value: NOT_REPEATING_ITEMS_FILTER_VALUE,
-  },
 ];
 
 const isRepeatStatusFilterValue = (value: string) =>
-  value === REPEATING_ITEMS_FILTER_VALUE ||
-  value === NOT_REPEATING_ITEMS_FILTER_VALUE;
+  value === REPEATING_ITEMS_FILTER_VALUE;
 
-const getRepeatStatusFilterDisplayLabel = (value: string) => (
-  value === NOT_REPEATING_ITEMS_FILTER_VALUE
-    ? NOT_REPEATING_ITEMS_FILTER_LABEL
-    : REPEATING_ITEMS_FILTER_LABEL
-);
+const getRepeatStatusFilterDisplayLabel = (_value: string) => REPEATING_ITEMS_FILTER_LABEL;
 
 const hasRepeatStatusFilter = (values: string[]) =>
-  hasRepeatingItemsFilter(values) || hasNotRepeatingItemsFilter(values);
+  hasRepeatingItemsFilter(values);
 
 const countRepeatStatusFilters = (values: string[]) =>
   REPEAT_STATUS_FILTER_ITEMS.filter((item) => values.includes(item.value)).length;
@@ -1724,7 +1724,6 @@ const formatPresetSummary = (
     filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
     filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
     hasRepeatingItemsFilter(filters.reminder) ? REPEATING_ITEMS_FILTER_LABEL : null,
-    hasNotRepeatingItemsFilter(filters.reminder) ? NOT_REPEATING_ITEMS_FILTER_LABEL : null,
     requiredFilterCount > 0 ? `${requiredFilterCount} must` : null,
     avoidedFilterCount > 0 ? `${avoidedFilterCount} avoid` : null,
     `Sort ${TODO_SORT_LABELS[sortMode]}`,
@@ -1775,17 +1774,13 @@ const todoMatchesDateFilterGroup = (
 ) => {
   const hasDateFilters = filters.date.length > 0;
   const hasRepeatingFilter = hasRepeatingItemsFilter(filters.reminder);
-  const hasNotRepeatingFilter = hasNotRepeatingItemsFilter(filters.reminder);
 
-  if (!hasDateFilters && !hasRepeatingFilter && !hasNotRepeatingFilter) {
+  if (!hasDateFilters && !hasRepeatingFilter) {
     return true;
   }
 
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
   if (hasRepeatingFilter && todoRepeats) {
-    return true;
-  }
-  if (hasNotRepeatingFilter && !todoRepeats) {
     return true;
   }
 
@@ -1843,10 +1838,6 @@ const todoMatchesRequiredFilters = (
     (
       !hasRepeatingItemsFilter(requiredFilters.reminder) ||
       todoRepeats
-    ) &&
-    (
-      !hasNotRepeatingItemsFilter(requiredFilters.reminder) ||
-      !todoRepeats
     )
   );
 };
@@ -1879,10 +1870,6 @@ const todoMatchesAvoidedFilters = (
     (
       hasRepeatingItemsFilter(avoidedFilters.reminder) &&
       todoRepeats
-    ) ||
-    (
-      hasNotRepeatingItemsFilter(avoidedFilters.reminder) &&
-      !todoRepeats
     )
   );
 };
@@ -1915,10 +1902,6 @@ const todoMatchesAnyOptionalFilter = (
     (
       hasRepeatingItemsFilter(optionalFilters.reminder) &&
       todoRepeats
-    ) ||
-    (
-      hasNotRepeatingItemsFilter(optionalFilters.reminder) &&
-      !todoRepeats
     )
   );
 };
@@ -2527,15 +2510,18 @@ export default function App() {
   );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const [keyboardOverlayInset, setKeyboardOverlayInset] = useState(0);
+  const [activeTodoDetailEditingField, setActiveTodoDetailEditingField] = useState<
+    'title' | 'content' | null
+  >(null);
+  const todoDetailIsCompact = keyboardOverlayInset > 0;
   const todoDetailCardMaxHeight = useMemo(() => {
-    const baseMaxHeight = Math.round(windowHeight * 0.79);
-
     if (keyboardOverlayInset > 0) {
       const topReserve = TOP_SAFE_GAP + 24;
       return Math.max(220, windowHeight - keyboardOverlayInset - topReserve);
     }
 
-    return baseMaxHeight;
+    const verticalReserve = TOP_SAFE_GAP + 36;
+    return Math.max(260, windowHeight - verticalReserve);
   }, [keyboardOverlayInset, windowHeight]);
   const deletedTodoDetailCardMaxHeight = useMemo(() => {
     const verticalReserve = (TOP_SAFE_GAP + 24) * 2;
@@ -2579,6 +2565,7 @@ export default function App() {
   const [createDraftPriorityFromPicker, setCreateDraftPriorityFromPicker] = useState(false);
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [datePickerValue, setDatePickerValue] = useState(() => startOfDay(new Date()));
+  const [dateStatusKey, setDateStatusKey] = useState(() => getDateStatusKey());
   const datePickerApplyRef = useRef<'create' | 'filters'>('filters');
   const datePickerDateLabelsRef = useRef<string[]>([]);
   const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
@@ -2603,10 +2590,6 @@ export default function App() {
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
-  const [activeTodoDetailContentSelection, setActiveTodoDetailContentSelection] = useState({
-    end: 0,
-    start: 0,
-  });
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
@@ -2739,6 +2722,9 @@ export default function App() {
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
+  const filterConfigUndoSnapshotRef = useRef<UndoSnapshot | null>(null);
+  const filterConfigUndoPendingRef = useRef(false);
+  const filterConfigUndoLabelRef = useRef('Change filters');
   const undoHistorySequenceRef = useRef(0);
   const todoAlarmResumeSyncAtRef = useRef(0);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
@@ -2837,6 +2823,7 @@ export default function App() {
   });
   const googleDriveActionReady =
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
+  const dateStatusNow = useMemo(() => new Date(), [dateStatusKey]);
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const undoHistoryCount = undoHistory.length;
   const undoToastEntry = undoToastEntryId === null
@@ -2880,6 +2867,45 @@ export default function App() {
     setSearchMode(nextMode);
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, navTab, query, searchMode]);
+
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refreshDateStatus = () => {
+      setDateStatusKey(getDateStatusKey());
+    };
+
+    const scheduleRefresh = () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+
+      refreshTimer = setTimeout(() => {
+        refreshDateStatus();
+        scheduleRefresh();
+      }, getMillisecondsUntilNextDateStatusRefresh());
+    };
+
+    scheduleRefresh();
+
+    const refreshDateStatusOnActive = (nextState: AppStateStatus) => {
+      if (nextState !== 'active') {
+        return;
+      }
+
+      refreshDateStatus();
+      scheduleRefresh();
+    };
+
+    const subscription = AppState.addEventListener('change', refreshDateStatusOnActive);
+
+    return () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      subscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -3276,18 +3302,62 @@ export default function App() {
     setUndoToastEntryId(null);
   }, []);
 
-  const recordUndo = useCallback((label: string) => {
+  const recordUndoSnapshot = useCallback((label: string, snapshot: UndoSnapshot) => {
     const entryId = undoHistorySequenceRef.current + 1;
     undoHistorySequenceRef.current = entryId;
     const entry: UndoHistoryEntry = {
       id: entryId,
       label,
-      snapshot: captureUndoSnapshot(),
+      snapshot,
     };
 
     setUndoHistory((current) => [entry, ...current].slice(0, UNDO_HISTORY_LIMIT));
     setUndoToastEntryId(entryId);
+  }, []);
+
+  const recordUndo = useCallback((label: string) => {
+    recordUndoSnapshot(label, captureUndoSnapshot());
+  }, [captureUndoSnapshot, recordUndoSnapshot]);
+
+  const beginFilterConfigUndoBatch = useCallback(() => {
+    if (filterConfigUndoSnapshotRef.current) {
+      return;
+    }
+
+    filterConfigUndoSnapshotRef.current = captureUndoSnapshot();
+    filterConfigUndoPendingRef.current = false;
+    filterConfigUndoLabelRef.current = 'Change filters';
   }, [captureUndoSnapshot]);
+
+  const recordFilterConfigUndo = useCallback((label: string) => {
+    if (filterConfigUndoSnapshotRef.current) {
+      filterConfigUndoPendingRef.current = true;
+      filterConfigUndoLabelRef.current = label;
+      return;
+    }
+
+    recordUndo(label);
+  }, [recordUndo]);
+
+  const flushFilterConfigUndoBatch = useCallback(() => {
+    const snapshot = filterConfigUndoSnapshotRef.current;
+    const shouldRecordUndo = filterConfigUndoPendingRef.current;
+    const label = filterConfigUndoLabelRef.current;
+
+    filterConfigUndoSnapshotRef.current = null;
+    filterConfigUndoPendingRef.current = false;
+    filterConfigUndoLabelRef.current = 'Change filters';
+
+    if (snapshot && shouldRecordUndo) {
+      recordUndoSnapshot(label, snapshot);
+    }
+  }, [recordUndoSnapshot]);
+
+  useLayoutEffect(() => {
+    if (listMenuOpen) {
+      beginFilterConfigUndoBatch();
+    }
+  }, [beginFilterConfigUndoBatch, listMenuOpen]);
 
   const flushPendingMenuEditedTodoHighlights = useCallback(() => {
     const targetIds = [...pendingMenuEditedTodoIdsRef.current]
@@ -3666,6 +3736,7 @@ export default function App() {
   }, []);
 
   const closeListMenuState = useCallback(() => {
+    flushFilterConfigUndoBatch();
     clearTodoMenuHighlightRequest();
     setMenuMode(null);
     setEditingMenuPresetId(null);
@@ -3678,6 +3749,7 @@ export default function App() {
     menuDismissHapticRef.current = 0;
   }, [
     clearTodoMenuHighlightRequest,
+    flushFilterConfigUndoBatch,
     flushPendingMenuEditedTodoHighlights,
     menuPullAnim,
     restoreTodoMenuReturnOffset,
@@ -3709,9 +3781,9 @@ export default function App() {
     closeListMenuState();
     setSettingsModalVisible(false);
     setActiveTodoDetailId(null);
+    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
-    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     setSelectedTodoIds(new Set([id]));
   }, [closeListMenuState]);
@@ -3734,12 +3806,28 @@ export default function App() {
     suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
+    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
-    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     triggerSubtleHaptic();
   }, [suppressNextHeaderSearchFocus]);
+
+  const handleTodoDetailTitleFocus = useCallback(() => {
+    setActiveTodoDetailEditingField('title');
+  }, []);
+
+  const handleTodoDetailContentFocus = useCallback(() => {
+    setActiveTodoDetailEditingField('content');
+  }, []);
+
+  const handleTodoDetailTitleBlur = useCallback(() => {
+    setActiveTodoDetailEditingField((current) => (current === 'title' ? null : current));
+  }, []);
+
+  const handleTodoDetailContentBlur = useCallback(() => {
+    setActiveTodoDetailEditingField((current) => (current === 'content' ? null : current));
+  }, []);
 
   const closeDeletedTodoDetailModal = useCallback(() => {
     setActiveDeletedTodoDetailId(null);
@@ -3765,7 +3853,7 @@ export default function App() {
     }
 
     exitTodoSelectMode();
-    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
+    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo?.content ?? ''));
     setActiveTodoDetailDraftText(todo?.text ?? '');
     todoDetailDraftTodoIdRef.current = id;
@@ -3998,18 +4086,20 @@ export default function App() {
   }, [persistAppSettings]);
 
   const closeFilterConfigModal = useCallback(() => {
+    flushFilterConfigUndoBatch();
     setFilterConfigModalVisible(false);
     setNavTab((current) => (current === 'calendar' ? null : current));
     triggerSubtleHaptic();
-  }, []);
+  }, [flushFilterConfigUndoBatch]);
 
   const openFilterConfigModal = useCallback(() => {
     Keyboard.dismiss();
     closeListMenuState();
     setSettingsModalVisible(false);
+    beginFilterConfigUndoBatch();
     setFilterConfigModalVisible(true);
     triggerSubtleHaptic();
-  }, [closeListMenuState]);
+  }, [beginFilterConfigUndoBatch, closeListMenuState]);
 
   const closePresetSaveModal = useCallback(() => {
     Keyboard.dismiss();
@@ -4080,7 +4170,7 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
-    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
+    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
     setActiveTodoDetailDraftText(todo.text);
     todoDetailDraftTodoIdRef.current = id;
@@ -4315,7 +4405,7 @@ export default function App() {
       : navTab === 'search' && searchMode === 'item'
         ? []
         : todos;
-    const now = new Date();
+    const now = dateStatusNow;
 
     return matchedTodos
       .filter((todo) => !hideDoneTodosForCurrentView || !todo.done)
@@ -4337,6 +4427,7 @@ export default function App() {
     searchMode,
     searchQuery,
     avoidedFilters,
+    dateStatusNow,
     requiredFilters,
     selectedFilters,
     todos,
@@ -4970,14 +5061,16 @@ export default function App() {
     }
 
     const updatedTodos = [...updatedById.values()];
-    recordUndo(updatedTodos.length === 1 ? 'Change todo settings' : 'Change selected todos');
+    recordFilterConfigUndo(
+      updatedTodos.length === 1 ? 'Change todo settings' : 'Change selected todos',
+    );
     setTodos((current) => current.map((todo) => updatedById.get(todo.id) ?? todo));
     highlightEditedTodos(updatedTodos.map((todo) => todo.id));
     localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
     updatedTodos.forEach((todo) => {
       syncTodoAlarm(todo).catch(() => undefined);
     });
-  }, [highlightEditedTodos, pendingDeleteIds, recordUndo]);
+  }, [highlightEditedTodos, pendingDeleteIds, recordFilterConfigUndo]);
 
   const updateTodoPinnedForIds = useCallback((ids: string[], pinned: boolean) => {
     const targetIds = new Set(ids.filter((id) => !pendingDeleteIds.has(id)));
@@ -5068,11 +5161,16 @@ export default function App() {
       return;
     }
 
-    recordUndo('Change filters');
+    recordFilterConfigUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(nextRequiredFilters);
     setAvoidedFilters(nextAvoidedFilters);
-  }, [clearNotificationTodoReveal, getCurrentTodoEditTargetIds, recordUndo, updateTodoFiltersForIds]);
+  }, [
+    clearNotificationTodoReveal,
+    getCurrentTodoEditTargetIds,
+    recordFilterConfigUndo,
+    updateTodoFiltersForIds,
+  ]);
 
   const closeDatePicker = useCallback(() => {
     setDatePickerVisible(false);
@@ -5839,8 +5937,8 @@ export default function App() {
   const todoListUseSubsectionLayout =
     todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
   const sortedTodos = useMemo(
-    () => [...filteredTodos].sort(createTodoSortComparator(todoListSortMode)),
-    [filteredTodos, todoListSortMode],
+    () => [...filteredTodos].sort(createTodoSortComparator(todoListSortMode, dateStatusNow)),
+    [dateStatusNow, filteredTodos, todoListSortMode],
   );
   const todoListRows = useMemo(
     () => buildTodoListRows(
@@ -5851,9 +5949,11 @@ export default function App() {
       selectedFilters.list,
       todoListUseSubsectionLayout,
       dateLabelDisplayMode,
+      dateStatusNow,
     ),
     [
       dateLabelDisplayMode,
+      dateStatusNow,
       listMenuTree,
       selectedFilters.list,
       sortedTodos,
@@ -5937,6 +6037,7 @@ export default function App() {
       activeTodoMenuId,
       collapsedSearchListKey,
       collapsedSearchPresetKey,
+      dateStatusKey,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       recentlyEditedTodoKey,
@@ -5949,6 +6050,7 @@ export default function App() {
       activeTodoMenuId,
       collapsedSearchListKey,
       collapsedSearchPresetKey,
+      dateStatusKey,
       newlyCreatedTodoHighlightId,
       pendingDeleteKey,
       query,
@@ -6023,9 +6125,9 @@ export default function App() {
       if (activeTodoDetailId !== null) {
         setActiveTodoDetailId(null);
       }
+      setActiveTodoDetailEditingField(null);
       setActiveTodoDetailDraftContent('');
       setActiveTodoDetailDraftText('');
-      setActiveTodoDetailContentSelection({ end: 0, start: 0 });
       todoDetailDraftTodoIdRef.current = null;
       return;
     }
@@ -6038,7 +6140,6 @@ export default function App() {
       formatTodoDetailDraftContentForEditing(activeTodoDetail.content),
     );
     setActiveTodoDetailDraftText(activeTodoDetail.text);
-    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
   }, [activeTodoDetail, activeTodoDetailId]);
   const activeTodoDetailDraftTextForSave = useMemo(
@@ -6091,9 +6192,9 @@ export default function App() {
     suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
+    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
-    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     triggerSubtleHaptic();
   }, [
@@ -6117,7 +6218,7 @@ export default function App() {
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
   const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
-    const now = new Date();
+    const now = dateStatusNow;
 
     return menuPresets
       .map((preset, index) => {
@@ -6165,6 +6266,7 @@ export default function App() {
         return first.index - second.index;
       });
   }, [
+    dateStatusNow,
     hideDoneTodos,
     listMenuTree,
     menuPresets,
@@ -6216,7 +6318,7 @@ export default function App() {
     todos,
   ]);
   const searchPresetTodosByPresetId = useMemo(() => {
-    const now = new Date();
+    const now = dateStatusNow;
     const todosByPresetId = new Map<string, Todo[]>();
 
     searchPresetItems.forEach((item) => {
@@ -6244,6 +6346,7 @@ export default function App() {
 
     return todosByPresetId;
   }, [
+    dateStatusNow,
     hideDoneTodos,
     listMenuTree,
     pendingDeleteIds,
@@ -6355,6 +6458,9 @@ export default function App() {
   const openMenuPreset = openMenuPresetId
     ? menuPresetById.get(openMenuPresetId) ?? null
     : null;
+  const hidePresetTodoSectionAddButton = navTab !== 'search' && Boolean(
+    openMenuPreset || activeMenuPreset,
+  );
   const openMenuPresetHasChanges = Boolean(
     openMenuPreset &&
       !hasTodoEditTargets &&
@@ -6598,7 +6704,7 @@ export default function App() {
         label: 'Presets',
         menuMode: 'presets',
         type: 'menu',
-        valueLabel: activeMenuPreset?.label,
+        valueLabel: (openMenuPreset ?? activeMenuPreset)?.label,
       },
       ...(pinActionRow ? [pinActionRow] : []),
       {
@@ -6860,48 +6966,16 @@ export default function App() {
       return;
     }
 
-    recordUndo('Change filters');
+    recordFilterConfigUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(nextRequiredFilters);
     setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, recordUndo]);
-
-  const toggleNotRepeatingItemsFilter = useCallback(() => {
-    clearNotificationTodoReveal();
-    const nextFilters = {
-      ...selectedFiltersRef.current,
-      reminder: toggleNotRepeatingItemsFilterValue(selectedFiltersRef.current.reminder),
-    };
-    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
-    const nextAvoidedFilters = removeSelectedValuesFromAvoidedFilters(
-      avoidedFiltersRef.current,
-      nextFilters,
-    );
-
-    if (
-      filtersEqual(selectedFiltersRef.current, nextFilters) &&
-      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
-      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
-    ) {
-      return;
-    }
-
-    recordUndo('Change filters');
-    setSelectedFilters(nextFilters);
-    setRequiredFilters(nextRequiredFilters);
-    setAvoidedFilters(nextAvoidedFilters);
-    triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, recordUndo]);
+  }, [clearNotificationTodoReveal, recordFilterConfigUndo]);
 
   const handleDateMenuLabelPress = useCallback((label: string) => {
     if (label === REPEATING_ITEMS_FILTER_VALUE) {
       toggleRepeatingItemsFilter();
-      return;
-    }
-
-    if (label === NOT_REPEATING_ITEMS_FILTER_VALUE) {
-      toggleNotRepeatingItemsFilter();
       return;
     }
 
@@ -6926,7 +7000,6 @@ export default function App() {
     openActiveTodoReminderModal,
     openActiveTodoRepeatModal,
     openDatePicker,
-    toggleNotRepeatingItemsFilter,
     toggleFilterValue,
     toggleRepeatingItemsFilter,
   ]);
@@ -6992,12 +7065,12 @@ export default function App() {
     }
 
     clearNotificationTodoReveal();
-    recordUndo('Change filters');
+    recordFilterConfigUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(prunedRequiredFilters);
     setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, hasTodoEditTargets, recordUndo]);
+  }, [clearNotificationTodoReveal, hasTodoEditTargets, recordFilterConfigUndo]);
 
   const toggleRequiredListMenuItem = useCallback((item: VisibleListMenuItem) => {
     if (hasTodoEditTargets) {
@@ -7074,12 +7147,12 @@ export default function App() {
     }
 
     clearNotificationTodoReveal();
-    recordUndo('Change filters');
+    recordFilterConfigUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(prunedRequiredFilters);
     setAvoidedFilters(nextAvoidedFilters);
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, hasTodoEditTargets, listMenuTree, recordUndo]);
+  }, [clearNotificationTodoReveal, hasTodoEditTargets, listMenuTree, recordFilterConfigUndo]);
 
   const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
     const toggleValue = (current: SelectedFilters): SelectedFilters => {
@@ -7171,7 +7244,7 @@ export default function App() {
       return;
     }
 
-    recordUndo('Change filters');
+    recordFilterConfigUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(nextRequiredFilters);
     setAvoidedFilters(nextAvoidedFilters);
@@ -7180,7 +7253,7 @@ export default function App() {
     clearNotificationTodoReveal,
     getCurrentTodoEditTargetIds,
     listMenuTree,
-    recordUndo,
+    recordFilterConfigUndo,
     updateTodoFiltersForIds,
   ]);
 
@@ -7235,7 +7308,7 @@ export default function App() {
       return;
     }
 
-    recordUndo('Change filters');
+    recordFilterConfigUndo('Change filters');
     setSelectedFilters(nextFilters);
     setRequiredFilters(nextRequiredFilters);
     setAvoidedFilters(nextAvoidedFilters);
@@ -7243,7 +7316,7 @@ export default function App() {
   }, [
     clearNotificationTodoReveal,
     getCurrentTodoEditTargetIds,
-    recordUndo,
+    recordFilterConfigUndo,
     updateTodoFiltersForIds,
   ]);
 
@@ -7261,7 +7334,7 @@ export default function App() {
         listOrderModeRef.current !== 'alphabetical';
 
       if (hasDurableChange && !options.skipUndo) {
-        recordUndo('Clear filters');
+        recordFilterConfigUndo('Clear filters');
       }
       clearNotificationTodoReveal();
       setSelectedFilters(defaultFilters);
@@ -7283,7 +7356,7 @@ export default function App() {
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
-    recordUndo,
+    recordFilterConfigUndo,
     updateCurrentTodoTargetFilters,
   ]);
 
@@ -7346,7 +7419,7 @@ export default function App() {
       todoGroupMode,
     );
 
-    recordUndo('Change sort');
+    recordFilterConfigUndo('Change sort');
     if (display.listLabel) {
       setListMenuTree((current) => updateListNodeDisplaySettings(
         current,
@@ -7363,7 +7436,7 @@ export default function App() {
     clearNotificationTodoReveal,
     effectiveSortMode,
     listMenuTree,
-    recordUndo,
+    recordFilterConfigUndo,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
@@ -7533,13 +7606,13 @@ export default function App() {
   }, [collapsedSearchListKey, collapsedSearchPresetKey, showSearchPresetSections]);
 
   const toggleMetaTagVisibility = useCallback((key: MetaTagKey) => {
-    recordUndo('Change meta tags');
+    recordFilterConfigUndo('Change meta tags');
     setMetaTagVisibility((current) => ({
       ...current,
       [key]: !current[key],
     }));
     triggerSubtleHaptic();
-  }, [recordUndo]);
+  }, [recordFilterConfigUndo]);
 
   const toggleHideDoneTodos = useCallback(() => {
     clearNotificationTodoReveal();
@@ -7549,12 +7622,12 @@ export default function App() {
   }, [clearNotificationTodoReveal, recordUndo]);
 
   const toggleDateLabelDisplayMode = useCallback(() => {
-    recordUndo('Change date labels');
+    recordFilterConfigUndo('Change date labels');
     setDateLabelDisplayMode((current) => (
       current === 'remaining' ? 'exact' : 'remaining'
     ));
     triggerSubtleHaptic();
-  }, [recordUndo]);
+  }, [recordFilterConfigUndo]);
 
   const toggleShowOverdueMetaTags = useCallback(() => {
     recordUndo('Change overdue labels');
@@ -7581,7 +7654,7 @@ export default function App() {
       todoGroupMode,
     );
 
-    recordUndo('Change group');
+    recordFilterConfigUndo('Change group');
     if (display.listLabel) {
       setListMenuTree((current) => updateListNodeDisplaySettings(
         current,
@@ -7598,7 +7671,7 @@ export default function App() {
     clearNotificationTodoReveal,
     effectiveGroupMode,
     listMenuTree,
-    recordUndo,
+    recordFilterConfigUndo,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
@@ -7637,7 +7710,7 @@ export default function App() {
           return;
         }
 
-        recordUndo('Change filters');
+        recordFilterConfigUndo('Change filters');
         setSelectedFilters(nextFilters);
         setRequiredFilters(nextRequiredFilters);
         setAvoidedFilters(nextAvoidedFilters);
@@ -7669,7 +7742,7 @@ export default function App() {
         todoGroupMode,
       );
 
-      recordUndo('Clear sort');
+      recordFilterConfigUndo('Clear sort');
       if (display.listLabel) {
         setListMenuTree((current) => clearListNodeDisplaySettings(
           current,
@@ -7694,7 +7767,7 @@ export default function App() {
         todoGroupMode,
       );
 
-      recordUndo('Clear group');
+      recordFilterConfigUndo('Clear group');
       if (display.listLabel) {
         setListMenuTree((current) => clearListNodeDisplaySettings(
           current,
@@ -7715,7 +7788,7 @@ export default function App() {
         return;
       }
 
-      recordUndo('Clear meta tags');
+      recordFilterConfigUndo('Clear meta tags');
       setMetaTagVisibility(cloneMetaTagVisibility(DEFAULT_META_TAG_VISIBILITY));
       triggerSubtleHaptic();
     }
@@ -7727,7 +7800,7 @@ export default function App() {
     includeActiveTodoReminderRows,
     listMenuTree,
     metaTagVisibility,
-    recordUndo,
+    recordFilterConfigUndo,
     selectedFilters.list,
     todoGroupMode,
     todoSortMode,
@@ -7742,21 +7815,23 @@ export default function App() {
     }
 
     const createdAt = Date.now();
+    const presetId = `preset-${createdAt}-${Math.random().toString(36).slice(2)}`;
+    const preset: MenuPreset = {
+      id: presetId,
+      label,
+      filters: cloneTodoFilters(menuFilters),
+      requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+      avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
+      listOrderMode,
+      todoGroupMode: effectiveGroupMode,
+      todoSortMode: effectiveSortMode,
+      createdAt,
+    };
+
     recordUndo('Save preset');
-    setMenuPresets((current) => [
-      ...current,
-      {
-        id: `preset-${createdAt}-${Math.random().toString(36).slice(2)}`,
-        label,
-        filters: cloneTodoFilters(menuFilters),
-        requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
-        avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
-        listOrderMode,
-        todoGroupMode: effectiveGroupMode,
-        todoSortMode: effectiveSortMode,
-        createdAt,
-      },
-    ]);
+    setMenuPresets((current) => [...current, preset]);
+    setOpenMenuPresetId(presetId);
+    setOpenQuickPresetNavSlotNumber(null);
     closePresetSaveModal();
     triggerSubtleHaptic();
   }, [
@@ -8233,6 +8308,7 @@ export default function App() {
       ? { presetId: '', timestamp: 0 }
       : { presetId: preset.id, timestamp };
     triggerSubtleHaptic();
+    flushFilterConfigUndoBatch();
     setFilterConfigModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
@@ -8252,6 +8328,7 @@ export default function App() {
     });
   }, [
     applyMenuPreset,
+    flushFilterConfigUndoBatch,
   ]);
 
   const handleQuickPresetNavPress = useCallback((
@@ -8510,6 +8587,7 @@ export default function App() {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     closeListMenuState();
+    flushFilterConfigUndoBatch();
     setFilterConfigModalVisible(false);
     exitTodoSelectMode();
     setSettingsBackupExpanded(false);
@@ -8522,7 +8600,7 @@ export default function App() {
     setSettingsListIconPickerIndex(null);
     setSettingsModalVisible(true);
     triggerSubtleHaptic();
-  }, [closeListMenuState, exitTodoSelectMode]);
+  }, [closeListMenuState, exitTodoSelectMode, flushFilterConfigUndoBatch]);
 
   const appHeaderTitle = useMemo(() => {
     if (todoSelectMode) {
@@ -8532,18 +8610,8 @@ export default function App() {
     }
 
     const activePresetTitle =
-      openMenuPreset &&
-      !hasTodoEditTargets &&
-      menuPresetMatchesState(
-        openMenuPreset,
-        selectedFilters,
-        requiredFilters,
-        avoidedFilters,
-        effectiveSortMode,
-        effectiveGroupMode,
-        listOrderMode,
-      )
-        ? openMenuPreset.label
+      !hasTodoEditTargets
+        ? openMenuPreset?.label ?? activeMenuPreset?.label ?? null
         : null;
 
     if (activePresetTitle) {
@@ -8565,14 +8633,10 @@ export default function App() {
     return 'TODO';
   }, [
     activeListDisplay.listLabel,
-    effectiveGroupMode,
-    effectiveSortMode,
     hasTodoEditTargets,
-    listOrderMode,
     menuMode,
+    activeMenuPreset,
     openMenuPreset,
-    avoidedFilters,
-    requiredFilters,
     selectedFilters,
     selectedTodoCount,
     todoSelectMode,
@@ -8604,6 +8668,7 @@ export default function App() {
     closeListMenuState();
     exitTodoSelectMode();
     setSettingsModalVisible(false);
+    flushFilterConfigUndoBatch();
     setFilterConfigModalVisible(false);
     setNavTab(null);
     clearNotificationTodoReveal();
@@ -8612,7 +8677,12 @@ export default function App() {
     if (options.haptic ?? true) {
       triggerSubtleHaptic();
     }
-  }, [clearNotificationTodoReveal, closeListMenuState, exitTodoSelectMode]);
+  }, [
+    clearNotificationTodoReveal,
+    closeListMenuState,
+    exitTodoSelectMode,
+    flushFilterConfigUndoBatch,
+  ]);
 
   const handleNavTabPress = useCallback((tab: NavTab) => {
     if (tab !== 'calendar') {
@@ -8680,6 +8750,7 @@ export default function App() {
     switch (tab) {
       case 'calendar':
         if (shouldKeepSelection) {
+          flushFilterConfigUndoBatch();
           setFilterConfigModalVisible(false);
           setNavTab('calendar');
           Keyboard.dismiss();
@@ -8709,6 +8780,7 @@ export default function App() {
     closeSettingsModal,
     exitTodoSelectMode,
     filterConfigModalVisible,
+    flushFilterConfigUndoBatch,
     focusHeaderSearchInput,
     listMenuOpen,
     menuMode,
@@ -9692,6 +9764,7 @@ export default function App() {
                 />
               ) : null}
               <TodoRow
+                dateStatusKey={dateStatusKey}
                 dateLabelDisplayMode={dateLabelDisplayMode}
                 filterColors={deferredFilterColors}
                 isSelected={isSelected}
@@ -9767,6 +9840,7 @@ export default function App() {
                 />
               ) : null}
               <TodoRow
+                dateStatusKey={dateStatusKey}
                 dateLabelDisplayMode={dateLabelDisplayMode}
                 filterColors={deferredFilterColors}
                 isSelected={isSelected}
@@ -9921,6 +9995,7 @@ export default function App() {
                 />
               ) : null}
               <TodoRow
+                dateStatusKey={dateStatusKey}
                 dateLabelDisplayMode={dateLabelDisplayMode}
                 filterColors={deferredFilterColors}
                 isSelected={isSelected}
@@ -9991,10 +10066,12 @@ export default function App() {
                   </View>
                 </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
-                  {renderTodoSectionAddButton(
-                    `Add todo to ${item.label}`,
-                    getCreateFiltersForSectionHeader(item.id, item.label, selectedFilters),
-                  )}
+                  {hidePresetTodoSectionAddButton
+                    ? null
+                    : renderTodoSectionAddButton(
+                      `Add todo to ${item.label}`,
+                      getCreateFiltersForSectionHeader(item.id, item.label, selectedFilters),
+                    )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
@@ -10056,6 +10133,7 @@ export default function App() {
                     />
                   ) : null}
                   <TodoRow
+                    dateStatusKey={dateStatusKey}
                     dateLabelDisplayMode={dateLabelDisplayMode}
                     filterColors={deferredFilterColors}
                     hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
@@ -10114,6 +10192,7 @@ export default function App() {
         <View style={styles.todoListItem}>
           {renderVisibleTodoRowGap(item.gapBefore)}
           <TodoRow
+            dateStatusKey={dateStatusKey}
             dateLabelDisplayMode={dateLabelDisplayMode}
             filterColors={deferredFilterColors}
             isSelected={isSelected}
@@ -10146,12 +10225,14 @@ export default function App() {
     [
       activeTodoMenuId,
       activeTodoMenuHighlightId,
+      dateStatusKey,
       dateLabelDisplayMode,
       deleteTodo,
       deferredFilterColors,
       enterTodoSelectMode,
       groupedHiddenMetaTagKinds,
       hideCreateFromSettingsCue,
+      hidePresetTodoSectionAddButton,
       metaTagVisibility,
       markTodoRowTouchStart,
       newlyCreatedTodoHighlightId,
@@ -10250,25 +10331,45 @@ export default function App() {
                   <Ionicons color={THEME_CARD} name="add" size={19} />
                 </View>
               ) : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityHint="Opens settings"
-                accessibilityLabel="Settings"
-                accessibilityState={{ selected: navTab === 'settings' }}
-                onPress={() => handleNavTabPress('settings')}
-                style={({ pressed }) => [
-                  styles.appHeaderSideButton,
-                  styles.appHeaderSideButtonRight,
-                  navTab === 'settings' && styles.appHeaderSettingsButtonActive,
-                  pressed && styles.appHeaderSideButtonPressed,
-                ]}
-              >
-                <Ionicons
-                  color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-                  name="cog-outline"
-                  size={23}
-                />
-              </Pressable>
+              <View style={styles.appHeaderActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Undo last change"
+                  accessibilityState={{ disabled: undoHistoryCount === 0 }}
+                  disabled={undoHistoryCount === 0}
+                  onPress={undoLastChange}
+                  style={({ pressed }) => [
+                    styles.appHeaderActionButton,
+                    undoHistoryCount > 0 && styles.appHeaderUndoButtonAvailable,
+                    undoHistoryCount === 0 && styles.appHeaderUndoButtonDisabled,
+                    pressed && styles.appHeaderSideButtonPressed,
+                  ]}
+                >
+                  <Ionicons
+                    color={undoHistoryCount > 0 ? NAV_ACCENT : THEME_TEXT_TERTIARY}
+                    name="arrow-undo"
+                    size={22}
+                  />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityHint="Opens settings"
+                  accessibilityLabel="Settings"
+                  accessibilityState={{ selected: navTab === 'settings' }}
+                  onPress={() => handleNavTabPress('settings')}
+                  style={({ pressed }) => [
+                    styles.appHeaderActionButton,
+                    navTab === 'settings' && styles.appHeaderSettingsButtonActive,
+                    pressed && styles.appHeaderSideButtonPressed,
+                  ]}
+                >
+                  <Ionicons
+                    color={navTab === 'settings' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+                    name="cog-outline"
+                    size={23}
+                  />
+                </Pressable>
+              </View>
             </>
           )}
         </View>
@@ -10541,7 +10642,10 @@ export default function App() {
                   item.preset &&
                     (
                       openedFromThisSlot ||
-                      (!openQuickPresetNavSlotNumber && activeMenuPreset?.id === item.preset.id)
+                      (
+                        !openQuickPresetNavSlotNumber &&
+                        (openMenuPreset?.id ?? activeMenuPreset?.id) === item.preset.id
+                      )
                     ),
                 );
                 const iconColor = item.preset
@@ -11566,8 +11670,24 @@ export default function App() {
               ]}
             >
             <View
-              style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
+              style={[
+                styles.todoDetailCard,
+                !todoDetailIsCompact && styles.todoDetailCardFull,
+                { maxHeight: todoDetailCardMaxHeight },
+                !todoDetailIsCompact ? { height: todoDetailCardMaxHeight } : null,
+              ]}
             >
+              <ScrollView
+                contentContainerStyle={[
+                  styles.todoDetailScrollerContent,
+                  !todoDetailIsCompact && styles.todoDetailScrollerContentFull,
+                ]}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                scrollEnabled={!todoDetailIsCompact && activeTodoDetailEditingField === null}
+                showsVerticalScrollIndicator={false}
+                style={!todoDetailIsCompact ? styles.todoDetailScrollerFull : null}
+              >
               <View style={styles.todoDetailHeader}>
                 <TextInput
                   autoCapitalize="sentences"
@@ -11575,13 +11695,18 @@ export default function App() {
                   editable={activeTodoDetailCanEdit}
                   multiline
                   onChangeText={setActiveTodoDetailDraftText}
+                  onBlur={handleTodoDetailTitleBlur}
+                  onFocus={handleTodoDetailTitleFocus}
                   onSubmitEditing={() => todoDetailContentInputRef.current?.focus()}
                   placeholder="Task title"
                   placeholderTextColor="#B5ADA5"
                   returnKeyType="next"
                   selectionColor={TODO_DETAIL_SELECTION_COLOR}
                   scrollEnabled={false}
-                  style={styles.todoDetailTitleInput}
+                  style={[
+                    styles.todoDetailTitleInput,
+                    todoDetailIsCompact && styles.todoDetailTitleInputCompact,
+                  ]}
                   textAlignVertical="top"
                   value={activeTodoDetailDraftText}
                 />
@@ -11618,7 +11743,12 @@ export default function App() {
                   />
                 </Pressable>
               </View>
-              <View style={styles.todoDetailContentContainer}>
+              <View
+                style={[
+                  styles.todoDetailContentContainer,
+                  !todoDetailIsCompact && styles.todoDetailContentContainerFull,
+                ]}
+              >
                 {activeTodoDetailDraftContentForSave.length === 0 ? (
                   <View pointerEvents="none" style={styles.todoDetailContentPlaceholderLayer}>
                     <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
@@ -11629,25 +11759,26 @@ export default function App() {
                   autoCapitalize="sentences"
                   autoCorrect
                   multiline
+                  onBlur={handleTodoDetailContentBlur}
                   onChangeText={setActiveTodoDetailDraftContent}
-                  onSelectionChange={(event) => {
-                    setActiveTodoDetailContentSelection(event.nativeEvent.selection);
-                  }}
+                  onFocus={handleTodoDetailContentFocus}
                   editable={activeTodoDetailCanEdit}
                   placeholder="Content"
                   placeholderTextColor="#B5ADA5"
                   numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
-                  selection={activeTodoDetailContentSelection}
                   selectionColor={TODO_DETAIL_SELECTION_COLOR}
-                  scrollEnabled
+                  scrollEnabled={todoDetailIsCompact}
                   style={[
                     styles.todoDetailContentInput,
-                    { maxHeight: todoDetailContentInputMaxHeight },
+                    todoDetailIsCompact
+                      ? { maxHeight: todoDetailContentInputMaxHeight }
+                      : styles.todoDetailContentInputFull,
                   ]}
                   textAlignVertical="top"
                   value={activeTodoDetailDraftContent}
                 />
               </View>
+              </ScrollView>
             </View>
             </View>
           </View>
@@ -12123,7 +12254,6 @@ export default function App() {
           onSelectSort={selectTodoSortMode}
           onShowResults={showTodoItems}
           onToggleFilter={toggleFilterValue}
-          onToggleNotRepeatingItemsFilter={toggleNotRepeatingItemsFilter}
           onToggleRepeatingItemsFilter={toggleRepeatingItemsFilter}
           onToggleListItem={toggleListMenuItem}
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
@@ -13075,6 +13205,18 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 10,
   },
+  todoDetailCardFull: {
+    minHeight: 260,
+  },
+  todoDetailScrollerFull: {
+    flex: 1,
+  },
+  todoDetailScrollerContent: {
+    flexGrow: 0,
+  },
+  todoDetailScrollerContentFull: {
+    flexGrow: 1,
+  },
   deletedTodoDetailCard: {
     alignSelf: 'center',
     maxWidth: 430,
@@ -13097,11 +13239,13 @@ const styles = StyleSheet.create({
     fontWeight: FONT_SEMIBOLD,
     letterSpacing: 0,
     lineHeight: 27,
-    maxHeight: 88,
     minHeight: 34,
     minWidth: 0,
     paddingHorizontal: 0,
     paddingVertical: 0,
+  },
+  todoDetailTitleInputCompact: {
+    maxHeight: 88,
   },
   todoDetailCloseButton: {
     alignItems: 'center',
@@ -13132,6 +13276,9 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     position: 'relative',
   },
+  todoDetailContentContainerFull: {
+    flexGrow: 1,
+  },
   todoDetailContentPlaceholderLayer: {
     left: 18,
     position: 'absolute',
@@ -13155,6 +13302,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 0,
+  },
+  todoDetailContentInputFull: {
+    flexGrow: 1,
+    minHeight: TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT,
   },
   deletedTodoDetailHeader: {
     alignItems: 'flex-start',
@@ -14261,7 +14412,7 @@ const styles = StyleSheet.create({
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 26,
     letterSpacing: -0.2,
-    paddingHorizontal: 48,
+    paddingHorizontal: 94,
     textAlign: 'center',
     width: '100%',
   },
@@ -14280,6 +14431,27 @@ const styles = StyleSheet.create({
   appHeaderSideButtonRight: {
     right: HORIZONTAL_PADDING,
   },
+  appHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    position: 'absolute',
+    right: HORIZONTAL_PADDING,
+    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+  },
+  appHeaderActionButton: {
+    alignItems: 'center',
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  appHeaderUndoButtonAvailable: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  appHeaderUndoButtonDisabled: {
+    opacity: 0.46,
+  },
   appHeaderCreateFromSettingsCue: {
     alignItems: 'center',
     backgroundColor: NAV_ACCENT,
@@ -14290,7 +14462,7 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
     position: 'absolute',
-    right: HORIZONTAL_PADDING + 42,
+    right: HORIZONTAL_PADDING + 84,
     shadowColor: NAV_ACCENT,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.2,

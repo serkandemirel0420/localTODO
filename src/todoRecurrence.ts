@@ -70,7 +70,7 @@ const getNextRepeatDateLabel = (
   let nextDate = addRepeatInterval(resolveTodoDate(dateLabels, now, anchor) ?? today, repeat);
   let safety = 0;
 
-  while (nextDate.getTime() <= today.getTime() && safety < 5000) {
+  while (nextDate.getTime() < today.getTime() && safety < 5000) {
     nextDate = addRepeatInterval(nextDate, repeat);
     safety += 1;
   }

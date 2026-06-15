@@ -374,6 +374,7 @@ const getTodoGroups = (
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
   dateLabelDisplayMode: DateLabelDisplayMode,
+  now = new Date(),
 ): TodoGroup[] => {
   if (groupMode === 'status') {
     const label = todo.done ? 'Done' : 'Active';
@@ -399,7 +400,6 @@ const getTodoGroups = (
     }];
   }
 
-  const now = new Date();
   const rawLabel = getBestDateFilterLabel(
     getEffectiveTodoDateLabels(todo, now),
     'No date',
@@ -488,6 +488,7 @@ const buildGroupedSectionRows = (
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
   dateLabelDisplayMode: DateLabelDisplayMode,
+  now = new Date(),
 ): TodoListRow[] => {
   const groups = new Map<string, { key: string; label: string; rank: number; todos: Todo[] }>();
 
@@ -498,6 +499,7 @@ const buildGroupedSectionRows = (
       orderedListLabels,
       listMenuTree,
       dateLabelDisplayMode,
+      now,
     ).forEach((group) => {
       const existingGroup = groups.get(group.key);
 
@@ -535,6 +537,7 @@ export const buildTodoListRows = (
   selectedListFilters: string[],
   useSubsectionLayout: boolean,
   dateLabelDisplayMode: DateLabelDisplayMode = 'exact',
+  now = new Date(),
 ): TodoListRow[] => {
   const subsectionContext = useSubsectionLayout
     ? getListSubsectionContext(listMenuTree, selectedListFilters)
@@ -558,6 +561,7 @@ export const buildTodoListRows = (
     orderedListLabels,
     listMenuTree,
     dateLabelDisplayMode,
+    now,
   );
 };
 

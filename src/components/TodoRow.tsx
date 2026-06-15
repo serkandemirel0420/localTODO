@@ -478,6 +478,7 @@ const renderHighlightedPreview = (
 };
 
 export type TodoRowProps = {
+  dateStatusKey: string;
   dateLabelDisplayMode?: DateLabelDisplayMode;
   filterColors: FilterColorSettings;
   hiddenMetaTagKinds?: HiddenMetaTagKind[];
@@ -510,6 +511,7 @@ export type TodoRowProps = {
 };
 
 function TodoRowComponent({
+  dateStatusKey,
   dateLabelDisplayMode = 'exact',
   filterColors,
   hiddenMetaTagKinds = [],
@@ -1280,6 +1282,7 @@ function TodoRowComponent({
                 dateLabel={rawDateStatusLabel || undefined}
                 dateLabelAnchor={item.createdAt}
                 dateLabelDisplayMode={dateLabelDisplayMode}
+                dateStatusKey={dateStatusKey}
                 done={isVisuallyDone}
                 filterColors={filterColors}
                 listLabel={listStatusLabel || undefined}
@@ -1420,6 +1423,7 @@ function TodoRowComponent({
 }
 
 const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
+  prev.dateStatusKey === next.dateStatusKey &&
   prev.isNewlyCreated === next.isNewlyCreated &&
   prev.isRecentlyEdited === next.isRecentlyEdited &&
   prev.isCompletionFeedback === next.isCompletionFeedback &&

@@ -2510,17 +2510,18 @@ export default function App() {
   );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const [keyboardOverlayInset, setKeyboardOverlayInset] = useState(0);
-  const [activeTodoDetailEditingField, setActiveTodoDetailEditingField] = useState<
+  const [, setActiveTodoDetailEditingField] = useState<
     'title' | 'content' | null
   >(null);
-  const todoDetailIsCompact = true;
+  const todoDetailIsCompact = false;
   const todoDetailCardMaxHeight = useMemo(() => {
     if (keyboardOverlayInset > 0) {
       const topReserve = TOP_SAFE_GAP + 24;
       return Math.max(220, windowHeight - keyboardOverlayInset - topReserve);
     }
 
-    return Math.round(windowHeight * 0.79);
+    const verticalReserve = TOP_SAFE_GAP + 36;
+    return Math.max(260, windowHeight - verticalReserve);
   }, [keyboardOverlayInset, windowHeight]);
   const deletedTodoDetailCardMaxHeight = useMemo(() => {
     const verticalReserve = (TOP_SAFE_GAP + 24) * 2;
@@ -11683,7 +11684,7 @@ export default function App() {
                 ]}
                 keyboardShouldPersistTaps="handled"
                 nestedScrollEnabled
-                scrollEnabled={!todoDetailIsCompact && activeTodoDetailEditingField === null}
+                scrollEnabled={!todoDetailIsCompact}
                 showsVerticalScrollIndicator={false}
                 style={!todoDetailIsCompact ? styles.todoDetailScrollerFull : null}
               >

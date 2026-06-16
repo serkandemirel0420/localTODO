@@ -2510,18 +2510,15 @@ export default function App() {
   );
   const listMenuHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const [keyboardOverlayInset, setKeyboardOverlayInset] = useState(0);
-  const [, setActiveTodoDetailEditingField] = useState<
-    'title' | 'content' | null
-  >(null);
-  const todoDetailIsCompact = false;
   const todoDetailCardMaxHeight = useMemo(() => {
+    const baseMaxHeight = Math.round(windowHeight * 0.79);
+
     if (keyboardOverlayInset > 0) {
       const topReserve = TOP_SAFE_GAP + 24;
       return Math.max(220, windowHeight - keyboardOverlayInset - topReserve);
     }
 
-    const verticalReserve = TOP_SAFE_GAP + 36;
-    return Math.max(260, windowHeight - verticalReserve);
+    return baseMaxHeight;
   }, [keyboardOverlayInset, windowHeight]);
   const deletedTodoDetailCardMaxHeight = useMemo(() => {
     const verticalReserve = (TOP_SAFE_GAP + 24) * 2;
@@ -2590,6 +2587,10 @@ export default function App() {
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
+  const [activeTodoDetailContentSelection, setActiveTodoDetailContentSelection] = useState({
+    end: 0,
+    start: 0,
+  });
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
@@ -2711,15 +2712,12 @@ export default function App() {
   const actualScrollOffsetY = useRef(0);
   const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
-  const todoDetailPullAnim = useRef(new Animated.Value(0)).current;
   const menuModeRef = useRef<MenuMode | null>(null);
   const activeTodoMenuIdRef = useRef<string | null>(null);
   const listMenuOpenRef = useRef(false);
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
   const pendingMenuEditedTodoIdsRef = useRef<Set<string>>(new Set());
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
-  const todoDetailDismissPullRef = useRef(0);
-  const todoDetailDismissHapticRef = useRef(0);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -3784,9 +3782,9 @@ export default function App() {
     closeListMenuState();
     setSettingsModalVisible(false);
     setActiveTodoDetailId(null);
-    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     setSelectedTodoIds(new Set([id]));
   }, [closeListMenuState]);
@@ -3805,40 +3803,16 @@ export default function App() {
     });
   }, []);
 
-  const resetTodoDetailDismissPull = useCallback(() => {
-    todoDetailDismissPullRef.current = 0;
-    todoDetailDismissHapticRef.current = 0;
-    todoDetailPullAnim.setValue(0);
-  }, [todoDetailPullAnim]);
-
   const closeTodoDetailModal = useCallback(() => {
     suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
-    todoDetailPullAnim.stopAnimation();
     setActiveTodoDetailId(null);
-    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
-    resetTodoDetailDismissPull();
     triggerSubtleHaptic();
-  }, [resetTodoDetailDismissPull, suppressNextHeaderSearchFocus, todoDetailPullAnim]);
-
-  const handleTodoDetailTitleFocus = useCallback(() => {
-    setActiveTodoDetailEditingField('title');
-  }, []);
-
-  const handleTodoDetailContentFocus = useCallback(() => {
-    setActiveTodoDetailEditingField('content');
-  }, []);
-
-  const handleTodoDetailTitleBlur = useCallback(() => {
-    setActiveTodoDetailEditingField((current) => (current === 'title' ? null : current));
-  }, []);
-
-  const handleTodoDetailContentBlur = useCallback(() => {
-    setActiveTodoDetailEditingField((current) => (current === 'content' ? null : current));
-  }, []);
+  }, [suppressNextHeaderSearchFocus]);
 
   const closeDeletedTodoDetailModal = useCallback(() => {
     setActiveDeletedTodoDetailId(null);
@@ -3864,8 +3838,7 @@ export default function App() {
     }
 
     exitTodoSelectMode();
-    resetTodoDetailDismissPull();
-    setActiveTodoDetailEditingField(null);
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo?.content ?? ''));
     setActiveTodoDetailDraftText(todo?.text ?? '');
     todoDetailDraftTodoIdRef.current = id;
@@ -3876,115 +3849,8 @@ export default function App() {
     exitTodoSelectMode,
     listMenuOpen,
     pendingDeleteIds,
-    resetTodoDetailDismissPull,
     todos,
   ]);
-
-  const dampTodoDetailPullDistance = useCallback((translationY: number) => {
-    if (translationY <= 0) {
-      return 0;
-    }
-
-    return Math.min(PULL_MAX, translationY * 0.85);
-  }, []);
-
-  const animateTodoDetailDismissReset = useCallback(() => {
-    Animated.spring(todoDetailPullAnim, {
-      friction: 22,
-      tension: 220,
-      toValue: 0,
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished) {
-        todoDetailDismissPullRef.current = 0;
-        todoDetailDismissHapticRef.current = 0;
-      }
-    });
-  }, [todoDetailPullAnim]);
-
-  const animateTodoDetailDismissClose = useCallback(() => {
-    Keyboard.dismiss();
-    Animated.timing(todoDetailPullAnim, {
-      duration: 180,
-      easing: Easing.out(Easing.cubic),
-      toValue: todoDetailCardMaxHeight + 72,
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished) {
-        closeTodoDetailModal();
-        requestAnimationFrame(() => {
-          resetTodoDetailDismissPull();
-        });
-      }
-    });
-  }, [
-    closeTodoDetailModal,
-    resetTodoDetailDismissPull,
-    todoDetailCardMaxHeight,
-    todoDetailPullAnim,
-  ]);
-
-  const handleTodoDetailDismissGesture = useCallback(
-    (event: PanGestureHandlerGestureEvent) => {
-      const { translationX, translationY } = event.nativeEvent;
-
-      if (
-        translationY <= 0 ||
-        Math.abs(translationY) <= Math.abs(translationX)
-      ) {
-        todoDetailPullAnim.setValue(0);
-        todoDetailDismissPullRef.current = 0;
-        return;
-      }
-
-      const damped = dampTodoDetailPullDistance(translationY);
-      todoDetailDismissPullRef.current = damped;
-      todoDetailPullAnim.setValue(damped);
-
-      if (damped > MENU_DISMISS_RELEASE && todoDetailDismissHapticRef.current === 0) {
-        todoDetailDismissHapticRef.current = 1;
-        triggerSubtleHaptic();
-      }
-    },
-    [dampTodoDetailPullDistance, todoDetailPullAnim],
-  );
-
-  const handleTodoDetailDismissStateChange = useCallback(
-    (event: PanGestureHandlerStateChangeEvent) => {
-      const { state, translationY, velocityY } = event.nativeEvent;
-
-      if (
-        state !== State.END &&
-        state !== State.CANCELLED &&
-        state !== State.FAILED
-      ) {
-        return;
-      }
-
-      const pulled = todoDetailDismissPullRef.current;
-      const shouldClose =
-        pulled > MENU_DISMISS_RELEASE ||
-        (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
-
-      if (shouldClose) {
-        animateTodoDetailDismissClose();
-        return;
-      }
-
-      animateTodoDetailDismissReset();
-    },
-    [
-      animateTodoDetailDismissClose,
-      animateTodoDetailDismissReset,
-    ],
-  );
-
-  const todoDetailAnimatedStyle = useMemo(
-    () => ({
-      transform: [{ translateY: todoDetailPullAnim }],
-    }),
-    [todoDetailPullAnim],
-  );
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
     if (translationY <= 0) {
@@ -4289,13 +4155,12 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
-    resetTodoDetailDismissPull();
-    setActiveTodoDetailEditingField(null);
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
     setActiveTodoDetailDraftText(todo.text);
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
-  }, [closeListMenuState, resetCreateDrawerState, resetTodoDetailDismissPull]);
+  }, [closeListMenuState, resetCreateDrawerState]);
 
   useEffect(() => {
     if (!loaded) {
@@ -6245,9 +6110,9 @@ export default function App() {
       if (activeTodoDetailId !== null) {
         setActiveTodoDetailId(null);
       }
-      setActiveTodoDetailEditingField(null);
       setActiveTodoDetailDraftContent('');
       setActiveTodoDetailDraftText('');
+      setActiveTodoDetailContentSelection({ end: 0, start: 0 });
       todoDetailDraftTodoIdRef.current = null;
       return;
     }
@@ -6260,6 +6125,7 @@ export default function App() {
       formatTodoDetailDraftContentForEditing(activeTodoDetail.content),
     );
     setActiveTodoDetailDraftText(activeTodoDetail.text);
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
   }, [activeTodoDetail, activeTodoDetailId]);
   const activeTodoDetailDraftTextForSave = useMemo(
@@ -6312,9 +6178,9 @@ export default function App() {
     suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
     setActiveTodoDetailId(null);
-    setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     triggerSubtleHaptic();
   }, [
@@ -11789,33 +11655,9 @@ export default function App() {
                   : null,
               ]}
             >
-            <PanGestureHandler
-              activeOffsetY={8}
-              failOffsetX={[-36, 36]}
-              onGestureEvent={handleTodoDetailDismissGesture}
-              onHandlerStateChange={handleTodoDetailDismissStateChange}
+            <View
+              style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
             >
-            <Animated.View
-              collapsable={false}
-              style={[
-                styles.todoDetailCard,
-                !todoDetailIsCompact && styles.todoDetailCardFull,
-                { maxHeight: todoDetailCardMaxHeight },
-                !todoDetailIsCompact ? { height: todoDetailCardMaxHeight } : null,
-                todoDetailAnimatedStyle,
-              ]}
-            >
-              <ScrollView
-                contentContainerStyle={[
-                  styles.todoDetailScrollerContent,
-                  !todoDetailIsCompact && styles.todoDetailScrollerContentFull,
-                ]}
-                keyboardShouldPersistTaps="handled"
-                nestedScrollEnabled
-                scrollEnabled={false}
-                showsVerticalScrollIndicator={false}
-                style={!todoDetailIsCompact ? styles.todoDetailScrollerFull : null}
-              >
               <View style={styles.todoDetailHeader}>
                 <TextInput
                   autoCapitalize="sentences"
@@ -11823,18 +11665,13 @@ export default function App() {
                   editable={activeTodoDetailCanEdit}
                   multiline
                   onChangeText={setActiveTodoDetailDraftText}
-                  onBlur={handleTodoDetailTitleBlur}
-                  onFocus={handleTodoDetailTitleFocus}
                   onSubmitEditing={() => todoDetailContentInputRef.current?.focus()}
                   placeholder="Task title"
                   placeholderTextColor="#B5ADA5"
                   returnKeyType="next"
                   selectionColor={TODO_DETAIL_SELECTION_COLOR}
                   scrollEnabled={false}
-                  style={[
-                    styles.todoDetailTitleInput,
-                    todoDetailIsCompact && styles.todoDetailTitleInputCompact,
-                  ]}
+                  style={styles.todoDetailTitleInput}
                   textAlignVertical="top"
                   value={activeTodoDetailDraftText}
                 />
@@ -11871,12 +11708,7 @@ export default function App() {
                   />
                 </Pressable>
               </View>
-              <View
-                style={[
-                  styles.todoDetailContentContainer,
-                  !todoDetailIsCompact && styles.todoDetailContentContainerFull,
-                ]}
-              >
+              <View style={styles.todoDetailContentContainer}>
                 {activeTodoDetailDraftContentForSave.length === 0 ? (
                   <View pointerEvents="none" style={styles.todoDetailContentPlaceholderLayer}>
                     <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
@@ -11887,28 +11719,26 @@ export default function App() {
                   autoCapitalize="sentences"
                   autoCorrect
                   multiline
-                  onBlur={handleTodoDetailContentBlur}
                   onChangeText={setActiveTodoDetailDraftContent}
-                  onFocus={handleTodoDetailContentFocus}
+                  onSelectionChange={(event) => {
+                    setActiveTodoDetailContentSelection(event.nativeEvent.selection);
+                  }}
                   editable={activeTodoDetailCanEdit}
                   placeholder="Content"
                   placeholderTextColor="#B5ADA5"
                   numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
+                  selection={activeTodoDetailContentSelection}
                   selectionColor={TODO_DETAIL_SELECTION_COLOR}
-                  scrollEnabled={todoDetailIsCompact}
+                  scrollEnabled
                   style={[
                     styles.todoDetailContentInput,
-                    todoDetailIsCompact
-                      ? { maxHeight: todoDetailContentInputMaxHeight }
-                      : styles.todoDetailContentInputFull,
+                    { maxHeight: todoDetailContentInputMaxHeight },
                   ]}
                   textAlignVertical="top"
                   value={activeTodoDetailDraftContent}
                 />
               </View>
-              </ScrollView>
-            </Animated.View>
-            </PanGestureHandler>
+            </View>
             </View>
           </View>
         ) : null}
@@ -13334,18 +13164,6 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 10,
   },
-  todoDetailCardFull: {
-    minHeight: 260,
-  },
-  todoDetailScrollerFull: {
-    flex: 1,
-  },
-  todoDetailScrollerContent: {
-    flexGrow: 0,
-  },
-  todoDetailScrollerContentFull: {
-    flexGrow: 1,
-  },
   deletedTodoDetailCard: {
     alignSelf: 'center',
     maxWidth: 430,
@@ -13368,13 +13186,11 @@ const styles = StyleSheet.create({
     fontWeight: FONT_SEMIBOLD,
     letterSpacing: 0,
     lineHeight: 27,
+    maxHeight: 88,
     minHeight: 34,
     minWidth: 0,
     paddingHorizontal: 0,
     paddingVertical: 0,
-  },
-  todoDetailTitleInputCompact: {
-    maxHeight: 88,
   },
   todoDetailCloseButton: {
     alignItems: 'center',
@@ -13405,9 +13221,6 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     position: 'relative',
   },
-  todoDetailContentContainerFull: {
-    flexGrow: 1,
-  },
   todoDetailContentPlaceholderLayer: {
     left: 18,
     position: 'absolute',
@@ -13431,10 +13244,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 0,
-  },
-  todoDetailContentInputFull: {
-    flexGrow: 1,
-    minHeight: TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT,
   },
   deletedTodoDetailHeader: {
     alignItems: 'flex-start',

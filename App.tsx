@@ -2711,12 +2711,15 @@ export default function App() {
   const actualScrollOffsetY = useRef(0);
   const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
+  const todoDetailPullAnim = useRef(new Animated.Value(0)).current;
   const menuModeRef = useRef<MenuMode | null>(null);
   const activeTodoMenuIdRef = useRef<string | null>(null);
   const listMenuOpenRef = useRef(false);
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
   const pendingMenuEditedTodoIdsRef = useRef<Set<string>>(new Set());
   const todoMenuReturnOffsetRef = useRef<number | null>(null);
+  const todoDetailDismissPullRef = useRef(0);
+  const todoDetailDismissHapticRef = useRef(0);
   const todoMenuHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newlyCreatedTodoHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editedTodoHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -3802,16 +3805,24 @@ export default function App() {
     });
   }, []);
 
+  const resetTodoDetailDismissPull = useCallback(() => {
+    todoDetailDismissPullRef.current = 0;
+    todoDetailDismissHapticRef.current = 0;
+    todoDetailPullAnim.setValue(0);
+  }, [todoDetailPullAnim]);
+
   const closeTodoDetailModal = useCallback(() => {
     suppressNextHeaderSearchFocus();
     Keyboard.dismiss();
+    todoDetailPullAnim.stopAnimation();
     setActiveTodoDetailId(null);
     setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
     todoDetailDraftTodoIdRef.current = null;
+    resetTodoDetailDismissPull();
     triggerSubtleHaptic();
-  }, [suppressNextHeaderSearchFocus]);
+  }, [resetTodoDetailDismissPull, suppressNextHeaderSearchFocus, todoDetailPullAnim]);
 
   const handleTodoDetailTitleFocus = useCallback(() => {
     setActiveTodoDetailEditingField('title');
@@ -3853,6 +3864,7 @@ export default function App() {
     }
 
     exitTodoSelectMode();
+    resetTodoDetailDismissPull();
     setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo?.content ?? ''));
     setActiveTodoDetailDraftText(todo?.text ?? '');
@@ -3864,8 +3876,115 @@ export default function App() {
     exitTodoSelectMode,
     listMenuOpen,
     pendingDeleteIds,
+    resetTodoDetailDismissPull,
     todos,
   ]);
+
+  const dampTodoDetailPullDistance = useCallback((translationY: number) => {
+    if (translationY <= 0) {
+      return 0;
+    }
+
+    return Math.min(PULL_MAX, translationY * 0.85);
+  }, []);
+
+  const animateTodoDetailDismissReset = useCallback(() => {
+    Animated.spring(todoDetailPullAnim, {
+      friction: 22,
+      tension: 220,
+      toValue: 0,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        todoDetailDismissPullRef.current = 0;
+        todoDetailDismissHapticRef.current = 0;
+      }
+    });
+  }, [todoDetailPullAnim]);
+
+  const animateTodoDetailDismissClose = useCallback(() => {
+    Keyboard.dismiss();
+    Animated.timing(todoDetailPullAnim, {
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      toValue: todoDetailCardMaxHeight + 72,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        closeTodoDetailModal();
+        requestAnimationFrame(() => {
+          resetTodoDetailDismissPull();
+        });
+      }
+    });
+  }, [
+    closeTodoDetailModal,
+    resetTodoDetailDismissPull,
+    todoDetailCardMaxHeight,
+    todoDetailPullAnim,
+  ]);
+
+  const handleTodoDetailDismissGesture = useCallback(
+    (event: PanGestureHandlerGestureEvent) => {
+      const { translationX, translationY } = event.nativeEvent;
+
+      if (
+        translationY <= 0 ||
+        Math.abs(translationY) <= Math.abs(translationX)
+      ) {
+        todoDetailPullAnim.setValue(0);
+        todoDetailDismissPullRef.current = 0;
+        return;
+      }
+
+      const damped = dampTodoDetailPullDistance(translationY);
+      todoDetailDismissPullRef.current = damped;
+      todoDetailPullAnim.setValue(damped);
+
+      if (damped > MENU_DISMISS_RELEASE && todoDetailDismissHapticRef.current === 0) {
+        todoDetailDismissHapticRef.current = 1;
+        triggerSubtleHaptic();
+      }
+    },
+    [dampTodoDetailPullDistance, todoDetailPullAnim],
+  );
+
+  const handleTodoDetailDismissStateChange = useCallback(
+    (event: PanGestureHandlerStateChangeEvent) => {
+      const { state, translationY, velocityY } = event.nativeEvent;
+
+      if (
+        state !== State.END &&
+        state !== State.CANCELLED &&
+        state !== State.FAILED
+      ) {
+        return;
+      }
+
+      const pulled = todoDetailDismissPullRef.current;
+      const shouldClose =
+        pulled > MENU_DISMISS_RELEASE ||
+        (translationY > 20 && velocityY > MENU_DISMISS_VELOCITY);
+
+      if (shouldClose) {
+        animateTodoDetailDismissClose();
+        return;
+      }
+
+      animateTodoDetailDismissReset();
+    },
+    [
+      animateTodoDetailDismissClose,
+      animateTodoDetailDismissReset,
+    ],
+  );
+
+  const todoDetailAnimatedStyle = useMemo(
+    () => ({
+      transform: [{ translateY: todoDetailPullAnim }],
+    }),
+    [todoDetailPullAnim],
+  );
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
     if (translationY <= 0) {
@@ -4170,12 +4289,13 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
+    resetTodoDetailDismissPull();
     setActiveTodoDetailEditingField(null);
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
     setActiveTodoDetailDraftText(todo.text);
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
-  }, [closeListMenuState, resetCreateDrawerState]);
+  }, [closeListMenuState, resetCreateDrawerState, resetTodoDetailDismissPull]);
 
   useEffect(() => {
     if (!loaded) {
@@ -11669,12 +11789,20 @@ export default function App() {
                   : null,
               ]}
             >
-            <View
+            <PanGestureHandler
+              activeOffsetY={8}
+              failOffsetX={[-36, 36]}
+              onGestureEvent={handleTodoDetailDismissGesture}
+              onHandlerStateChange={handleTodoDetailDismissStateChange}
+            >
+            <Animated.View
+              collapsable={false}
               style={[
                 styles.todoDetailCard,
                 !todoDetailIsCompact && styles.todoDetailCardFull,
                 { maxHeight: todoDetailCardMaxHeight },
                 !todoDetailIsCompact ? { height: todoDetailCardMaxHeight } : null,
+                todoDetailAnimatedStyle,
               ]}
             >
               <ScrollView
@@ -11684,7 +11812,7 @@ export default function App() {
                 ]}
                 keyboardShouldPersistTaps="handled"
                 nestedScrollEnabled
-                scrollEnabled={!todoDetailIsCompact}
+                scrollEnabled={false}
                 showsVerticalScrollIndicator={false}
                 style={!todoDetailIsCompact ? styles.todoDetailScrollerFull : null}
               >
@@ -11779,7 +11907,8 @@ export default function App() {
                 />
               </View>
               </ScrollView>
-            </View>
+            </Animated.View>
+            </PanGestureHandler>
             </View>
           </View>
         ) : null}

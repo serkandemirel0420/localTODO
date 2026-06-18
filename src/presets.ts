@@ -14,6 +14,9 @@ import { cloneTodoFilters } from './todos';
 export type QuickPresetNavItem = {
   iconName: string;
   id: string;
+  // Index into the persisted quick-nav arrays and Settings list tree. This is
+  // different from `slotNumber` whenever hidden Settings lists are skipped.
+  navIndex: number;
   preset: StoredMenuPreset | null;
   presetId: string | null;
   slotNumber: number;
@@ -153,6 +156,7 @@ export const buildQuickPresetNavItems = ({
         usesAutomaticSlots ? undefined : quickPresetNavIconNames[index],
       ),
       id: `quick-preset-slot-${index + 1}`,
+      navIndex: index,
       preset,
       presetId: preset?.id ?? explicitPresetId,
       slotNumber: items.length + 1,

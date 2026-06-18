@@ -2399,10 +2399,24 @@ function SettingsListEditor({
   }, [onIconPickerChange, onSwap, resetReorderSelection, selectedReorderIndex]);
 
   const canReorder = items.length > 1;
+  const displayItems = useMemo(() => (
+    items
+      .map((item, index) => ({ index, item }))
+      .sort((first, second) => {
+        const firstPinned = first.item.showInNavbar !== false;
+        const secondPinned = second.item.showInNavbar !== false;
+
+        if (firstPinned !== secondPinned) {
+          return firstPinned ? -1 : 1;
+        }
+
+        return first.index - second.index;
+      })
+  ), [items]);
 
   return (
     <View style={styles.settingsListEditor}>
-      {items.map((item, index) => (
+      {displayItems.map(({ index, item }) => (
         <MemoizedSettingsListReorderRow
           key={item.label}
           canReorder={canReorder}
@@ -5957,6 +5971,10 @@ export default function App() {
   const heldQuickPresetNavDetail = heldQuickPresetNavPreset
     ? getQuickPresetNavDetail(heldQuickPresetNavPreset, dateLabelDisplayMode)
     : null;
+  const openQuickPresetNavItem = openQuickPresetNavSlotNumber
+    ? quickPresetNavItems.find((item) => item.slotNumber === openQuickPresetNavSlotNumber) ?? null
+    : null;
+  const openQuickPresetNavIndex = openQuickPresetNavItem?.navIndex ?? null;
   const settingsNavbarPinnedListCount = useMemo(
     () => listMenuTree.filter((list) => list.showInNavbar !== false).length,
     [listMenuTree],
@@ -8347,17 +8365,16 @@ export default function App() {
       };
 
       setMenuPresets((current) => [...current, savedPreset]);
-      if (openQuickPresetNavSlotNumber) {
-        const slotIndex = openQuickPresetNavSlotNumber - 1;
+      if (openQuickPresetNavIndex !== null) {
         setQuickPresetNavPresetIds((current) => {
           const nextLength = Math.max(
             current.length,
             quickPresetNavIconNames.length,
             listMenuTree.length,
-            slotIndex + 1,
+            openQuickPresetNavIndex + 1,
           );
           const next = Array.from({ length: nextLength }, (_, index) => current[index] ?? null);
-          next[slotIndex] = savedPresetId;
+          next[openQuickPresetNavIndex] = savedPresetId;
           return next;
         });
       }
@@ -8372,7 +8389,7 @@ export default function App() {
     listOrderMode,
     listMenuTree.length,
     menuPresets,
-    openQuickPresetNavSlotNumber,
+    openQuickPresetNavIndex,
     quickPresetNavIconNames.length,
     quickPresetNavVirtualPresetById,
     recordUndo,
@@ -12815,6 +12832,52 @@ export default function App() {
 
                 {settingsListsExpanded ? (
                   <View style={styles.settingsCard}>
+                    {quickPresetNavItems.length > 0 ? (
+                      <View style={styles.settingsNavbarShortcutSection}>
+                        <Text style={styles.settingsListMenuOrderTitle}>Navbar shortcuts</Text>
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.settingsNavbarShortcutList}
+                        >
+                          {quickPresetNavItems.map((item) => (
+                            <Pressable
+                              accessibilityLabel={
+                                item.preset
+                                  ? `Apply navbar shortcut ${item.preset.label}`
+                                  : `Navbar shortcut slot ${item.slotNumber}`
+                              }
+                              accessibilityRole="button"
+                              disabled={!item.preset}
+                              key={item.id}
+                              onPress={() => {
+                                if (item.preset) {
+                                  applyQuickPresetNavPreset(item.preset, item.slotNumber, Date.now());
+                                }
+                              }}
+                              style={({ pressed }) => [
+                                styles.settingsNavbarShortcutChip,
+                                !item.preset && styles.settingsButtonDisabled,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <MaterialCommunityIcons
+                                color={item.preset ? THEME_ACCENT : THEME_TEXT_TERTIARY}
+                                name={toMaterialCommunityIconName(item.iconName)}
+                                size={17}
+                              />
+                              <Text
+                                numberOfLines={1}
+                                style={styles.settingsNavbarShortcutText}
+                              >
+                                {item.preset?.label ?? `Slot ${item.slotNumber}`}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </ScrollView>
+                      </View>
+                    ) : null}
+
                     <View style={styles.settingsAddListRow}>
                       <TextInput
                         autoCapitalize="words"
@@ -14065,6 +14128,38 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     lineHeight: 16,
     marginTop: 2,
+  },
+  settingsNavbarShortcutSection: {
+    borderBottomColor: '#F2EBE3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginBottom: 14,
+    paddingBottom: 14,
+  },
+  settingsNavbarShortcutList: {
+    alignItems: 'center',
+    gap: 8,
+    paddingRight: 2,
+    paddingTop: 10,
+  },
+  settingsNavbarShortcutChip: {
+    alignItems: 'center',
+    backgroundColor: '#F7F3EE',
+    borderColor: '#E8E2DA',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 7,
+    maxWidth: 156,
+    minHeight: 34,
+    paddingHorizontal: 10,
+  },
+  settingsNavbarShortcutText: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0.1,
+    lineHeight: 17,
+    maxWidth: 108,
   },
   settingsListEditor: {
     borderTopColor: '#F2EBE3',

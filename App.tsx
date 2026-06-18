@@ -12788,7 +12788,7 @@ export default function App() {
                     <View style={styles.settingsRowTextWrap}>
                       <Text style={styles.settingsSectionTitle}>Dev test data</Text>
                       <Text style={styles.settingsSectionSubtitle}>
-                        {devTestTodoCount} of {DEV_TEST_TODO_COUNT} test todos · varied date, list, priority
+                        {devTestTodoCount} of {DEV_TEST_TODO_COUNT} test todos · lists, dates, reminders, repeats
                       </Text>
                     </View>
                   </View>

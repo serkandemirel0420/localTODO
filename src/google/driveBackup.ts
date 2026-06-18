@@ -52,6 +52,7 @@ export type BackupTodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' |
 export type BackupListMenuNode = {
   label: string;
   iconName?: string;
+  showInNavbar?: boolean;
   searchKeywords?: string;
   children?: BackupListMenuNode[];
   sortMode?: BackupTodoSortMode;
@@ -222,6 +223,7 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
   const iconName = typeof item.iconName === 'string' && item.iconName.trim()
     ? item.iconName.trim()
     : undefined;
+  const showInNavbar = item.showInNavbar === false ? false : undefined;
   const searchKeywords = typeof item.searchKeywords === 'string'
     ? item.searchKeywords.replace(/\s+/g, ' ').trim()
     : '';
@@ -229,6 +231,7 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
   return {
     label,
     ...(iconName ? { iconName } : {}),
+    ...(showInNavbar === false ? { showInNavbar: false } : {}),
     ...(searchKeywords ? { searchKeywords } : {}),
     ...(sortMode !== undefined ? { sortMode } : {}),
     ...(groupMode !== undefined ? { groupMode } : {}),
@@ -242,6 +245,7 @@ const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
   nodes.map((node) => ({
     label: node.label,
     ...(node.iconName ? { iconName: node.iconName } : {}),
+    ...(node.showInNavbar === false ? { showInNavbar: false } : {}),
     ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
     sortMode: node.sortMode,
     groupMode: node.groupMode,
@@ -276,6 +280,7 @@ const flattenBackupListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuN
         flattened.push({
           label: item.label,
           ...(item.iconName ? { iconName: item.iconName } : {}),
+          ...(item.showInNavbar === false ? { showInNavbar: false } : {}),
           ...(item.searchKeywords ? { searchKeywords: item.searchKeywords } : {}),
         });
       }

@@ -43,6 +43,7 @@ export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
 const MAIN_BACKUP_FILE_BASENAME = isDevAppVariant ? 'local-todo-dev-backup' : 'local-todo-backup';
 const TEST_BACKUP_FILE_BASENAME = 'local-todo-test-backup';
 const BACKUP_MIME_TYPE = 'application/json';
+export const DRIVE_BACKUP_SLOT_COUNT = 10;
 
 export type BackupListOrderMode = 'alphabetical' | 'manual';
 export type BackupTodoGroupMode = 'date' | 'list' | 'none' | 'priority' | 'status';
@@ -113,14 +114,20 @@ export type DriveBackupFile = {
   size?: string;
 };
 
+export type DriveBackupSlot = {
+  file: DriveBackupFile | null;
+  slot: number;
+};
+
 export type DriveUploadResult = {
   file: DriveBackupFile;
   uploadedAt: string;
 };
 
-export type DriveBackupUploadTarget =
-  | { type: 'new' }
-  | { file: DriveBackupFile; type: 'update' };
+export type DriveBackupUploadTarget = {
+  slot: DriveBackupSlot;
+  type: 'slot';
+};
 
 export type DriveBackupScope = 'main' | 'test';
 
@@ -389,13 +396,29 @@ const parseDriveFile = (value: unknown): DriveBackupFile | null => {
 const getBackupFileBasename = (scope: DriveBackupScope) =>
   scope === 'test' ? TEST_BACKUP_FILE_BASENAME : MAIN_BACKUP_FILE_BASENAME;
 
-const getBackupFileName = (scope: DriveBackupScope) => `${getBackupFileBasename(scope)}.json`;
+const padBackupSlot = (slot: number) => String(slot).padStart(2, '0');
 
-const getBackupFileNamePrefix = (scope: DriveBackupScope) => `${getBackupFileBasename(scope)}-`;
+const normalizeBackupSlot = (slot: number) => (
+  Number.isInteger(slot) && slot >= 1 && slot <= DRIVE_BACKUP_SLOT_COUNT ? slot : 1
+);
 
-const createNewBackupFileName = (exportedAt: string, scope: DriveBackupScope) => {
-  const timestamp = exportedAt.replace(/[:.]/g, '-');
-  return `${getBackupFileNamePrefix(scope)}${timestamp}.json`;
+const getLegacyBackupFileName = (scope: DriveBackupScope) => `${getBackupFileBasename(scope)}.json`;
+
+const getLegacyBackupFileNamePrefix = (scope: DriveBackupScope) =>
+  `${getBackupFileBasename(scope)}-`;
+
+const getBackupSlotFileName = (scope: DriveBackupScope, slot: number) =>
+  `${getBackupFileBasename(scope)}-slot-${padBackupSlot(normalizeBackupSlot(slot))}.json`;
+
+const parseBackupSlotFromFileName = (fileName: string, scope: DriveBackupScope) => {
+  const escapedBasename = getBackupFileBasename(scope).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`^${escapedBasename}-slot-(\\d{2})\\.json$`).exec(fileName);
+  if (!match) {
+    return null;
+  }
+
+  const slot = Number(match[1]);
+  return Number.isInteger(slot) && slot >= 1 && slot <= DRIVE_BACKUP_SLOT_COUNT ? slot : null;
 };
 
 export const createBackupPayload = (
@@ -501,8 +524,9 @@ export const listDriveBackupFiles = async (
 ) => {
   const files: DriveBackupFile[] = [];
   let pageToken: string | undefined;
-  const backupFileName = getBackupFileName(scope);
-  const backupFileNamePrefix = getBackupFileNamePrefix(scope);
+  const legacyBackupFileName = getLegacyBackupFileName(scope);
+  const legacyBackupFileNamePrefix = getLegacyBackupFileNamePrefix(scope);
+  const slotBackupFileNamePrefix = `${getBackupFileBasename(scope)}-slot-`;
 
   do {
     const params = new URLSearchParams({
@@ -511,9 +535,11 @@ export const listDriveBackupFiles = async (
       pageSize: '100',
       q: [
         '(',
-        `name='${escapeDriveQueryString(backupFileName)}'`,
+        `name='${escapeDriveQueryString(legacyBackupFileName)}'`,
         ' or ',
-        `name contains '${escapeDriveQueryString(backupFileNamePrefix)}'`,
+        `name contains '${escapeDriveQueryString(legacyBackupFileNamePrefix)}'`,
+        ' or ',
+        `name contains '${escapeDriveQueryString(slotBackupFileNamePrefix)}'`,
         ') and trashed=false',
       ].join(''),
       spaces: 'appDataFolder',
@@ -537,8 +563,9 @@ export const listDriveBackupFiles = async (
       .map(parseDriveFile)
       .filter((file): file is DriveBackupFile => Boolean(file))
       .filter((file) => (
-        file.name === backupFileName ||
-        file.name.startsWith(backupFileNamePrefix)
+        file.name === legacyBackupFileName ||
+        file.name.startsWith(legacyBackupFileNamePrefix) ||
+        file.name.startsWith(slotBackupFileNamePrefix)
       ))
       .forEach((file) => {
         files.push(file);
@@ -550,13 +577,49 @@ export const listDriveBackupFiles = async (
   return files;
 };
 
+export const listDriveBackupSlots = async (
+  accessToken: string,
+  scope: DriveBackupScope = 'main',
+): Promise<DriveBackupSlot[]> => {
+  const files = await listDriveBackupFiles(accessToken, scope);
+  const filesBySlot = new Map<number, DriveBackupFile>();
+  let newestLegacyFile: DriveBackupFile | null = null;
+
+  files.forEach((file) => {
+    const slot = parseBackupSlotFromFileName(file.name, scope);
+    if (slot) {
+      filesBySlot.set(slot, file);
+      return;
+    }
+
+    if (!newestLegacyFile) {
+      newestLegacyFile = file;
+    }
+  });
+
+  // Older app versions had one rolling backup or timestamped backups. Show the
+  // newest legacy file in slot 1 so users can still restore it after upgrading.
+  if (!filesBySlot.has(1) && newestLegacyFile) {
+    filesBySlot.set(1, newestLegacyFile);
+  }
+
+  return Array.from({ length: DRIVE_BACKUP_SLOT_COUNT }, (_, index) => {
+    const slot = index + 1;
+    return {
+      file: filesBySlot.get(slot) ?? null,
+      slot,
+    };
+  });
+};
+
 export const findDriveBackupFile = async (
   accessToken: string,
   scope: DriveBackupScope = 'main',
 ) => {
-  const files = await listDriveBackupFiles(accessToken, scope);
+  const slots = await listDriveBackupSlots(accessToken, scope);
+  const firstFilledSlot = slots.find((slot) => slot.file);
 
-  return files[0] ?? null;
+  return firstFilledSlot?.file ?? null;
 };
 
 const createMultipartBody = (metadata: Record<string, unknown>, payload: LocalTodoBackup) => {
@@ -583,14 +646,11 @@ export const uploadDriveBackup = async (
   target?: DriveBackupUploadTarget,
   scope: DriveBackupScope = 'main',
 ): Promise<DriveUploadResult> => {
-  const existingFile = target?.type === 'update'
-    ? target.file
-    : target?.type === 'new'
-      ? null
-      : await findDriveBackupFile(accessToken, scope);
-  const backupFileName = target?.type === 'new'
-    ? createNewBackupFileName(payload.exportedAt, scope)
-    : existingFile?.name ?? getBackupFileName(scope);
+  const targetSlot = target?.slot.slot ?? 1;
+  const existingFile = target
+    ? target.slot.file
+    : (await listDriveBackupSlots(accessToken, scope))[targetSlot - 1]?.file ?? null;
+  const backupFileName = getBackupSlotFileName(scope, targetSlot);
   const metadata = existingFile
     ? { mimeType: BACKUP_MIME_TYPE, name: backupFileName }
     : { mimeType: BACKUP_MIME_TYPE, name: backupFileName, parents: ['appDataFolder'] };

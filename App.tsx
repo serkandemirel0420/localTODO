@@ -105,7 +105,11 @@ import {
   createBackupPayload,
   downloadDriveBackup,
   GOOGLE_AUTH_SCOPES,
+  listDriveBackupFiles,
   uploadDriveBackup,
+  type DriveBackupFile,
+  type DriveBackupScope,
+  type DriveBackupUploadTarget,
 } from './src/google/driveBackup';
 import {
   googleAuthStore,
@@ -344,6 +348,16 @@ type MenuMode =
 type SelectedFilters = TodoFilters;
 
 type GoogleDriveAction = 'backup' | 'restore';
+type GoogleDriveBackupPickerMode = 'backup' | 'restore';
+type GoogleDriveBackupPickerState = {
+  files: DriveBackupFile[];
+  mode: GoogleDriveBackupPickerMode;
+  scope: DriveBackupScope;
+};
+type GoogleDriveBackupPickerSelection =
+  | { type: 'new' }
+  | { file: DriveBackupFile; type: 'file' }
+  | null;
 
 type NativeGoogleSignIn = typeof import('@react-native-google-signin/google-signin');
 
@@ -1402,6 +1416,38 @@ const isGoogleOAuthConfigured = () => Boolean(getGoogleClientIdForPlatform());
 
 const formatBackupTime = (value: string | null) =>
   value ? new Date(value).toLocaleString() : null;
+
+const formatDriveBackupFileSize = (value?: string) => {
+  const bytes = Number(value);
+
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  return `${Math.ceil(bytes / 1024)} KB`;
+};
+
+const formatDriveBackupFileTitle = (file: DriveBackupFile) => {
+  const modifiedAt = formatBackupTime(file.modifiedTime ?? null);
+
+  return modifiedAt ? `Backup ${modifiedAt}` : file.name;
+};
+
+const formatDriveBackupFileSubtitle = (file: DriveBackupFile) => {
+  const fileSize = formatDriveBackupFileSize(file.size);
+
+  return [file.name, fileSize].filter(Boolean).join(' · ');
+};
+
+const formatDriveBackupScopeLabel = (scope: DriveBackupScope) =>
+  scope === 'test' ? 'Google Drive test backup' : 'Google Drive backup';
+
+const formatDriveBackupScopePluralLabel = (scope: DriveBackupScope) =>
+  scope === 'test' ? 'Google Drive test backups' : 'Google Drive backups';
 
 const formatDeletedTodoTime = (value: number) =>
   new Date(value).toLocaleString(undefined, {
@@ -2621,10 +2667,15 @@ export default function App() {
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
   const [googleDriveLastBackupAt, setGoogleDriveLastBackupAt] = useState<string | null>(null);
   const [googleDriveLastRestoreAt, setGoogleDriveLastRestoreAt] = useState<string | null>(null);
+  const [googleDriveBackupPicker, setGoogleDriveBackupPicker] =
+    useState<GoogleDriveBackupPickerState | null>(null);
   const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
   const [listOrderMode, setListOrderMode] = useState<ListOrderMode>('alphabetical');
   const deletedTodosRef = useRef<DeletedTodo[]>([]);
   const dateLabelDisplayModeRef = useRef<DateLabelDisplayMode>(dateLabelDisplayMode);
+  const googleDriveBackupPickerResolveRef = useRef<(
+    (selection: GoogleDriveBackupPickerSelection) => void
+  ) | null>(null);
   const googleDriveBackupEnabledRef = useRef(googleDriveBackupEnabled);
   const hideDoneTodosRef = useRef(hideDoneTodos);
   const lastCreateTodoFiltersRef = useRef<TodoFilters>(lastCreateTodoFilters);
@@ -4093,6 +4144,29 @@ export default function App() {
     setSearchKeywordTitleDraft('');
   }, []);
 
+  const resolveGoogleDriveBackupPicker = useCallback((
+    selection: GoogleDriveBackupPickerSelection,
+  ) => {
+    const resolve = googleDriveBackupPickerResolveRef.current;
+    googleDriveBackupPickerResolveRef.current = null;
+    setGoogleDriveBackupPicker(null);
+    resolve?.(selection);
+  }, []);
+
+  const closeGoogleDriveBackupPicker = useCallback(() => {
+    resolveGoogleDriveBackupPicker(null);
+  }, [resolveGoogleDriveBackupPicker]);
+
+  const requestGoogleDriveBackupPickerSelection = useCallback((
+    mode: GoogleDriveBackupPickerMode,
+    files: DriveBackupFile[],
+    scope: DriveBackupScope,
+  ) => new Promise<GoogleDriveBackupPickerSelection>((resolve) => {
+    googleDriveBackupPickerResolveRef.current?.(null);
+    googleDriveBackupPickerResolveRef.current = resolve;
+    setGoogleDriveBackupPicker({ files, mode, scope });
+  }), []);
+
   const backToCreateDrawerInput = useCallback(() => {
     Keyboard.dismiss();
     setDatePickerVisible(false);
@@ -4235,6 +4309,11 @@ export default function App() {
       return true;
     }
 
+    if (googleDriveBackupPicker) {
+      closeGoogleDriveBackupPicker();
+      return true;
+    }
+
     if (settingsModalVisible) {
       closeSettingsModal();
       return true;
@@ -4267,6 +4346,7 @@ export default function App() {
     activeTodoDetailId,
     backToCreateDrawerInput,
     closeListMenu,
+    closeGoogleDriveBackupPicker,
     closeSearchKeywordModal,
     closePresetSaveModal,
     closeSettingsModal,
@@ -4275,6 +4355,7 @@ export default function App() {
     createDrawerVisible,
     datePickerVisible,
     exitTodoSelectMode,
+    googleDriveBackupPicker,
     menuMode,
     searchKeywordModalVisible,
     repeatReminderModalVisible,
@@ -9092,9 +9173,14 @@ export default function App() {
 
   const uploadBackupWithToken = useCallback(async (
     accessToken: string,
-    options: { notify?: boolean } = {},
+    options: {
+      notify?: boolean;
+      scope?: DriveBackupScope;
+      target?: DriveBackupUploadTarget;
+    } = {},
   ) => {
-    setGoogleDriveBackupStatus('Backing up to Google Drive...');
+    const backupScope = options.scope ?? 'main';
+    setGoogleDriveBackupStatus(`Backing up to ${formatDriveBackupScopeLabel(backupScope)}...`);
 
     const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
     const payload = createBackupPayload(backupTodos, {
@@ -9122,10 +9208,17 @@ export default function App() {
       todoSortMode,
       metaTagVisibility,
     });
-    await uploadDriveBackup(accessToken, payload);
-    setGoogleDriveLastBackupAt(payload.exportedAt);
+    if (backupScope === 'test') {
+      payload.settings.googleDriveLastBackupAt = googleDriveLastBackupAt;
+    }
+    await uploadDriveBackup(accessToken, payload, options.target, backupScope);
+    if (backupScope === 'main') {
+      setGoogleDriveLastBackupAt(payload.exportedAt);
+    }
     setGoogleDriveBackupStatus(
-      `Backed up ${backupTodos.length} items · ${formatBackupTime(payload.exportedAt)}`,
+      `${backupScope === 'test' ? 'Test backed up' : 'Backed up'} ${backupTodos.length} items · ${
+        formatBackupTime(payload.exportedAt)
+      }`,
     );
     if (options.notify !== false) {
       triggerSubtleHaptic();
@@ -9157,13 +9250,35 @@ export default function App() {
     todos,
   ]);
 
-  const restoreBackupWithToken = useCallback(async (accessToken: string) => {
-    setGoogleDriveBackupStatus('Restoring from Google Drive...');
+  const restoreBackupWithToken = useCallback(async (
+    accessToken: string,
+    scope: DriveBackupScope = 'main',
+  ) => {
+    setGoogleDriveBackupStatus(`Loading ${formatDriveBackupScopePluralLabel(scope)}...`);
 
-    const backup = await downloadDriveBackup(accessToken);
+    const backupFiles = await listDriveBackupFiles(accessToken, scope);
+
+    if (backupFiles.length === 0) {
+      setGoogleDriveBackupStatus(`No ${formatDriveBackupScopeLabel(scope)} found`);
+      return;
+    }
+
+    setGoogleDriveBackupStatus(`Choose a ${scope === 'test' ? 'test ' : ''}backup to restore`);
+    const selection = await requestGoogleDriveBackupPickerSelection('restore', backupFiles, scope);
+
+    if (!selection || selection.type !== 'file') {
+      setGoogleDriveBackupStatus(
+        scope === 'test' ? 'Google Drive test restore cancelled' : 'Google Drive restore cancelled',
+      );
+      return;
+    }
+
+    setGoogleDriveBackupStatus(`Restoring from ${formatDriveBackupScopeLabel(scope)}...`);
+
+    const backup = await downloadDriveBackup(accessToken, selection.file, scope);
 
     if (!backup) {
-      setGoogleDriveBackupStatus('No Google Drive backup found');
+      setGoogleDriveBackupStatus(`No ${formatDriveBackupScopeLabel(scope)} found`);
       return;
     }
 
@@ -9222,26 +9337,54 @@ export default function App() {
       shouldHighlightCreatePriorityPicker(restoredLastCreateTodoFilters),
     );
     setGoogleDriveBackupStatus(
-      `Restored ${backup.payload.todos.length} items · ${formatBackupTime(restoredAt)}`,
+      `${scope === 'test' ? 'Restored test backup' : 'Restored'} ${
+        backup.payload.todos.length
+      } items · ${formatBackupTime(restoredAt)}`,
     );
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, recordUndo]);
+  }, [clearNotificationTodoReveal, recordUndo, requestGoogleDriveBackupPickerSelection]);
 
   const runGoogleDriveAction = useCallback(async (
     action: GoogleDriveAction,
     authOverride?: StoredGoogleAuth,
+    scope: DriveBackupScope = 'main',
   ) => {
     const accessToken = await getFreshGoogleAccessToken(authOverride);
 
     if (action === 'backup') {
-      await uploadBackupWithToken(accessToken);
+      setGoogleDriveBackupStatus(`Loading ${formatDriveBackupScopePluralLabel(scope)}...`);
+      const backupFiles = await listDriveBackupFiles(accessToken, scope);
+      setGoogleDriveBackupStatus(
+        scope === 'test' ? 'Choose test backup destination' : 'Choose backup destination',
+      );
+      const selection = await requestGoogleDriveBackupPickerSelection('backup', backupFiles, scope);
+
+      if (!selection) {
+        setGoogleDriveBackupStatus(
+          scope === 'test' ? 'Google Drive test backup cancelled' : 'Google Drive backup cancelled',
+        );
+        return;
+      }
+
+      const target: DriveBackupUploadTarget = selection.type === 'new'
+        ? { type: 'new' }
+        : { file: selection.file, type: 'update' };
+      await uploadBackupWithToken(accessToken, { scope, target });
       return;
     }
 
-    await restoreBackupWithToken(accessToken);
-  }, [getFreshGoogleAccessToken, restoreBackupWithToken, uploadBackupWithToken]);
+    await restoreBackupWithToken(accessToken, scope);
+  }, [
+    getFreshGoogleAccessToken,
+    requestGoogleDriveBackupPickerSelection,
+    restoreBackupWithToken,
+    uploadBackupWithToken,
+  ]);
 
-  const authenticateAndRunGoogleDriveAction = useCallback(async (action: GoogleDriveAction) => {
+  const authenticateAndRunGoogleDriveAction = useCallback(async (
+    action: GoogleDriveAction,
+    scope: DriveBackupScope = 'main',
+  ) => {
     if (!googleOAuthConfigured) {
       setGoogleDriveBackupStatus('Google sign-in is not configured for this build.');
       triggerSubtleHaptic();
@@ -9259,7 +9402,7 @@ export default function App() {
     try {
       if (Platform.OS === 'android') {
         const nextAuth = await authenticateWithAndroidGoogle();
-        await runGoogleDriveAction(action, nextAuth);
+        await runGoogleDriveAction(action, nextAuth, scope);
         return;
       }
 
@@ -9269,7 +9412,7 @@ export default function App() {
         const nextAuth = googleAuthToStoredAuth(result.authentication);
         setGoogleAuth(nextAuth);
         await googleAuthStore.save(nextAuth);
-        await runGoogleDriveAction(action, nextAuth);
+        await runGoogleDriveAction(action, nextAuth, scope);
         return;
       }
 
@@ -9296,32 +9439,41 @@ export default function App() {
     runGoogleDriveAction,
   ]);
 
-  const performGoogleDriveAction = useCallback(async (action: GoogleDriveAction) => {
+  const performGoogleDriveAction = useCallback(async (
+    action: GoogleDriveAction,
+    scope: DriveBackupScope = 'main',
+  ) => {
     if (googleDriveBusy) {
       return;
     }
 
     if (!googleAuth?.accessToken) {
-      await authenticateAndRunGoogleDriveAction(action);
+      await authenticateAndRunGoogleDriveAction(action, scope);
       return;
     }
 
     setGoogleDriveBusy(true);
 
     try {
-      await runGoogleDriveAction(action);
+      await runGoogleDriveAction(action, undefined, scope);
     } catch (error) {
       if (isGoogleAuthRecoveryError(error)) {
         await googleAuthStore.clear();
         setGoogleAuth(null);
         setGoogleDriveBusy(false);
-        await authenticateAndRunGoogleDriveAction(action);
+        await authenticateAndRunGoogleDriveAction(action, scope);
         return;
       }
 
       handleGoogleDriveError(
         error,
-        action === 'backup' ? 'Google Drive backup failed' : 'Google Drive restore failed',
+        scope === 'test'
+          ? action === 'backup'
+            ? 'Google Drive test backup failed'
+            : 'Google Drive test restore failed'
+          : action === 'backup'
+            ? 'Google Drive backup failed'
+            : 'Google Drive restore failed',
       );
     } finally {
       setGoogleDriveBusy(false);
@@ -9340,6 +9492,14 @@ export default function App() {
 
   const restoreFromGoogleDrive = useCallback(async () => {
     await performGoogleDriveAction('restore');
+  }, [performGoogleDriveAction]);
+
+  const backupToGoogleDriveTest = useCallback(async () => {
+    await performGoogleDriveAction('backup', 'test');
+  }, [performGoogleDriveAction]);
+
+  const restoreFromGoogleDriveTest = useCallback(async () => {
+    await performGoogleDriveAction('restore', 'test');
   }, [performGoogleDriveAction]);
 
   useEffect(() => {
@@ -12423,6 +12583,41 @@ export default function App() {
                       <Text style={styles.settingsRestoreButtonText}>Restore from Google Drive</Text>
                     </Pressable>
 
+                    <View style={styles.settingsBackupTestBlock}>
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Test backup</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          Separate Drive files from the normal backup.
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={googleDriveBusy || !googleDriveActionReady}
+                        onPress={backupToGoogleDriveTest}
+                        style={({ pressed }) => [
+                          styles.settingsRestoreButton,
+                          (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                          pressed && styles.settingsSecondaryButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsRestoreButtonText}>Back up test copy</Text>
+                      </Pressable>
+
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={googleDriveBusy || !googleDriveActionReady}
+                        onPress={restoreFromGoogleDriveTest}
+                        style={({ pressed }) => [
+                          styles.settingsRestoreButton,
+                          (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                          pressed && styles.settingsSecondaryButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsRestoreButtonText}>Restore test copy</Text>
+                      </Pressable>
+                    </View>
+
                     {googleConnected ? (
                       <Pressable
                         accessibilityRole="button"
@@ -12826,6 +13021,129 @@ export default function App() {
             </View>
           </View>
         ) : null}
+        <Modal
+          animationType="fade"
+          onRequestClose={closeGoogleDriveBackupPicker}
+          presentationStyle="overFullScreen"
+          transparent
+          visible={googleDriveBackupPicker !== null}
+        >
+          <View style={styles.presetSaveModalBackdrop}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss Google Drive backup picker"
+              onPress={closeGoogleDriveBackupPicker}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.presetSaveModalCenter}>
+              <View style={[styles.presetSaveModalCard, styles.googleDrivePickerCard]}>
+                {googleDriveBackupPicker ? (
+                  <>
+                    <Text style={styles.presetSaveModalTitle}>
+                      {googleDriveBackupPicker.mode === 'backup'
+                        ? googleDriveBackupPicker.scope === 'test'
+                          ? 'Back up test copy'
+                          : 'Back up to Google Drive'
+                        : googleDriveBackupPicker.scope === 'test'
+                          ? 'Restore test copy'
+                          : 'Restore from Google Drive'}
+                    </Text>
+                    <Text style={styles.presetSaveModalMessage}>
+                      {googleDriveBackupPicker.mode === 'backup'
+                        ? googleDriveBackupPicker.scope === 'test'
+                          ? 'Save as new or update an existing test backup.'
+                          : 'Save as new or update an existing backup.'
+                        : googleDriveBackupPicker.scope === 'test'
+                          ? 'Choose which test backup to restore.'
+                          : 'Choose which backup to restore.'}
+                    </Text>
+
+                    {googleDriveBackupPicker.mode === 'backup' ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => resolveGoogleDriveBackupPicker({ type: 'new' })}
+                        style={({ pressed }) => [
+                          styles.googleDrivePickerChoice,
+                          styles.googleDrivePickerChoicePrimary,
+                          pressed && styles.googleDrivePickerChoicePressed,
+                        ]}
+                      >
+                        <View style={styles.googleDrivePickerChoiceTextWrap}>
+                          <Text style={styles.googleDrivePickerChoiceTitle}>
+                            Save as new backup
+                          </Text>
+                          <Text style={styles.googleDrivePickerChoiceSubtitle}>
+                            {googleDriveBackupPicker.scope === 'test'
+                              ? 'Creates a separate test backup.'
+                              : 'Creates a separate Drive backup.'}
+                          </Text>
+                        </View>
+                        <Text style={styles.googleDrivePickerChoiceAction}>New</Text>
+                      </Pressable>
+                    ) : null}
+
+                    {googleDriveBackupPicker.files.length > 0 ? (
+                      <ScrollView
+                        contentContainerStyle={styles.googleDrivePickerListContent}
+                        style={styles.googleDrivePickerList}
+                      >
+                        {googleDriveBackupPicker.files.map((file) => (
+                          <Pressable
+                            accessibilityRole="button"
+                            key={file.id}
+                            onPress={() => resolveGoogleDriveBackupPicker({ file, type: 'file' })}
+                            style={({ pressed }) => [
+                              styles.googleDrivePickerChoice,
+                              pressed && styles.googleDrivePickerChoicePressed,
+                            ]}
+                          >
+                            <View style={styles.googleDrivePickerChoiceTextWrap}>
+                              <Text
+                                numberOfLines={1}
+                                style={styles.googleDrivePickerChoiceTitle}
+                              >
+                                {formatDriveBackupFileTitle(file)}
+                              </Text>
+                              <Text
+                                numberOfLines={2}
+                                style={styles.googleDrivePickerChoiceSubtitle}
+                              >
+                                {formatDriveBackupFileSubtitle(file)}
+                              </Text>
+                            </View>
+                            <Text style={styles.googleDrivePickerChoiceAction}>
+                              {googleDriveBackupPicker.mode === 'backup' ? 'Update' : 'Restore'}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    ) : (
+                      <Text style={styles.googleDrivePickerEmptyText}>
+                        {googleDriveBackupPicker.scope === 'test'
+                          ? 'No existing test backups.'
+                          : 'No existing Drive backups.'}
+                      </Text>
+                    )}
+
+                    <View style={styles.presetSaveModalActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={closeGoogleDriveBackupPicker}
+                        style={({ pressed }) => [
+                          styles.presetSaveModalButton,
+                          styles.presetSaveModalButtonSecondary,
+                          pressed && styles.presetSaveModalButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.presetSaveModalButtonSecondaryText}>Cancel</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        </Modal>
         <Modal
           animationType="fade"
           onRequestClose={closePresetSaveModal}
@@ -13357,6 +13675,70 @@ const styles = StyleSheet.create({
     minHeight: 68,
     paddingBottom: 10,
     paddingTop: 10,
+  },
+  googleDrivePickerCard: {
+    maxHeight: '82%',
+  },
+  googleDrivePickerList: {
+    marginHorizontal: -4,
+    marginTop: 12,
+    maxHeight: 340,
+  },
+  googleDrivePickerListContent: {
+    gap: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  googleDrivePickerChoice: {
+    alignItems: 'center',
+    backgroundColor: THEME_BG,
+    borderColor: '#E8E2DA',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 62,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  googleDrivePickerChoicePrimary: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT,
+    marginTop: 14,
+  },
+  googleDrivePickerChoicePressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.99 }],
+  },
+  googleDrivePickerChoiceTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  googleDrivePickerChoiceTitle: {
+    color: THEME_TEXT,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+  },
+  googleDrivePickerChoiceSubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  googleDrivePickerChoiceAction: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
+  googleDrivePickerEmptyText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    marginTop: 14,
   },
   presetSaveModalActions: {
     flexDirection: 'row',
@@ -14249,6 +14631,12 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 20,
     letterSpacing: 0.1,
+  },
+  settingsBackupTestBlock: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 14,
+    paddingTop: 14,
   },
   settingsRestoreButton: {
     minHeight: 48,

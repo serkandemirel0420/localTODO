@@ -40,7 +40,8 @@ import { isDevAppVariant } from '../appVariant';
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
 
-const BACKUP_FILE_NAME = isDevAppVariant ? 'local-todo-dev-backup.json' : 'local-todo-backup.json';
+const MAIN_BACKUP_FILE_BASENAME = isDevAppVariant ? 'local-todo-dev-backup' : 'local-todo-backup';
+const TEST_BACKUP_FILE_BASENAME = 'local-todo-test-backup';
 const BACKUP_MIME_TYPE = 'application/json';
 
 export type BackupListOrderMode = 'alphabetical' | 'manual';
@@ -116,6 +117,12 @@ export type DriveUploadResult = {
   file: DriveBackupFile;
   uploadedAt: string;
 };
+
+export type DriveBackupUploadTarget =
+  | { type: 'new' }
+  | { file: DriveBackupFile; type: 'update' };
+
+export type DriveBackupScope = 'main' | 'test';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -379,6 +386,18 @@ const parseDriveFile = (value: unknown): DriveBackupFile | null => {
   };
 };
 
+const getBackupFileBasename = (scope: DriveBackupScope) =>
+  scope === 'test' ? TEST_BACKUP_FILE_BASENAME : MAIN_BACKUP_FILE_BASENAME;
+
+const getBackupFileName = (scope: DriveBackupScope) => `${getBackupFileBasename(scope)}.json`;
+
+const getBackupFileNamePrefix = (scope: DriveBackupScope) => `${getBackupFileBasename(scope)}-`;
+
+const createNewBackupFileName = (exportedAt: string, scope: DriveBackupScope) => {
+  const timestamp = exportedAt.replace(/[:.]/g, '-');
+  return `${getBackupFileNamePrefix(scope)}${timestamp}.json`;
+};
+
 export const createBackupPayload = (
   todos: Todo[],
   settings: BackupSettings,
@@ -476,24 +495,68 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
   };
 };
 
-export const findDriveBackupFile = async (accessToken: string) => {
-  const params = new URLSearchParams({
-    fields: 'files(id,name,modifiedTime,size)',
-    orderBy: 'modifiedTime desc',
-    q: `name='${escapeDriveQueryString(BACKUP_FILE_NAME)}' and trashed=false`,
-    spaces: 'appDataFolder',
-  });
-  const response = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
-    accessToken,
-  );
-  const parsed = (await response.json()) as unknown;
+export const listDriveBackupFiles = async (
+  accessToken: string,
+  scope: DriveBackupScope = 'main',
+) => {
+  const files: DriveBackupFile[] = [];
+  let pageToken: string | undefined;
+  const backupFileName = getBackupFileName(scope);
+  const backupFileNamePrefix = getBackupFileNamePrefix(scope);
 
-  if (!isRecord(parsed) || !Array.isArray(parsed.files)) {
-    return null;
-  }
+  do {
+    const params = new URLSearchParams({
+      fields: 'nextPageToken,files(id,name,modifiedTime,size)',
+      orderBy: 'modifiedTime desc',
+      pageSize: '100',
+      q: [
+        '(',
+        `name='${escapeDriveQueryString(backupFileName)}'`,
+        ' or ',
+        `name contains '${escapeDriveQueryString(backupFileNamePrefix)}'`,
+        ') and trashed=false',
+      ].join(''),
+      spaces: 'appDataFolder',
+    });
 
-  return parseDriveFile(parsed.files[0]);
+    if (pageToken) {
+      params.set('pageToken', pageToken);
+    }
+
+    const response = await driveFetch(
+      `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+      accessToken,
+    );
+    const parsed = (await response.json()) as unknown;
+
+    if (!isRecord(parsed) || !Array.isArray(parsed.files)) {
+      return files;
+    }
+
+    parsed.files
+      .map(parseDriveFile)
+      .filter((file): file is DriveBackupFile => Boolean(file))
+      .filter((file) => (
+        file.name === backupFileName ||
+        file.name.startsWith(backupFileNamePrefix)
+      ))
+      .forEach((file) => {
+        files.push(file);
+      });
+
+    pageToken = typeof parsed.nextPageToken === 'string' ? parsed.nextPageToken : undefined;
+  } while (pageToken);
+
+  return files;
+};
+
+export const findDriveBackupFile = async (
+  accessToken: string,
+  scope: DriveBackupScope = 'main',
+) => {
+  const files = await listDriveBackupFiles(accessToken, scope);
+
+  return files[0] ?? null;
 };
 
 const createMultipartBody = (metadata: Record<string, unknown>, payload: LocalTodoBackup) => {
@@ -517,11 +580,20 @@ const createMultipartBody = (metadata: Record<string, unknown>, payload: LocalTo
 export const uploadDriveBackup = async (
   accessToken: string,
   payload: LocalTodoBackup,
+  target?: DriveBackupUploadTarget,
+  scope: DriveBackupScope = 'main',
 ): Promise<DriveUploadResult> => {
-  const existingFile = await findDriveBackupFile(accessToken);
+  const existingFile = target?.type === 'update'
+    ? target.file
+    : target?.type === 'new'
+      ? null
+      : await findDriveBackupFile(accessToken, scope);
+  const backupFileName = target?.type === 'new'
+    ? createNewBackupFileName(payload.exportedAt, scope)
+    : existingFile?.name ?? getBackupFileName(scope);
   const metadata = existingFile
-    ? { mimeType: BACKUP_MIME_TYPE, name: BACKUP_FILE_NAME }
-    : { mimeType: BACKUP_MIME_TYPE, name: BACKUP_FILE_NAME, parents: ['appDataFolder'] };
+    ? { mimeType: BACKUP_MIME_TYPE, name: backupFileName }
+    : { mimeType: BACKUP_MIME_TYPE, name: backupFileName, parents: ['appDataFolder'] };
   const { body, boundary } = createMultipartBody(metadata, payload);
   const params = new URLSearchParams({
     fields: 'id,name,modifiedTime,size',
@@ -549,8 +621,12 @@ export const uploadDriveBackup = async (
   };
 };
 
-export const downloadDriveBackup = async (accessToken: string) => {
-  const file = await findDriveBackupFile(accessToken);
+export const downloadDriveBackup = async (
+  accessToken: string,
+  backupFile?: DriveBackupFile,
+  scope: DriveBackupScope = 'main',
+) => {
+  const file = backupFile ?? await findDriveBackupFile(accessToken, scope);
 
   if (!file) {
     return null;

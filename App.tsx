@@ -170,6 +170,7 @@ import {
   type ListOrderMode,
   type StoredListMenuNode,
   type StoredMenuPreset,
+  type StoredMenuPresetSection,
   type TodoGroupMode,
   type TodoSortMode,
 } from './src/storage/appSettingsStore';
@@ -246,6 +247,7 @@ const getMillisecondsUntilNextDateStatusRefresh = (date = new Date()) => {
 
 type ListMenuNode = StoredListMenuNode;
 type MenuPreset = StoredMenuPreset;
+type MenuPresetSection = StoredMenuPresetSection;
 
 type SearchKeywordEditTarget =
   | { kind: 'list'; listIndex: number }
@@ -420,6 +422,14 @@ type MenuRow =
       preset: MenuPreset;
       summary: string;
       type: 'preset';
+    }
+  | {
+      id: string;
+      label: string;
+      preset: MenuPreset;
+      section: MenuPresetSection;
+      summary: string;
+      type: 'presetSection';
     }
   | {
       count?: number;
@@ -1160,7 +1170,14 @@ const getSearchTextScore = (
 };
 
 const getPresetSearchScore = (preset: MenuPreset, query: string) =>
-  getSearchTextScore('', preset.searchKeywords, query);
+  getSearchTextScore(
+    '',
+    [
+      preset.searchKeywords ?? '',
+      ...(preset.sections ?? []).map((section) => section.label),
+    ].join(' '),
+    query,
+  );
 
 const getListMenuSearchScore = (node: ListMenuNode, query: string) =>
   getSearchTextScore('', node.searchKeywords, query);
@@ -1778,6 +1795,79 @@ const formatPresetSummary = (
   return parts.join(' · ');
 };
 
+const formatPresetSectionLabel = (
+  filters: SelectedFilters,
+  dateLabelDisplayMode: DateLabelDisplayMode,
+) => {
+  // Sections are created from the current menu view, so the label favors the
+  // filters that make that view recognizable at a glance.
+  const activeFilterItems = buildActiveFilterItems(filters, dateLabelDisplayMode);
+  const listLabels = activeFilterItems
+    .filter((item) => item.filterKey === 'list')
+    .map((item) => item.displayLabel);
+  const dateLabels = activeFilterItems
+    .filter((item) => item.filterKey === 'date')
+    .map((item) => item.displayLabel);
+  const priorityLabels = activeFilterItems
+    .filter((item) => item.filterKey === 'priority')
+    .map((item) => item.displayLabel);
+  const labels = [
+    ...listLabels.slice(0, 1),
+    ...dateLabels.slice(0, 2),
+    ...priorityLabels.slice(0, 1),
+  ];
+  const hiddenCount =
+    listLabels.length + dateLabels.length + priorityLabels.length - labels.length;
+
+  if (labels.length === 0) {
+    return 'All items';
+  }
+
+  return hiddenCount > 0
+    ? `${labels.join(' · ')} +${hiddenCount}`
+    : labels.join(' · ');
+};
+
+const getUniquePresetSectionLabel = (
+  sections: MenuPresetSection[] | undefined,
+  label: string,
+) => {
+  const existingLabels = new Set(
+    (sections ?? []).map((section) => section.label.toLocaleLowerCase()),
+  );
+
+  if (!existingLabels.has(label.toLocaleLowerCase())) {
+    return label;
+  }
+
+  let suffix = 2;
+  let candidate = `${label} ${suffix}`;
+  while (existingLabels.has(candidate.toLocaleLowerCase())) {
+    suffix += 1;
+    candidate = `${label} ${suffix}`;
+  }
+
+  return candidate;
+};
+
+// A section is a complete mini-preset. Duplicate checks must compare display
+// modes as well as the selected, required, and avoided filter families.
+const presetSectionMatchesState = (
+  section: MenuPresetSection,
+  filters: SelectedFilters,
+  requiredFilters: SelectedFilters,
+  avoidedFilters: SelectedFilters,
+  sortMode: TodoSortMode,
+  groupMode: TodoGroupMode,
+  orderMode: ListOrderMode,
+) =>
+  filtersEqual(section.filters, filters) &&
+  filtersEqual(section.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
+  filtersEqual(section.avoidedFilters, avoidedFilters) &&
+  section.todoSortMode === sortMode &&
+  section.todoGroupMode === groupMode &&
+  section.listOrderMode === orderMode;
+
 const getQuickPresetNavDetail = (
   preset: MenuPreset,
   dateLabelDisplayMode: DateLabelDisplayMode,
@@ -1992,17 +2082,23 @@ const getFiltersAfterCreateReveal = (
 
 type MenuPresetSwipeRowProps = {
   actionLabel: 'Apply' | 'Edit';
+  isSection?: boolean;
   label: string;
   onDelete: () => void;
   onPress: () => void;
+  onSecondaryPress?: () => void;
+  secondaryAccessibilityLabel?: string;
   summary: string;
 };
 
 function MenuPresetSwipeRow({
   actionLabel,
+  isSection = false,
   label,
   onDelete,
   onPress,
+  onSecondaryPress,
+  secondaryAccessibilityLabel,
   summary,
 }: MenuPresetSwipeRowProps) {
   const renderRightActions = useCallback(
@@ -2032,26 +2128,65 @@ function MenuPresetSwipeRow({
         renderRightActions={renderRightActions}
         rightThreshold={PRESET_SWIPE_DELETE_WIDTH}
       >
-        <GHTouchableOpacity
-          accessibilityRole="button"
-          accessibilityHint={
-            actionLabel === 'Edit'
-              ? 'Opens this preset in the filter menu for editing'
-              : 'Applies this preset to the selected item'
-          }
-          accessibilityLabel={`${actionLabel} preset ${label}`}
-          activeOpacity={1}
-          onPress={onPress}
-          style={styles.listMenuPresetRow}
+        <View
+          style={[
+            styles.listMenuPresetRow,
+            isSection && styles.listMenuPresetSectionRow,
+          ]}
         >
-          <View style={styles.listMenuRowTextStack}>
-            <Text style={styles.listMenuRowTitle}>{label}</Text>
-            <Text numberOfLines={1} style={styles.listMenuRowSummary}>
-              {summary}
-            </Text>
+          <GHTouchableOpacity
+            accessibilityRole="button"
+            accessibilityHint={
+              actionLabel === 'Edit'
+                ? 'Opens this preset in the filter menu for editing'
+                : 'Applies this preset section'
+            }
+            accessibilityLabel={`${actionLabel} preset ${label}`}
+            activeOpacity={1}
+            onPress={onPress}
+            style={styles.listMenuPresetMainPress}
+          >
+            <View style={styles.listMenuRowTextStack}>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.listMenuRowTitle,
+                  isSection && styles.listMenuPresetSectionTitle,
+                ]}
+              >
+                {label}
+              </Text>
+              <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+                {summary}
+              </Text>
+            </View>
+          </GHTouchableOpacity>
+          <View style={styles.listMenuPresetActions}>
+            {onSecondaryPress ? (
+              <Pressable
+                accessibilityLabel={secondaryAccessibilityLabel ?? `Add section to ${label}`}
+                accessibilityRole="button"
+                hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                onPress={onSecondaryPress}
+                style={({ pressed }) => [
+                  styles.listMenuPresetIconAction,
+                  pressed && styles.listMenuClearButtonPressed,
+                ]}
+              >
+                <Ionicons color={THEME_ACCENT} name="add-circle-outline" size={20} />
+              </Pressable>
+            ) : null}
+            <GHTouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`${actionLabel} preset ${label}`}
+              activeOpacity={0.74}
+              onPress={onPress}
+              style={styles.listMenuPresetActionButton}
+            >
+              <Text style={styles.listMenuApplyText}>{actionLabel}</Text>
+            </GHTouchableOpacity>
           </View>
-          <Text style={styles.listMenuApplyText}>{actionLabel}</Text>
-        </GHTouchableOpacity>
+        </View>
       </Swipeable>
     </View>
   );
@@ -6734,8 +6869,8 @@ export default function App() {
         });
       }
 
-      rows.push(
-        ...menuPresets.map((preset) => ({
+      menuPresets.forEach((preset) => {
+        rows.push({
           id: `preset-${preset.id}`,
           label: preset.label,
           preset,
@@ -6748,8 +6883,26 @@ export default function App() {
             preset.listOrderMode,
           ),
           type: 'preset' as const,
-        })),
-      );
+        });
+
+        preset.sections?.forEach((section) => {
+          rows.push({
+            id: `preset-section-${preset.id}-${section.id}`,
+            label: section.label,
+            preset,
+            section,
+            summary: formatPresetSummary(
+              section.filters,
+              section.requiredFilters,
+              section.avoidedFilters,
+              section.todoSortMode,
+              section.todoGroupMode,
+              section.listOrderMode,
+            ),
+            type: 'presetSection' as const,
+          });
+        });
+      });
 
       if (!hasTodoEditTargets) {
         rows.push({
@@ -8068,6 +8221,21 @@ export default function App() {
         ...preset.avoidedFilters,
         list: replaceLabel(preset.avoidedFilters.list),
       },
+      sections: preset.sections?.map((section) => ({
+        ...section,
+        filters: {
+          ...section.filters,
+          list: replaceLabel(section.filters.list),
+        },
+        requiredFilters: {
+          ...section.requiredFilters,
+          list: replaceLabel(section.requiredFilters.list),
+        },
+        avoidedFilters: {
+          ...section.avoidedFilters,
+          list: replaceLabel(section.avoidedFilters.list),
+        },
+      })),
     })));
     setDeletedTodos((current) => current.map((todo) => ({
       ...todo,
@@ -8286,6 +8454,131 @@ export default function App() {
     hasTodoEditTargets,
     updateCurrentTodoTargetFilters,
   ]);
+
+  const applyPresetSection = useCallback((
+    preset: MenuPreset,
+    section: MenuPresetSection,
+  ) => {
+    const nextFilters = cloneTodoFilters(section.filters);
+    const nextRequiredFilters = pruneTodoFilters(section.requiredFilters, nextFilters);
+    const nextAvoidedFilters = cloneTodoFilters(section.avoidedFilters);
+
+    if (hasTodoEditTargets) {
+      updateCurrentTodoTargetFilters(() => cloneTodoFilters(nextFilters));
+    } else {
+      clearNotificationTodoReveal();
+      setSelectedFilters((current) => (
+        filtersEqual(current, nextFilters) ? current : nextFilters
+      ));
+      setRequiredFilters((current) => (
+        filtersEqual(current, nextRequiredFilters) ? current : nextRequiredFilters
+      ));
+      setAvoidedFilters((current) => (
+        filtersEqual(current, nextAvoidedFilters) ? current : nextAvoidedFilters
+      ));
+      setListOrderMode(section.listOrderMode);
+      setTodoGroupMode(section.todoGroupMode);
+      setTodoSortMode(section.todoSortMode);
+      setOpenMenuPresetId(preset.id);
+      setOpenQuickPresetNavSlotNumber(null);
+    }
+
+    closeListMenuState();
+    triggerSubtleHaptic();
+  }, [
+    clearNotificationTodoReveal,
+    closeListMenuState,
+    hasTodoEditTargets,
+    updateCurrentTodoTargetFilters,
+  ]);
+
+  const addPresetSection = useCallback((presetId: string) => {
+    if (hasTodoEditTargets) {
+      return;
+    }
+
+    const currentPreset = menuPresets.find((preset) => preset.id === presetId);
+    if (!currentPreset) {
+      return;
+    }
+
+    const duplicateSection = currentPreset.sections?.some((section) => (
+      presetSectionMatchesState(
+        section,
+        menuFilters,
+        menuRequiredFilters,
+        menuAvoidedFilters,
+        effectiveSortMode,
+        effectiveGroupMode,
+        listOrderMode,
+      )
+    ));
+
+    if (duplicateSection) {
+      triggerSubtleHaptic();
+      return;
+    }
+
+    const createdAt = Date.now();
+    const label = getUniquePresetSectionLabel(
+      currentPreset.sections,
+      formatPresetSectionLabel(menuFilters, dateLabelDisplayMode),
+    );
+    const section: MenuPresetSection = {
+      id: `section-${createdAt}-${Math.random().toString(36).slice(2)}`,
+      label,
+      filters: cloneTodoFilters(menuFilters),
+      requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+      avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
+      listOrderMode,
+      todoGroupMode: effectiveGroupMode,
+      todoSortMode: effectiveSortMode,
+      createdAt,
+    };
+
+    recordUndo('Add preset section');
+    setMenuPresets((current) => current.map((preset) => (
+      preset.id === presetId
+        ? {
+            ...preset,
+            sections: [...(preset.sections ?? []), section],
+          }
+        : preset
+    )));
+    triggerSubtleHaptic();
+  }, [
+    dateLabelDisplayMode,
+    effectiveGroupMode,
+    effectiveSortMode,
+    hasTodoEditTargets,
+    listOrderMode,
+    menuAvoidedFilters,
+    menuFilters,
+    menuPresets,
+    menuRequiredFilters,
+    recordUndo,
+  ]);
+
+  const removePresetSection = useCallback((presetId: string, sectionId: string) => {
+    const preset = menuPresets.find((item) => item.id === presetId);
+    if (!preset?.sections?.some((section) => section.id === sectionId)) {
+      return;
+    }
+
+    recordUndo('Delete preset section');
+    setMenuPresets((current) => current.map((item) => {
+      if (item.id !== presetId) {
+        return item;
+      }
+
+      const sections = item.sections?.filter((section) => section.id !== sectionId) ?? [];
+      return {
+        ...item,
+        ...(sections.length > 0 ? { sections } : { sections: undefined }),
+      };
+    }));
+    triggerSubtleHaptic();
+  }, [menuPresets, recordUndo]);
 
   const openMenuPresetEditor = useCallback((preset: MenuPreset) => {
     applyMenuPreset(preset, {
@@ -8711,6 +9004,21 @@ export default function App() {
           ...preset.avoidedFilters,
           list: preset.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
         },
+        sections: preset.sections?.map((section) => ({
+          ...section,
+          filters: {
+            ...section.filters,
+            list: section.filters.list.filter((label) => !removedLabels.has(label)),
+          },
+          requiredFilters: {
+            ...section.requiredFilters,
+            list: section.requiredFilters.list.filter((label) => !removedLabels.has(label)),
+          },
+          avoidedFilters: {
+            ...section.avoidedFilters,
+            list: section.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
+          },
+        })),
       })));
       setTodos((items) => {
         const nextItems = items.map((todo) => ({
@@ -11331,42 +11639,66 @@ export default function App() {
                               );
                             }
 
-  	                          if (item.type === 'quickApplyPreset') {
-  	                            return (
-  	                              <Pressable
-  	                                accessibilityRole="button"
-  	                                onPress={() => applyMenuPreset(item.preset)}
-  	                                style={({ pressed }) => [
-  	                                  styles.listMenuRow,
-  	                                  pressed && styles.listMenuRowPressed,
-  	                                ]}
-  	                              >
-  	                                <View style={styles.listMenuRowTextStack}>
-  	                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-  	                                  <Text numberOfLines={1} style={styles.listMenuRowSummary}>
-  	                                    {item.summary}
-  	                                  </Text>
-  	                                </View>
-  	                                <Text style={styles.listMenuApplyText}>Apply</Text>
-  	                              </Pressable>
-  	                            );
-  	                          }
+                            if (item.type === 'quickApplyPreset') {
+                              return (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  onPress={() => applyMenuPreset(item.preset)}
+                                  style={({ pressed }) => [
+                                    styles.listMenuRow,
+                                    pressed && styles.listMenuRowPressed,
+                                  ]}
+                                >
+                                  <View style={styles.listMenuRowTextStack}>
+                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                    <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+                                      {item.summary}
+                                    </Text>
+                                  </View>
+                                  <Text style={styles.listMenuApplyText}>Apply</Text>
+                                </Pressable>
+                              );
+                            }
 
-  	                          if (item.type === 'preset') {
-  	                            return (
-  	                              <MemoizedMenuPresetSwipeRow
-                                    actionLabel={hasTodoEditTargets ? 'Apply' : 'Edit'}
-  	                                label={item.label}
-  	                                onDelete={() => removeMenuPreset(item.preset.id)}
-                                    onPress={() => (
-                                      hasTodoEditTargets
-                                        ? applyMenuPreset(item.preset)
-                                        : openMenuPresetEditor(item.preset)
-                                    )}
-  	                                summary={item.summary}
-  	                              />
-  	                            );
-  	                          }
+                            if (item.type === 'preset') {
+                              return (
+                                <MemoizedMenuPresetSwipeRow
+                                  actionLabel={hasTodoEditTargets ? 'Apply' : 'Edit'}
+                                  label={item.label}
+                                  onDelete={() => removeMenuPreset(item.preset.id)}
+                                  onPress={() => (
+                                    hasTodoEditTargets
+                                      ? applyMenuPreset(item.preset)
+                                      : openMenuPresetEditor(item.preset)
+                                  )}
+                                  onSecondaryPress={
+                                    hasTodoEditTargets
+                                      ? undefined
+                                      : () => addPresetSection(item.preset.id)
+                                  }
+                                  secondaryAccessibilityLabel={
+                                    `Add current view as section to ${item.preset.label}`
+                                  }
+                                  summary={item.summary}
+                                />
+                              );
+                            }
+
+                            if (item.type === 'presetSection') {
+                              return (
+                                <MemoizedMenuPresetSwipeRow
+                                  actionLabel="Apply"
+                                  isSection
+                                  label={item.label}
+                                  onDelete={() => removePresetSection(
+                                    item.preset.id,
+                                    item.section.id,
+                                  )}
+                                  onPress={() => applyPresetSection(item.preset, item.section)}
+                                  summary={item.summary}
+                                />
+                              );
+                            }
 
                             if (item.type === 'pinAction') {
                               return (
@@ -15448,6 +15780,41 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     backgroundColor: '#FFFFFF',
+  },
+  listMenuPresetSectionRow: {
+    backgroundColor: THEME_BG,
+    paddingLeft: 28,
+  },
+  listMenuPresetMainPress: {
+    flex: 1,
+    height: '100%',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  listMenuPresetActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 2,
+    marginLeft: 8,
+  },
+  listMenuPresetIconAction: {
+    alignItems: 'center',
+    borderRadius: 12,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  listMenuPresetActionButton: {
+    alignItems: 'center',
+    borderRadius: 12,
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  listMenuPresetSectionTitle: {
+    color: '#5C554E',
+    fontSize: 14,
   },
   listMenuPresetSwipeActions: {
     width: PRESET_SWIPE_DELETE_WIDTH,

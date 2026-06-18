@@ -60,6 +60,21 @@ export type StoredMenuPreset = {
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
   createdAt: number;
+  sections?: StoredMenuPresetSection[];
+};
+
+// Preset sections are user-created subviews under a saved preset. They must
+// round-trip like presets instead of being regenerated from starter defaults.
+export type StoredMenuPresetSection = {
+  id: string;
+  label: string;
+  filters: TodoFilters;
+  requiredFilters: TodoFilters;
+  avoidedFilters: TodoFilters;
+  listOrderMode: ListOrderMode;
+  todoGroupMode: TodoGroupMode;
+  todoSortMode: TodoSortMode;
+  createdAt: number;
 };
 
 export const QUICK_PRESET_NAV_SLOT_COUNT = 10;
@@ -175,19 +190,39 @@ export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNo
     children: node.children ? cloneListMenuTree(node.children) : undefined,
   }));
 
-export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[] =>
-  presets.map((preset) => ({
-    id: preset.id,
-    label: preset.label,
-    ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
-    filters: cloneTodoFilters(preset.filters),
-    requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
-    avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
-    listOrderMode: preset.listOrderMode,
-    todoGroupMode: preset.todoGroupMode,
-    todoSortMode: preset.todoSortMode,
-    createdAt: preset.createdAt,
+export const cloneMenuPresetSections = (
+  sections: StoredMenuPresetSection[] = [],
+): StoredMenuPresetSection[] =>
+  sections.map((section) => ({
+    id: section.id,
+    label: section.label,
+    filters: cloneTodoFilters(section.filters),
+    requiredFilters: pruneTodoFilters(section.requiredFilters, section.filters),
+    avoidedFilters: cloneTodoFilters(section.avoidedFilters),
+    listOrderMode: section.listOrderMode,
+    todoGroupMode: section.todoGroupMode,
+    todoSortMode: section.todoSortMode,
+    createdAt: section.createdAt,
   }));
+
+export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[] =>
+  presets.map((preset) => {
+    const sections = cloneMenuPresetSections(preset.sections);
+
+    return {
+      id: preset.id,
+      label: preset.label,
+      ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
+      filters: cloneTodoFilters(preset.filters),
+      requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
+      avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
+      listOrderMode: preset.listOrderMode,
+      todoGroupMode: preset.todoGroupMode,
+      todoSortMode: preset.todoSortMode,
+      createdAt: preset.createdAt,
+      ...(sections.length > 0 ? { sections } : {}),
+    };
+  });
 
 export const normalizeQuickPresetNavPresetIds = (value: unknown): QuickPresetNavPresetIds => {
   if (!Array.isArray(value) || value.length === 0) {
@@ -715,6 +750,44 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
     return [];
   }
 
+  const normalizeMenuPresetSections = (sectionsValue: unknown): StoredMenuPresetSection[] => {
+    if (!Array.isArray(sectionsValue)) {
+      return [];
+    }
+
+    return sectionsValue
+      .map((section, sectionIndex): StoredMenuPresetSection | null => {
+        if (!isRecord(section)) {
+          return null;
+        }
+
+        const id = typeof section.id === 'string' && section.id.trim()
+          ? section.id.trim()
+          : `section-${sectionIndex + 1}`;
+        const label = typeof section.label === 'string' && section.label.trim()
+          ? section.label.trim()
+          : `Section ${sectionIndex + 1}`;
+        const createdAt =
+          typeof section.createdAt === 'number' && Number.isFinite(section.createdAt)
+            ? section.createdAt
+            : 0;
+        const filters = normalizeTodoFilters(section.filters);
+
+        return {
+          id,
+          label,
+          filters,
+          requiredFilters: pruneTodoFilters(normalizeTodoFilters(section.requiredFilters), filters),
+          avoidedFilters: normalizeTodoFilters(section.avoidedFilters),
+          listOrderMode: section.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
+          todoGroupMode: normalizeTodoGroupMode(section.todoGroupMode),
+          todoSortMode: normalizeTodoSortMode(section.todoSortMode),
+          createdAt,
+        };
+      })
+      .filter((section): section is StoredMenuPresetSection => Boolean(section));
+  };
+
   return value
     .map((item, index): StoredMenuPreset | null => {
       if (!isRecord(item)) {
@@ -732,6 +805,7 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         : 0;
       const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
       const filters = normalizeTodoFilters(item.filters);
+      const sections = normalizeMenuPresetSections(item.sections);
 
       return {
         id,
@@ -744,6 +818,7 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         todoGroupMode: normalizeTodoGroupMode(item.todoGroupMode),
         todoSortMode: normalizeTodoSortMode(item.todoSortMode),
         createdAt,
+        ...(sections.length > 0 ? { sections } : {}),
       };
     })
     .filter((item): item is StoredMenuPreset => Boolean(item));

@@ -72,6 +72,21 @@ export type BackupMenuPreset = {
   todoGroupMode: BackupTodoGroupMode;
   todoSortMode: BackupTodoSortMode;
   createdAt: number;
+  sections?: BackupMenuPresetSection[];
+};
+
+// Backup payloads keep preset sections as first-class user data so restore does
+// not collapse a carefully built preset board back into one flat saved view.
+export type BackupMenuPresetSection = {
+  id: string;
+  label: string;
+  filters: TodoFilters;
+  requiredFilters: TodoFilters;
+  avoidedFilters: TodoFilters;
+  listOrderMode: BackupListOrderMode;
+  todoGroupMode: BackupTodoGroupMode;
+  todoSortMode: BackupTodoSortMode;
+  createdAt: number;
 };
 
 export type BackupSettings = {
@@ -254,19 +269,39 @@ const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
     children: node.children ? cloneListMenuTree(node.children) : undefined,
   }));
 
-const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
-  presets.map((preset) => ({
-    id: preset.id,
-    label: preset.label,
-    ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
-    filters: cloneTodoFilters(preset.filters),
-    requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
-    avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
-    listOrderMode: preset.listOrderMode,
-    todoGroupMode: preset.todoGroupMode,
-    todoSortMode: preset.todoSortMode,
-    createdAt: preset.createdAt,
+const cloneMenuPresetSections = (
+  sections: BackupMenuPresetSection[] = [],
+): BackupMenuPresetSection[] =>
+  sections.map((section) => ({
+    id: section.id,
+    label: section.label,
+    filters: cloneTodoFilters(section.filters),
+    requiredFilters: pruneTodoFilters(section.requiredFilters, section.filters),
+    avoidedFilters: cloneTodoFilters(section.avoidedFilters),
+    listOrderMode: section.listOrderMode,
+    todoGroupMode: section.todoGroupMode,
+    todoSortMode: section.todoSortMode,
+    createdAt: section.createdAt,
   }));
+
+const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
+  presets.map((preset) => {
+    const sections = cloneMenuPresetSections(preset.sections);
+
+    return {
+      id: preset.id,
+      label: preset.label,
+      ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
+      filters: cloneTodoFilters(preset.filters),
+      requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
+      avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
+      listOrderMode: preset.listOrderMode,
+      todoGroupMode: preset.todoGroupMode,
+      todoSortMode: preset.todoSortMode,
+      createdAt: preset.createdAt,
+      ...(sections.length > 0 ? { sections } : {}),
+    };
+  });
 
 const flattenBackupListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] => {
   const seen = new Set<string>();
@@ -312,6 +347,46 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
     return [];
   }
 
+  const normalizeBackupMenuPresetSections = (
+    sectionsValue: unknown,
+  ): BackupMenuPresetSection[] => {
+    if (!Array.isArray(sectionsValue)) {
+      return [];
+    }
+
+    return sectionsValue
+      .map((section, sectionIndex): BackupMenuPresetSection | null => {
+        if (!isRecord(section)) {
+          return null;
+        }
+
+        const id = typeof section.id === 'string' && section.id.trim()
+          ? section.id.trim()
+          : `section-${sectionIndex + 1}`;
+        const label = typeof section.label === 'string' && section.label.trim()
+          ? section.label.trim()
+          : `Section ${sectionIndex + 1}`;
+        const createdAt =
+          typeof section.createdAt === 'number' && Number.isFinite(section.createdAt)
+            ? section.createdAt
+            : 0;
+        const filters = normalizeTodoFilters(section.filters);
+
+        return {
+          id,
+          label,
+          filters,
+          requiredFilters: pruneTodoFilters(normalizeTodoFilters(section.requiredFilters), filters),
+          avoidedFilters: normalizeTodoFilters(section.avoidedFilters),
+          listOrderMode: section.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
+          todoGroupMode: normalizeBackupTodoGroupMode(section.todoGroupMode),
+          todoSortMode: normalizeBackupTodoSortMode(section.todoSortMode),
+          createdAt,
+        };
+      })
+      .filter((section): section is BackupMenuPresetSection => Boolean(section));
+  };
+
   return value
     .map((item, index): BackupMenuPreset | null => {
       if (!isRecord(item)) {
@@ -331,6 +406,7 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
         ? item.searchKeywords.replace(/\s+/g, ' ').trim()
         : '';
       const filters = normalizeTodoFilters(item.filters);
+      const sections = normalizeBackupMenuPresetSections(item.sections);
 
       return {
         id,
@@ -343,6 +419,7 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
         todoGroupMode: normalizeBackupTodoGroupMode(item.todoGroupMode),
         todoSortMode: normalizeBackupTodoSortMode(item.todoSortMode),
         createdAt,
+        ...(sections.length > 0 ? { sections } : {}),
       };
     })
     .filter((item): item is BackupMenuPreset => Boolean(item));

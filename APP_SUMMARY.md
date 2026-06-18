@@ -245,6 +245,7 @@ Important settings include:
 - List tree.
 - List order mode.
 - Saved presets.
+- Saved preset sections.
 - Quick nav preset assignments and icon names.
 - Filter config UI state.
 - Filter colors.
@@ -298,10 +299,19 @@ Each preset contains:
 - todo group mode.
 - todo sort mode.
 - creation timestamp.
+- optional user-created `sections`.
 
 Saved presets are complete view definitions. Applying one should restore its
 filters and display modes. Editing one should not accidentally apply a
 different view.
+
+Preset sections are also complete view definitions. A preset can behave like a
+small board: the parent row stores the main view, and child rows under it store
+focused sections such as "Status overdue", "Maintenance repeating", or "Client
+high priority". Sections are created from the current configured view with the
+small plus control on a preset row. They are user data, not hardcoded examples,
+and should be cloned, normalized, backed up, restored, renamed, and deleted with
+the same care as parent presets.
 
 ## Filtering Semantics
 
@@ -440,6 +450,7 @@ Backups include:
 - Filter state.
 - List tree.
 - Saved presets.
+- Saved preset sections.
 - Quick nav preset assignments.
 - Quick nav icons.
 - Filter colors.
@@ -487,6 +498,7 @@ Seeded lists cover:
 Seeded presets cover:
 
 - List/status grouping.
+- Multi-section preset boards for fast preset testing.
 - Today plus priority focus.
 - Avoided-filter behavior.
 - Repeating-item filtering.
@@ -528,6 +540,12 @@ value.
 Use saved presets for reusable views. A preset is not only a label; it stores
 filters plus sort/group/list-order modes. Saved preset rows should open for
 editing by default. Quick nav shortcuts apply quickly.
+
+Inside the Presets menu, use the small plus control on a preset row to add the
+currently configured view as a section under that preset. Use section rows to
+jump straight into focused variants of the same board, for example overdue
+items in one list, repeating items in another list, or high-priority work.
+Sections can be swiped away independently without deleting the parent preset.
 
 ### List Work
 
@@ -646,6 +664,7 @@ persistence.
 Preserve these contracts unless the product decision intentionally changes:
 
 - Lists and presets are fully customizable.
+- Preset sections are fully customizable user data.
 - Quick nav is settings/list driven, not hardcoded.
 - Settings `Navbar shortcuts` and bottom quick nav must use the same source.
 - Saved preset rows open/edit by default.

@@ -1,4 +1,4 @@
-import { DATE_FILTER_PRESETS } from '../dates';
+import { DATE_FILTER_PRESETS, OVERDUE_DATE_LABEL } from '../dates';
 import {
   encodeTodoReminder,
   REPEATING_ITEMS_FILTER_VALUE,
@@ -8,6 +8,7 @@ import {
   type ListOrderMode,
   type StoredListMenuNode,
   type StoredMenuPreset,
+  type StoredMenuPresetSection,
   type TodoGroupMode,
   type TodoSortMode,
 } from '../storage/appSettingsStore';
@@ -216,6 +217,41 @@ const makeDevTestMenuPreset = ({
   requiredFilters = emptyFilters(),
   avoidedFilters = emptyFilters(),
   listOrderMode = 'manual',
+  sections,
+  todoGroupMode = 'none',
+  todoSortMode = 'newest',
+}: {
+  id: string;
+  label: string;
+  filters: TodoFilters;
+  createdAt: number;
+  requiredFilters?: TodoFilters;
+  avoidedFilters?: TodoFilters;
+  listOrderMode?: ListOrderMode;
+  sections?: StoredMenuPresetSection[];
+  todoGroupMode?: TodoGroupMode;
+  todoSortMode?: TodoSortMode;
+}): StoredMenuPreset => ({
+  id: `${DEV_TEST_MENU_PRESET_ID_PREFIX}${id}`,
+  label,
+  filters: cloneTodoFilters(filters),
+  requiredFilters: cloneTodoFilters(requiredFilters),
+  avoidedFilters: cloneTodoFilters(avoidedFilters),
+  listOrderMode,
+  todoGroupMode,
+  todoSortMode,
+  createdAt,
+  ...(sections && sections.length > 0 ? { sections } : {}),
+});
+
+const makeDevTestMenuPresetSection = ({
+  id,
+  label,
+  filters,
+  createdAt,
+  requiredFilters = emptyFilters(),
+  avoidedFilters = emptyFilters(),
+  listOrderMode = 'manual',
   todoGroupMode = 'none',
   todoSortMode = 'newest',
 }: {
@@ -228,8 +264,8 @@ const makeDevTestMenuPreset = ({
   listOrderMode?: ListOrderMode;
   todoGroupMode?: TodoGroupMode;
   todoSortMode?: TodoSortMode;
-}): StoredMenuPreset => ({
-  id: `${DEV_TEST_MENU_PRESET_ID_PREFIX}${id}`,
+}): StoredMenuPresetSection => ({
+  id: `${DEV_TEST_MENU_PRESET_ID_PREFIX}section-${id}`,
   label,
   filters: cloneTodoFilters(filters),
   requiredFilters: cloneTodoFilters(requiredFilters),
@@ -259,6 +295,44 @@ export const createDevTestMenuPresets = (
       label: 'Dev: Status board',
       filters: { ...emptyFilters(), list: [statusList] },
       createdAt: now - 5_000,
+      sections: [
+        makeDevTestMenuPresetSection({
+          id: 'status-overdue',
+          label: `${statusList} · ${OVERDUE_DATE_LABEL}`,
+          filters: {
+            ...emptyFilters(),
+            date: [OVERDUE_DATE_LABEL],
+            list: [statusList],
+          },
+          createdAt: now - 4_900,
+          todoGroupMode: 'priority',
+          todoSortMode: 'priority',
+        }),
+        makeDevTestMenuPresetSection({
+          id: 'maintenance-repeating',
+          label: `${maintenanceList} · Repeating`,
+          filters: {
+            ...emptyFilters(),
+            list: [maintenanceList],
+            reminder: [REPEATING_ITEMS_FILTER_VALUE],
+          },
+          createdAt: now - 4_800,
+          todoGroupMode: 'date',
+          todoSortMode: 'date',
+        }),
+        makeDevTestMenuPresetSection({
+          id: 'client-high',
+          label: `${clientList} · High priority`,
+          filters: {
+            ...emptyFilters(),
+            list: [clientList],
+            priority: ['High'],
+          },
+          createdAt: now - 4_700,
+          todoGroupMode: 'priority',
+          todoSortMode: 'priority',
+        }),
+      ],
       todoGroupMode: 'status',
       todoSortMode: 'newest',
     }),

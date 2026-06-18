@@ -2399,24 +2399,10 @@ function SettingsListEditor({
   }, [onIconPickerChange, onSwap, resetReorderSelection, selectedReorderIndex]);
 
   const canReorder = items.length > 1;
-  const displayItems = useMemo(() => (
-    items
-      .map((item, index) => ({ index, item }))
-      .sort((first, second) => {
-        const firstPinned = first.item.showInNavbar !== false;
-        const secondPinned = second.item.showInNavbar !== false;
-
-        if (firstPinned !== secondPinned) {
-          return firstPinned ? -1 : 1;
-        }
-
-        return first.index - second.index;
-      })
-  ), [items]);
 
   return (
     <View style={styles.settingsListEditor}>
-      {displayItems.map(({ index, item }) => (
+      {items.map((item, index) => (
         <MemoizedSettingsListReorderRow
           key={item.label}
           canReorder={canReorder}

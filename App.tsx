@@ -8504,8 +8504,8 @@ export default function App() {
       return;
     }
 
-    const duplicate = listMenuTree.some(
-      (item) => item.label.toLocaleLowerCase() === label.toLocaleLowerCase(),
+    const duplicate = collectListNodeLabels(listMenuTree).some(
+      (itemLabel) => itemLabel.toLocaleLowerCase() === label.toLocaleLowerCase(),
     );
     if (duplicate) {
       return;

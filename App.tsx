@@ -58,6 +58,7 @@ import {
 } from './src/components/ReminderTimeModal';
 import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { FilterConfigScreen } from './src/components/FilterConfigScreen';
+import { QuickPresetNav } from './src/components/QuickPresetNav';
 import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
 import { TodoRow } from './src/components/TodoRow';
 
@@ -150,7 +151,6 @@ import {
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
   QUICK_PRESET_DEFAULTS_VERSION,
-  QUICK_PRESET_NAV_MAX_SLOT_COUNT,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
@@ -162,6 +162,13 @@ import {
   type TodoGroupMode,
   type TodoSortMode,
 } from './src/storage/appSettingsStore';
+import {
+  buildMenuPresetByListLabel,
+  buildQuickPresetNavItems,
+  isListScopedPreset,
+  QUICK_LIST_PRESET_ID_PREFIX,
+  type QuickPresetNavItem,
+} from './src/presets';
 import {
   buildTodoListRows,
   createTodoSortComparator,
@@ -561,7 +568,6 @@ const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
 const QUICK_PRESET_NAV_ICON_ROW_HEIGHT = 40;
 const QUICK_PRESET_NAV_HEIGHT = QUICK_PRESET_NAV_ICON_ROW_HEIGHT;
-const QUICK_PRESET_NAV_ITEM_WIDTH = 52;
 const BOTTOM_NAV_PRIMARY_HEIGHT = 48;
 const BOTTOM_NAV_HEIGHT = QUICK_PRESET_NAV_HEIGHT + BOTTOM_NAV_PRIMARY_HEIGHT;
 const BOTTOM_NAV_BOTTOM_GAP = Platform.OS === 'android' ? 10 : 0;
@@ -752,7 +758,7 @@ const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 const AUTO_BACKUP_DEBOUNCE_MS = 2500;
 const EMPTY_VISIBLE_TODO_LIST_ROWS: VisibleTodoListRow[] = [];
-
+const EMPTY_LIST_GROUP_LABELS: string[] = [];
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
   if (item.type === 'sectionHeader') {
     const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
@@ -1481,24 +1487,6 @@ const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
       ...node,
       children: node.children ? sortListMenuTree(node.children) : undefined,
     }));
-
-const resolveQuickPresetNavSlotIconName = (
-  slotIndex: number,
-  listMenuTree: ListMenuNode[],
-  quickPresetNavIconName?: string,
-): string => {
-  const listAtSettingsIndex = listMenuTree[slotIndex];
-
-  if (listAtSettingsIndex?.iconName) {
-    return listAtSettingsIndex.iconName;
-  }
-
-  return quickPresetNavIconName
-    ?? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
-      slotIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
-    ]
-    ?? 'star-four-points';
-};
 
 const countFilters = (filters: SelectedFilters, includeReminderRows = false) =>
   countDateMenuSelections(filters, includeReminderRows) +
@@ -3303,7 +3291,11 @@ export default function App() {
     setUndoToastEntryId(null);
   }, []);
 
-  const recordUndoSnapshot = useCallback((label: string, snapshot: UndoSnapshot) => {
+  const recordUndoSnapshot = useCallback((
+    label: string,
+    snapshot: UndoSnapshot,
+    options: { showToast?: boolean } = {},
+  ) => {
     const entryId = undoHistorySequenceRef.current + 1;
     undoHistorySequenceRef.current = entryId;
     const entry: UndoHistoryEntry = {
@@ -3313,11 +3305,13 @@ export default function App() {
     };
 
     setUndoHistory((current) => [entry, ...current].slice(0, UNDO_HISTORY_LIMIT));
-    setUndoToastEntryId(entryId);
+    if (options.showToast ?? true) {
+      setUndoToastEntryId(entryId);
+    }
   }, []);
 
-  const recordUndo = useCallback((label: string) => {
-    recordUndoSnapshot(label, captureUndoSnapshot());
+  const recordUndo = useCallback((label: string, options: { showToast?: boolean } = {}) => {
+    recordUndoSnapshot(label, captureUndoSnapshot(), options);
   }, [captureUndoSnapshot, recordUndoSnapshot]);
 
   const beginFilterConfigUndoBatch = useCallback(() => {
@@ -5804,6 +5798,10 @@ export default function App() {
     () => new Map(menuPresets.map((preset) => [preset.id, preset])),
     [menuPresets],
   );
+  const menuPresetByListLabel = useMemo(
+    () => buildMenuPresetByListLabel(menuPresets),
+    [menuPresets],
+  );
   const searchKeywordEditTitle = useMemo(() => {
     if (!searchKeywordEditTarget || searchKeywordEditTarget.kind === 'list') {
       return '';
@@ -5834,80 +5832,39 @@ export default function App() {
       (label) => label.toLocaleLowerCase() === formattedTitle.toLocaleLowerCase(),
     );
   }, [listMenuTree, searchKeywordEditTarget, searchKeywordTitleDraft]);
-  const quickPresetNavSlotLimit = Math.min(
-    Math.max(
-      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
-      menuPresets.length,
-      quickPresetNavIconNames.length,
-      quickPresetNavPresetIds.length,
-      listMenuTree.length,
-    ),
-    QUICK_PRESET_NAV_MAX_SLOT_COUNT,
-  );
-  const quickPresetNavUsesAutomaticSlots =
-    quickPresetNavPresetIds.length === 0 && quickPresetNavIconNames.length === 0;
-  const quickPresetNavItems = useMemo(
-    () => {
-      const automaticSlotCount = Math.min(
-        Math.max(
-          DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
-          menuPresets.length,
-          listMenuTree.length,
-        ),
-        quickPresetNavSlotLimit,
-      );
-      const explicitSlotCount = Math.min(
-        Math.max(quickPresetNavPresetIds.length, quickPresetNavIconNames.length, 1),
-        quickPresetNavSlotLimit,
-      );
-      const slotCount = quickPresetNavUsesAutomaticSlots
-        ? automaticSlotCount
-        : explicitSlotCount;
-      const items: Array<{
-        iconName: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-        id: string;
-        preset: MenuPreset | null;
-        presetId: string | null;
-        slotNumber: number;
-      }> = [];
-
-      for (let index = 0; index < slotCount; index += 1) {
-        const list = listMenuTree[index];
-        if (!quickPresetNavUsesAutomaticSlots && list?.showInNavbar === false) {
-          continue;
-        }
-
-        const presetId = quickPresetNavUsesAutomaticSlots
-          ? menuPresets[index]?.id ?? null
-          : quickPresetNavPresetIds[index] ?? null;
-        const preset = presetId ? menuPresetById.get(presetId) ?? null : null;
-        const iconName = resolveQuickPresetNavSlotIconName(
-          index,
-          listMenuTree,
-          quickPresetNavUsesAutomaticSlots ? undefined : quickPresetNavIconNames[index],
-        );
-
-        items.push({
-          iconName: toMaterialCommunityIconName(iconName),
-          id: `quick-preset-slot-${index + 1}`,
-          preset,
-          presetId,
-          slotNumber: items.length + 1,
-        });
-      }
-
-      return items;
-    },
-    [
+  const quickPresetNavItems = useMemo<QuickPresetNavItem[]>(
+    () => buildQuickPresetNavItems({
       listMenuTree,
+      listOrderMode,
       menuPresetById,
-      menuPresets,
+      menuPresetByListLabel,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
-      quickPresetNavSlotLimit,
-      quickPresetNavUsesAutomaticSlots,
+    }),
+    [
+      listMenuTree,
+      listOrderMode,
+      menuPresetById,
+      menuPresetByListLabel,
+      quickPresetNavIconNames,
+      quickPresetNavPresetIds,
     ],
   );
+  const quickPresetNavVirtualPresetById = useMemo(() => {
+    const presetsById = new Map<string, MenuPreset>();
+
+    quickPresetNavItems.forEach((item) => {
+      if (
+        item.preset &&
+        item.preset.id.startsWith(QUICK_LIST_PRESET_ID_PREFIX) &&
+        !menuPresetById.has(item.preset.id)
+      ) {
+        presetsById.set(item.preset.id, item.preset);
+      }
+    });
+
+    return presetsById;
+  }, [menuPresetById, quickPresetNavItems]);
   const heldQuickPresetNavPreset = heldQuickPresetNavSlotNumber
     ? quickPresetNavItems.find((item) => item.slotNumber === heldQuickPresetNavSlotNumber)?.preset
       ?? null
@@ -5919,6 +5876,28 @@ export default function App() {
     () => listMenuTree.filter((list) => list.showInNavbar !== false).length,
     [listMenuTree],
   );
+  const openListPreset = openMenuPresetId
+    ? menuPresetById.get(openMenuPresetId)
+      ?? quickPresetNavVirtualPresetById.get(openMenuPresetId)
+      ?? null
+    : null;
+  const activeListPreset = isListScopedPreset(activeMenuPreset)
+    ? activeMenuPreset
+    : isListScopedPreset(openListPreset)
+      ? openListPreset
+      : null;
+  const emptyListGroupLabels = useMemo(() => {
+    if (todoListGroupMode !== 'list' || !activeListPreset) {
+      return EMPTY_LIST_GROUP_LABELS;
+    }
+
+    const presetListLabels = activeListPreset.filters.list;
+
+    return presetListLabels.length > 0 ? presetListLabels : EMPTY_LIST_GROUP_LABELS;
+  }, [
+    activeListPreset,
+    todoListGroupMode,
+  ]);
   const todoListUseSubsectionLayout =
     todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
   const sortedTodos = useMemo(
@@ -5934,11 +5913,13 @@ export default function App() {
       selectedFilters.list,
       todoListUseSubsectionLayout,
       dateLabelDisplayMode,
+      emptyListGroupLabels,
       dateStatusNow,
     ),
     [
       dateLabelDisplayMode,
       dateStatusNow,
+      emptyListGroupLabels,
       listMenuTree,
       selectedFilters.list,
       sortedTodos,
@@ -6442,7 +6423,9 @@ export default function App() {
     ? menuPresetById.get(editingMenuPresetId) ?? null
     : null;
   const openMenuPreset = openMenuPresetId
-    ? menuPresetById.get(openMenuPresetId) ?? null
+    ? menuPresetById.get(openMenuPresetId)
+      ?? quickPresetNavVirtualPresetById.get(openMenuPresetId)
+      ?? null
     : null;
   const hidePresetTodoSectionAddButton = navTab !== 'search' && Boolean(
     openMenuPreset || activeMenuPreset,
@@ -8222,10 +8205,12 @@ export default function App() {
   ]);
 
   const saveOpenMenuPreset = useCallback((presetId: string) => {
-    const currentPreset = menuPresets.find((preset) => preset.id === presetId);
+    const currentPreset = menuPresets.find((preset) => preset.id === presetId)
+      ?? quickPresetNavVirtualPresetById.get(presetId);
     if (!currentPreset) {
       return;
     }
+    const existingPreset = menuPresets.some((preset) => preset.id === presetId);
 
     const hasChanges =
       !filtersEqual(currentPreset.filters, selectedFilters) ||
@@ -8246,20 +8231,53 @@ export default function App() {
     }
 
     recordUndo('Update preset');
-    setMenuPresets((current) => current.map((preset) => (
-      preset.id === presetId
-        ? {
-            ...preset,
-            filters: cloneTodoFilters(selectedFilters),
-            requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
-            avoidedFilters: cloneTodoFilters(avoidedFilters),
-            listOrderMode,
-            todoGroupMode: effectiveGroupMode,
-            todoSortMode: effectiveSortMode,
-          }
-        : preset
-    )));
-    setOpenMenuPresetId(presetId);
+    if (existingPreset) {
+      setMenuPresets((current) => current.map((preset) => (
+        preset.id === presetId
+          ? {
+              ...preset,
+              filters: cloneTodoFilters(selectedFilters),
+              requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
+              avoidedFilters: cloneTodoFilters(avoidedFilters),
+              listOrderMode,
+              todoGroupMode: effectiveGroupMode,
+              todoSortMode: effectiveSortMode,
+            }
+          : preset
+      )));
+      setOpenMenuPresetId(presetId);
+    } else {
+      const createdAt = Date.now();
+      const savedPresetId = `preset-${createdAt}-${Math.random().toString(36).slice(2)}`;
+      const savedPreset: MenuPreset = {
+        ...currentPreset,
+        id: savedPresetId,
+        filters: cloneTodoFilters(selectedFilters),
+        requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
+        avoidedFilters: cloneTodoFilters(avoidedFilters),
+        listOrderMode,
+        todoGroupMode: effectiveGroupMode,
+        todoSortMode: effectiveSortMode,
+        createdAt,
+      };
+
+      setMenuPresets((current) => [...current, savedPreset]);
+      if (openQuickPresetNavSlotNumber) {
+        const slotIndex = openQuickPresetNavSlotNumber - 1;
+        setQuickPresetNavPresetIds((current) => {
+          const nextLength = Math.max(
+            current.length,
+            quickPresetNavIconNames.length,
+            listMenuTree.length,
+            slotIndex + 1,
+          );
+          const next = Array.from({ length: nextLength }, (_, index) => current[index] ?? null);
+          next[slotIndex] = savedPresetId;
+          return next;
+        });
+      }
+      setOpenMenuPresetId(savedPresetId);
+    }
     setEditingMenuPresetId(null);
     setMenuMode('main');
     triggerSubtleHaptic();
@@ -8267,7 +8285,11 @@ export default function App() {
     effectiveGroupMode,
     effectiveSortMode,
     listOrderMode,
+    listMenuTree.length,
     menuPresets,
+    openQuickPresetNavSlotNumber,
+    quickPresetNavIconNames.length,
+    quickPresetNavVirtualPresetById,
     recordUndo,
     avoidedFilters,
     requiredFilters,
@@ -8442,7 +8464,7 @@ export default function App() {
       return;
     }
 
-    recordUndo('Change list navbar');
+    recordUndo('Change list navbar', { showToast: false });
     setListMenuTree((current) => {
       const next = current.map((item, itemIndex) => {
         if (itemIndex !== index) {
@@ -10016,6 +10038,8 @@ export default function App() {
 
       if (item.type === 'sectionHeader') {
         const isExpanded = !item.isCollapsed && item.count > 0;
+        const shouldHideSectionAddButton =
+          hidePresetTodoSectionAddButton && !item.id.startsWith('group-list-');
 
         return (
           <View>
@@ -10052,7 +10076,7 @@ export default function App() {
                   </View>
                 </Pressable>
                 <View style={styles.todoSectionHeaderMeta}>
-                  {hidePresetTodoSectionAddButton
+                  {shouldHideSectionAddButton
                     ? null
                     : renderTodoSectionAddButton(
                       `Add todo to ${item.label}`,
@@ -10587,103 +10611,33 @@ export default function App() {
           </View>
         ) : null}
 
-        {heldQuickPresetNavDetail ? (
-          <View pointerEvents="none" style={styles.quickPresetNavHoldDetailLayer}>
-            <View style={styles.quickPresetNavHoldDetail}>
-              <Text style={styles.quickPresetNavHoldDetailTitle}>
-                {heldQuickPresetNavDetail.title}
-              </Text>
-              <View style={styles.quickPresetNavHoldDetailLines}>
-                {heldQuickPresetNavDetail.details.map((line) => (
-                  <Text key={line} style={styles.quickPresetNavHoldDetailText}>
-                    {line}
-                  </Text>
-                ))}
-              </View>
-            </View>
-          </View>
-        ) : null}
-
         <View style={[
           styles.bottomNav,
           (settingsModalVisible || filterConfigModalVisible) && styles.bottomNavFlat,
         ]}>
-          <View style={styles.quickPresetNav}>
-            <ScrollView
-              alwaysBounceHorizontal={false}
-              bounces={false}
-              contentContainerStyle={styles.quickPresetNavItems}
-              horizontal
-              keyboardShouldPersistTaps="handled"
-              showsHorizontalScrollIndicator={false}
-              style={styles.quickPresetNavScroll}
-            >
-              {quickPresetNavItems.map((item) => {
-                const openedFromThisSlot = Boolean(
-                  item.preset &&
-                    openQuickPresetNavSlotNumber === item.slotNumber &&
-                    openMenuPresetId === item.preset.id,
-                );
-                const selected = navTab !== 'search' && Boolean(
-                  item.preset &&
-                    (
-                      openedFromThisSlot ||
-                      (
-                        !openQuickPresetNavSlotNumber &&
-                        (openMenuPreset?.id ?? activeMenuPreset?.id) === item.preset.id
-                      )
-                    ),
-                );
-                const iconColor = item.preset
-                  ? selected ? NAV_ACCENT : NAV_ICON_INACTIVE
-                  : THEME_TEXT_TERTIARY;
-
-                return (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityHint={
-                      item.preset
-                        ? 'Applies this saved preset. Long press shows details'
-                        : 'No preset assigned'
-                    }
-                    accessibilityLabel={
-                      item.preset
-                        ? `Apply preset ${item.preset.label}`
-                        : `Preset slot ${item.slotNumber}`
-                    }
-                    accessibilityState={{ disabled: !item.preset, selected }}
-                    disabled={!item.preset}
-                    key={item.id}
-                    unstable_pressDelay={QUICK_PRESET_NAV_PRESS_DELAY_MS}
-                    onLongPress={() => {
-                      if (item.preset) {
-                        setHeldQuickPresetNavSlotNumber(item.slotNumber);
-                      }
-                    }}
-                    onPress={(event) => (
-                      handleQuickPresetNavPress(item.preset, item.slotNumber, event, 'press')
-                    )}
-                    onPressIn={(event) => (
-                      handleQuickPresetNavPress(item.preset, item.slotNumber, event, 'pressIn')
-                    )}
-                    onPressOut={() => {
-                      setHeldQuickPresetNavSlotNumber((current) => (
-                        current === item.slotNumber ? null : current
-                      ));
-                    }}
-                    style={({ pressed }) => [
-                      styles.quickPresetNavItem,
-                      selected && styles.quickPresetNavItemSelected,
-                      !item.preset && styles.quickPresetNavItemEmpty,
-                      pressed && styles.bottomNavItemPressed,
-                    ]}
-                  >
-                    <MaterialCommunityIcons color={iconColor} name={item.iconName} size={20} />
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
+          <QuickPresetNav
+            accentColor={NAV_ACCENT}
+            activePresetId={activeMenuPreset?.id ?? null}
+            bottomOffset={BOTTOM_NAV_RESERVED_HEIGHT}
+            detail={heldQuickPresetNavDetail}
+            emptyColor={THEME_TEXT_TERTIARY}
+            inactiveColor={NAV_ICON_INACTIVE}
+            isSearchTab={navTab === 'search'}
+            items={quickPresetNavItems}
+            onLongPressSlot={setHeldQuickPresetNavSlotNumber}
+            onPressItem={(item, event, phase) => (
+              handleQuickPresetNavPress(item.preset, item.slotNumber, event, phase)
+            )}
+            onReleaseSlot={(slotNumber) => {
+              setHeldQuickPresetNavSlotNumber((current) => (
+                current === slotNumber ? null : current
+              ));
+            }}
+            openPresetId={openMenuPreset?.id ?? null}
+            openSlotNumber={openQuickPresetNavSlotNumber}
+            pressDelayMs={QUICK_PRESET_NAV_PRESS_DELAY_MS}
+            selectedBackgroundColor={THEME_ACCENT_SOFT}
+          />
           <View style={styles.bottomNavPrimary}>
             <Pressable
               accessibilityRole="button"
@@ -14495,77 +14449,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0,
     shadowRadius: 0,
-  },
-  quickPresetNav: {
-    alignItems: 'stretch',
-    borderBottomColor: '#F2F2F7',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'column',
-    height: QUICK_PRESET_NAV_HEIGHT,
-    justifyContent: 'flex-start',
-  },
-  quickPresetNavHoldDetailLayer: {
-    alignItems: 'center',
-    bottom: BOTTOM_NAV_RESERVED_HEIGHT + 8,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    zIndex: 18,
-    elevation: 7,
-  },
-  quickPresetNavHoldDetail: {
-    backgroundColor: '#FFFFFF',
-    borderColor: THEME_BORDER,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    maxWidth: 340,
-    minWidth: 210,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-  },
-  quickPresetNavHoldDetailTitle: {
-    color: NAV_ACCENT,
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 17,
-    textAlign: 'center',
-  },
-  quickPresetNavHoldDetailLines: {
-    gap: 5,
-    marginTop: 8,
-  },
-  quickPresetNavHoldDetailText: {
-    color: THEME_TEXT_SECONDARY,
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-  quickPresetNavScroll: {
-    flexGrow: 0,
-    height: QUICK_PRESET_NAV_ICON_ROW_HEIGHT,
-  },
-  quickPresetNavItems: {
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: HORIZONTAL_PADDING,
-  },
-  quickPresetNavItem: {
-    alignItems: 'center',
-    borderRadius: 8,
-    height: 32,
-    justifyContent: 'center',
-    width: QUICK_PRESET_NAV_ITEM_WIDTH,
-  },
-  quickPresetNavItemSelected: {
-    backgroundColor: THEME_ACCENT_SOFT,
-  },
-  quickPresetNavItemEmpty: {
-    opacity: 0.68,
   },
   bottomNavPrimary: {
     alignItems: 'stretch',

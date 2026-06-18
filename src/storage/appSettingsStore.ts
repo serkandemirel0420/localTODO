@@ -13,7 +13,6 @@ import {
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
 } from '../metaTags';
-import { REPEATING_ITEMS_FILTER_VALUE } from '../reminders';
 import {
   cloneDeletedTodos,
   cloneTodoFilters,
@@ -82,126 +81,10 @@ export const DEFAULT_QUICK_PRESET_NAV_ICON_NAMES: QuickPresetNavIconNames = [
   'star-four-points',
 ];
 
-const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
-  {
-    id: 'starter-status',
-    label: 'Status',
-    filters: { date: [], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'status',
-    todoSortMode: 'newest',
-    createdAt: 1,
-  },
-  {
-    id: 'starter-priority',
-    label: 'Priority',
-    filters: { date: [], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'priority',
-    todoSortMode: 'priority',
-    createdAt: 2,
-  },
-  {
-    id: 'starter-repeating',
-    label: 'Repeating',
-    filters: {
-      date: [],
-      list: [],
-      priority: [],
-      reminder: [REPEATING_ITEMS_FILTER_VALUE],
-    },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'date',
-    todoSortMode: 'date',
-    createdAt: 3,
-  },
-  {
-    id: 'starter-lists',
-    label: 'Lists',
-    filters: { date: [], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'list',
-    todoSortMode: 'date',
-    createdAt: 4,
-  },
-  {
-    id: 'starter-date',
-    label: 'Date',
-    filters: { date: [], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'date',
-    todoSortMode: 'date',
-    createdAt: 5,
-  },
-  {
-    id: 'starter-today',
-    label: 'Today',
-    filters: { date: ['Today'], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'date',
-    todoSortMode: 'date',
-    createdAt: 6,
-  },
-  {
-    id: 'starter-tomorrow',
-    label: 'Tomorrow',
-    filters: { date: ['Tomorrow'], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'date',
-    todoSortMode: 'date',
-    createdAt: 7,
-  },
-  {
-    id: 'starter-high',
-    label: 'High',
-    filters: { date: [], list: [], priority: ['High'], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'priority',
-    todoSortMode: 'priority',
-    createdAt: 8,
-  },
-  {
-    id: 'starter-later',
-    label: 'Later',
-    filters: { date: ['Later'], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'date',
-    todoSortMode: 'date',
-    createdAt: 9,
-  },
-  {
-    id: 'starter-newest',
-    label: 'Newest',
-    filters: { date: [], list: [], priority: [], reminder: [] },
-    requiredFilters: { date: [], list: [], priority: [], reminder: [] },
-    avoidedFilters: cloneTodoFilters(),
-    listOrderMode: 'alphabetical',
-    todoGroupMode: 'none',
-    todoSortMode: 'newest',
-    createdAt: 10,
-  },
-];
+const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [];
 
 export const DEFAULT_QUICK_PRESET_NAV_PRESET_IDS: QuickPresetNavPresetIds =
-  DEFAULT_QUICK_MENU_PRESETS.map((preset) => preset.id);
+  [];
 
 export type FilterConfigExpandedSections = {
   lists: boolean;
@@ -393,7 +276,11 @@ export const ensureQuickPresetDefaults = (
   const existingAssignments = cloneQuickPresetNavPresetIds(quickPresetNavPresetIds);
   const existingIconNames = cloneQuickPresetNavIconNames(
     quickPresetNavIconNames,
-    DEFAULT_QUICK_PRESET_NAV_PRESET_IDS.length,
+    Math.max(
+      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
+      existingAssignments.length,
+      quickPresetNavIconNames.length,
+    ),
   );
 
   return {
@@ -405,9 +292,9 @@ export const ensureQuickPresetDefaults = (
     quickPresetNavIconNames: DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.map(
       (iconName, index) => existingIconNames[index] ?? iconName,
     ),
-    quickPresetNavPresetIds: DEFAULT_QUICK_PRESET_NAV_PRESET_IDS.map(
-      (presetId, index) => existingAssignments[index] ?? presetId,
-    ),
+    quickPresetNavPresetIds: existingAssignments.length > 0
+      ? existingAssignments
+      : cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
   };
 };
 

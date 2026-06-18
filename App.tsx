@@ -118,9 +118,15 @@ import {
 } from './src/google/googleAuthStore';
 import { isDevAppVariant } from './src/appVariant';
 import {
+  countDevTestListMenuNodes,
   createDevTestTodos,
+  DEV_TEST_MENU_PRESET_COUNT,
   DEV_TEST_TODO_COUNT,
+  isDevTestMenuPreset,
   isDevTestTodo,
+  mergeDevTestListMenuTree,
+  mergeDevTestMenuPresets,
+  removeDevTestListMenuNodes,
 } from './src/dev/seedTestTodos';
 import {
   cloneFilterColors,
@@ -3183,6 +3189,36 @@ export default function App() {
     () => todos.filter(isDevTestTodo).length,
     [todos],
   );
+  const devTestMenuPresetCount = useMemo(
+    () => menuPresets.filter(isDevTestMenuPreset).length,
+    [menuPresets],
+  );
+  const devTestListMenuNodeCount = useMemo(
+    () => countDevTestListMenuNodes(listMenuTree),
+    [listMenuTree],
+  );
+
+  const seedDevTestSettings = useCallback(() => {
+    const seededListMenuTree = mergeDevTestListMenuTree(listMenuTreeRef.current);
+    const seededListLabels = collectListNodeLabels(seededListMenuTree);
+    const seededMenuPresets = mergeDevTestMenuPresets(
+      menuPresetsRef.current,
+      seededListLabels,
+    );
+
+    listMenuTreeRef.current = seededListMenuTree;
+    menuPresetsRef.current = seededMenuPresets;
+    setListMenuTree(seededListMenuTree);
+    setListOrderMode('manual');
+    setMenuPresets(seededMenuPresets);
+    void persistAppSettings({
+      listMenuTree: seededListMenuTree,
+      listOrderMode: 'manual',
+      menuPresets: seededMenuPresets,
+    });
+
+    return seededListLabels;
+  }, [persistAppSettings]);
 
   useEffect(() => {
     if (!isDevAppVariant || !loaded || !settingsLoaded || devTestTodosSeededRef.current) {
@@ -3191,17 +3227,21 @@ export default function App() {
 
     devTestTodosSeededRef.current = true;
 
+    if (todosRef.current.length > 0 || todosRef.current.some(isDevTestTodo)) {
+      return;
+    }
+
+    const testTodos = createDevTestTodos(seedDevTestSettings());
     setTodos((current) => {
       if (current.length > 0 || current.some(isDevTestTodo)) {
         return current;
       }
 
-      const testTodos = createDevTestTodos(collectListNodeLabels(listMenuTree));
       localTodoStore.upsertMany(testTodos).catch(() => undefined);
       reconcileTodoAlarms(testTodos).catch(() => undefined);
       return testTodos;
     });
-  }, [listMenuTree, loaded, settingsLoaded]);
+  }, [loaded, seedDevTestSettings, settingsLoaded]);
 
   const clearTodoMenuHighlightRequest = useCallback(() => {
     if (todoMenuHighlightTimerRef.current) {
@@ -4901,9 +4941,9 @@ export default function App() {
   }, [createSettingsSnapshot, deletedTodos, recordUndo, todos]);
 
   const addDevTestTodos = useCallback(() => {
-    const testTodos = createDevTestTodos(collectListNodeLabels(listMenuTree));
+    recordUndo('Add test data');
+    const testTodos = createDevTestTodos(seedDevTestSettings());
 
-    recordUndo('Add test todos');
     setTodos((current) => {
       const withoutDev = current.filter((todo) => !isDevTestTodo(todo));
 
@@ -4920,18 +4960,38 @@ export default function App() {
       triggerSubtleHaptic();
       return next;
     });
-  }, [listMenuTree, recordUndo]);
+  }, [recordUndo, seedDevTestSettings]);
 
   const clearDevTestTodos = useCallback(() => {
-    if (!todosRef.current.some(isDevTestTodo)) {
+    const hasDevTestData =
+      todosRef.current.some(isDevTestTodo) ||
+      menuPresetsRef.current.some(isDevTestMenuPreset) ||
+      countDevTestListMenuNodes(listMenuTreeRef.current) > 0;
+
+    if (!hasDevTestData) {
       return;
     }
 
-    recordUndo('Clear test todos');
+    recordUndo('Clear test data');
+    const nextListMenuTree = removeDevTestListMenuNodes(listMenuTreeRef.current);
+    const nextMenuPresets = menuPresetsRef.current.filter(
+      (preset) => !isDevTestMenuPreset(preset),
+    );
+
+    listMenuTreeRef.current = nextListMenuTree;
+    menuPresetsRef.current = nextMenuPresets;
+    setListMenuTree(nextListMenuTree);
+    setMenuPresets(nextMenuPresets);
+    void persistAppSettings({
+      listMenuTree: nextListMenuTree,
+      menuPresets: nextMenuPresets,
+    });
+
     setTodos((current) => {
       const devTodos = current.filter(isDevTestTodo);
 
       if (devTodos.length === 0) {
+        triggerSubtleHaptic();
         return current;
       }
 
@@ -4945,7 +5005,7 @@ export default function App() {
       triggerSubtleHaptic();
       return next;
     });
-  }, [recordUndo]);
+  }, [persistAppSettings, recordUndo]);
 
   const deleteDeletedTodoPermanently = useCallback((id: string) => {
     const deletedTodo = deletedTodos.find((todo) => todo.id === id);
@@ -13027,7 +13087,7 @@ export default function App() {
                     <View style={styles.settingsRowTextWrap}>
                       <Text style={styles.settingsSectionTitle}>Dev test data</Text>
                       <Text style={styles.settingsSectionSubtitle}>
-                        {devTestTodoCount} of {DEV_TEST_TODO_COUNT} test todos · lists, dates, reminders, repeats
+                        {devTestTodoCount}/{DEV_TEST_TODO_COUNT} todos · {devTestMenuPresetCount}/{DEV_TEST_MENU_PRESET_COUNT} presets · {devTestListMenuNodeCount} seed lists
                       </Text>
                     </View>
                   </View>
@@ -13042,21 +13102,28 @@ export default function App() {
                       ]}
                     >
                       <Text style={styles.settingsPrimaryButtonText}>
-                        Add {DEV_TEST_TODO_COUNT} test todos
+                        Add test data
                       </Text>
                     </Pressable>
 
                     <Pressable
                       accessibilityRole="button"
-                      disabled={devTestTodoCount === 0}
+                      disabled={
+                        devTestTodoCount === 0 &&
+                        devTestMenuPresetCount === 0 &&
+                        devTestListMenuNodeCount === 0
+                      }
                       onPress={clearDevTestTodos}
                       style={({ pressed }) => [
                         styles.settingsRestoreButton,
-                        devTestTodoCount === 0 && styles.settingsButtonDisabled,
+                        devTestTodoCount === 0 &&
+                          devTestMenuPresetCount === 0 &&
+                          devTestListMenuNodeCount === 0 &&
+                          styles.settingsButtonDisabled,
                         pressed && styles.settingsSecondaryButtonPressed,
                       ]}
                     >
-                      <Text style={styles.settingsRestoreButtonText}>Clear test todos</Text>
+                      <Text style={styles.settingsRestoreButtonText}>Clear test data</Text>
                     </Pressable>
                   </View>
                 </View>

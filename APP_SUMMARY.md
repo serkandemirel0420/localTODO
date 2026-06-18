@@ -155,7 +155,26 @@ backup data.
 
 Development test data is in `src/dev/seedTestTodos.ts`.
 
-The seed set creates many todos across:
+The dev seed is intentionally development-only. It creates sample customizable
+lists, saved presets, and many todos so preset/navbar/settings behavior can be
+checked quickly without turning those examples into production defaults.
+
+Seeded lists cover:
+
+- navbar-visible list shortcuts.
+- one hidden navbar list.
+- nested list sections.
+- list-specific icon, keyword, sort, and group settings.
+
+Seeded presets cover:
+
+- list/status grouping.
+- today + priority focus.
+- avoided-filter behavior.
+- repeating-item filtering.
+- hidden-list/backlog filtering.
+
+Seeded todos cover:
 
 - multiple lists.
 - relative and absolute dates.
@@ -229,4 +248,3 @@ Before shipping broad app changes, test at least:
 - production backup slot save and restore.
 - test backup slot save and restore.
 - dev seed add/remove flow.
-

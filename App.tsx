@@ -181,8 +181,8 @@ import {
 import {
   buildMenuPresetByListLabel,
   buildQuickPresetNavItems,
-  isAllListsBoardPresetLabel,
   isListScopedPreset,
+  normalizeQuickListPresetLabel,
   QUICK_LIST_PRESET_ID_PREFIX,
   type QuickPresetNavItem,
 } from './src/presets';
@@ -463,6 +463,7 @@ type MenuRow =
       type: 'metaTagOption';
     };
 
+type FilterMenuRow = Extract<MenuRow, { type: 'filter' }>;
 type BottomMenuItem = MenuRow | VisibleListMenuItem;
 
 const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
@@ -478,6 +479,54 @@ const REPEAT_STATUS_FILTER_ITEMS = [
     value: REPEATING_ITEMS_FILTER_VALUE,
   },
 ];
+
+const buildActiveFilterMenuRows = (
+  filters: TodoFilters,
+  avoidedFilters: TodoFilters,
+): FilterMenuRow[] => {
+  const activeRows: FilterMenuRow[] = [
+    ...FILTER_KEYS.flatMap((filterKey) => filters[filterKey].map((label) => ({
+      filterKey,
+      id: `filter-${filterKey}-${label}`,
+      label,
+      type: 'filter' as const,
+    }))),
+    ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
+      filters.reminder.includes(item.value)
+        ? [{
+            filterKey: 'date' as const,
+            id: `filter-${item.id}`,
+            label: item.value,
+            type: 'filter' as const,
+          }]
+        : []
+    )),
+  ];
+  const activeRowKeys = new Set(activeRows.map((item) => `${item.filterKey}:${item.label}`));
+  const avoidedRows: FilterMenuRow[] = [
+    ...FILTER_KEYS.flatMap((filterKey) => avoidedFilters[filterKey].map((label) => ({
+      filterKey,
+      id: `filter-avoid-${filterKey}-${label}`,
+      label,
+      type: 'filter' as const,
+    }))),
+    ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
+      avoidedFilters.reminder.includes(item.value)
+        ? [{
+            filterKey: 'date' as const,
+            id: `filter-avoid-${item.id}`,
+            label: item.value,
+            type: 'filter' as const,
+          }]
+        : []
+    )),
+  ].filter((item) => !activeRowKeys.has(`${item.filterKey}:${item.label}`));
+
+  return [
+    ...activeRows,
+    ...avoidedRows,
+  ];
+};
 
 const isRepeatStatusFilterValue = (value: string) =>
   value === REPEATING_ITEMS_FILTER_VALUE;
@@ -6769,6 +6818,10 @@ export default function App() {
   const includeActiveTodoReminderRows = hasTodoEditTargets;
   const menuRequiredFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : requiredFilters;
   const menuAvoidedFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : avoidedFilters;
+  const activeFilterRows = useMemo(
+    () => buildActiveFilterMenuRows(menuFilters, menuAvoidedFilters),
+    [menuAvoidedFilters, menuFilters],
+  );
   const activeFilterCount =
     countFilters(menuFilters, includeActiveTodoReminderRows) + countFilters(menuAvoidedFilters);
   const selectedFilterCount = countFilters(selectedFilters) + countFilters(avoidedFilters);
@@ -7077,48 +7130,7 @@ export default function App() {
     }
 
     if (menuMode === 'filters') {
-      const activeRows = [
-        ...FILTER_KEYS.flatMap((filterKey) => menuFilters[filterKey].map((label) => ({
-          filterKey,
-          id: `filter-${filterKey}-${label}`,
-          label,
-          type: 'filter' as const,
-        }))),
-        ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
-          menuFilters.reminder.includes(item.value)
-            ? [{
-                filterKey: 'date' as const,
-                id: `filter-${item.id}`,
-                label: item.value,
-                type: 'filter' as const,
-              }]
-            : []
-        )),
-      ];
-      const activeRowKeys = new Set(activeRows.map((item) => `${item.filterKey}:${item.label}`));
-      const avoidedRows = [
-        ...FILTER_KEYS.flatMap((filterKey) => menuAvoidedFilters[filterKey].map((label) => ({
-          filterKey,
-          id: `filter-avoid-${filterKey}-${label}`,
-          label,
-          type: 'filter' as const,
-        }))),
-        ...REPEAT_STATUS_FILTER_ITEMS.flatMap((item) => (
-          menuAvoidedFilters.reminder.includes(item.value)
-            ? [{
-                filterKey: 'date' as const,
-                id: `filter-avoid-${item.id}`,
-                label: item.value,
-                type: 'filter' as const,
-              }]
-            : []
-        )),
-      ].filter((item) => !activeRowKeys.has(`${item.filterKey}:${item.label}`));
-
-      return [
-        ...activeRows,
-        ...avoidedRows,
-      ];
+      return activeFilterRows;
     }
 
     if (menuMode === 'sort') {
@@ -7316,13 +7328,25 @@ export default function App() {
         type: 'menu',
         valueLabel: formatMetaTagVisibilitySummary(metaTagVisibility),
       },
-      {
-        count: activeFilterCount || undefined,
+    ];
+
+    if (activeFilterRows.length === 1) {
+      const [activeFilterRow] = activeFilterRows;
+      rows.push({
+        ...activeFilterRow,
+        id: `main-${activeFilterRow.id}`,
+      });
+    } else if (activeFilterRows.length > 1) {
+      rows.push({
+        count: activeFilterRows.length,
         id: 'main-filters',
         label: 'Filters',
         menuMode: 'filters',
         type: 'menu',
-      },
+      });
+    }
+
+    rows.push(
       {
         id: 'main-clear-filters',
         label: 'Clear filters',
@@ -7333,11 +7357,12 @@ export default function App() {
         label: 'Settings',
         type: 'settings',
       },
-    ];
+    );
 
     return rows;
   }, [
     activeFilterCount,
+    activeFilterRows,
     activeMenuPreset,
     currentPresetSummary,
     hasTodoEditTargets,
@@ -7913,8 +7938,36 @@ export default function App() {
   ]);
 
   const clearFilters = useCallback(() => {
-    clearAppliedMenuPreset();
-  }, [clearAppliedMenuPreset]);
+    if (hasTodoEditTargets) {
+      updateCurrentTodoTargetFilters(() => cloneTodoFilters());
+    } else {
+      const defaultFilters = cloneTodoFilters();
+      const hasDurableChange =
+        !filtersEqual(selectedFiltersRef.current, defaultFilters) ||
+        !filtersEqual(requiredFiltersRef.current, defaultFilters) ||
+        !filtersEqual(avoidedFiltersRef.current, defaultFilters);
+
+      if (hasDurableChange) {
+        recordFilterConfigUndo('Clear filters');
+      }
+      clearNotificationTodoReveal();
+      setSelectedFilters(defaultFilters);
+      setRequiredFilters(defaultFilters);
+      setAvoidedFilters(defaultFilters);
+    }
+
+    closeListMenuState();
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    setNavTab(null);
+    triggerSubtleHaptic();
+  }, [
+    closeListMenuState,
+    clearNotificationTodoReveal,
+    hasTodoEditTargets,
+    recordFilterConfigUndo,
+    updateCurrentTodoTargetFilters,
+  ]);
 
   const setFilterColor = useCallback((
     filterKey: FilterColorSettingKey,
@@ -8696,22 +8749,55 @@ export default function App() {
     searchKeywordModalVisible,
   ]);
 
+  const removeMeaninglessPresetSelfListFilter = useCallback((
+    preset: MenuPreset,
+    filters: TodoFilters,
+  ) => {
+    const singleListFilter = filters.list.length === 1 ? filters.list[0] : null;
+
+    if (
+      singleListFilter === null ||
+      normalizeQuickListPresetLabel(singleListFilter) !==
+        normalizeQuickListPresetLabel(preset.label)
+    ) {
+      return filters;
+    }
+
+    const selfListHasVisibleTodo = todos.some((todo) => {
+      if (pendingDeleteIds.has(todo.id)) {
+        return false;
+      }
+
+      if (hideDoneTodos && todo.done) {
+        return false;
+      }
+
+      return todoMatchesSelectedListFilters([singleListFilter], todo.filters.list, listMenuTree);
+    });
+
+    if (selfListHasVisibleTodo) {
+      return filters;
+    }
+
+    return {
+      ...filters,
+      list: [],
+    };
+  }, [
+    hideDoneTodos,
+    listMenuTree,
+    pendingDeleteIds,
+    todos,
+  ]);
+
   const applyMenuPreset = useCallback((
     preset: MenuPreset,
     options?: { closeMenu?: boolean; haptic?: boolean },
   ) => {
-    const nextFilters = cloneTodoFilters(preset.filters);
-    const singleListFilter = nextFilters.list.length === 1 ? nextFilters.list[0] : null;
-    const appliesStoredAllListsBoard =
-      preset.todoGroupMode === 'list' &&
-      isAllListsBoardPresetLabel(preset.label) &&
-      singleListFilter !== null &&
-      isAllListsBoardPresetLabel(singleListFilter);
-
-    if (appliesStoredAllListsBoard) {
-      nextFilters.list = [];
-    }
-
+    const nextFilters = removeMeaninglessPresetSelfListFilter(
+      preset,
+      cloneTodoFilters(preset.filters),
+    );
     const nextRequiredFilters = pruneTodoFilters(preset.requiredFilters, nextFilters);
     const nextAvoidedFilters = cloneTodoFilters(preset.avoidedFilters);
 
@@ -8755,7 +8841,70 @@ export default function App() {
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
+    removeMeaninglessPresetSelfListFilter,
     updateCurrentTodoTargetFilters,
+  ]);
+
+  useEffect(() => {
+    if (!loaded || !settingsLoaded || hasTodoEditTargets) {
+      return;
+    }
+
+    const matchedQuickPreset = quickPresetNavItems.find((item) => (
+      item.preset &&
+      menuPresetMatchesState(
+        item.preset,
+        selectedFilters,
+        requiredFilters,
+        avoidedFilters,
+        effectiveSortMode,
+        effectiveGroupMode,
+        listOrderMode,
+        metaTagVisibility,
+      )
+    ))?.preset ?? null;
+    const preset = openMenuPreset ?? activeMenuPreset ?? matchedQuickPreset;
+
+    if (!preset) {
+      return;
+    }
+
+    const nextFilters = removeMeaninglessPresetSelfListFilter(preset, selectedFilters);
+
+    if (filtersEqual(nextFilters, selectedFilters)) {
+      return;
+    }
+
+    const nextRequiredFilters = pruneTodoFilters(requiredFilters, nextFilters);
+    const matchedQuickPresetSlotNumber = quickPresetNavItems.find(
+      (item) => item.preset?.id === preset.id,
+    )?.slotNumber ?? null;
+
+    clearNotificationTodoReveal();
+    if (!openMenuPreset) {
+      setOpenMenuPresetId(preset.id);
+      setOpenQuickPresetNavSlotNumber(matchedQuickPresetSlotNumber);
+    }
+    setSelectedFilters(nextFilters);
+    if (!filtersEqual(requiredFilters, nextRequiredFilters)) {
+      setRequiredFilters(nextRequiredFilters);
+    }
+  }, [
+    activeMenuPreset,
+    avoidedFilters,
+    clearNotificationTodoReveal,
+    effectiveGroupMode,
+    effectiveSortMode,
+    hasTodoEditTargets,
+    listOrderMode,
+    loaded,
+    metaTagVisibility,
+    openMenuPreset,
+    quickPresetNavItems,
+    removeMeaninglessPresetSelfListFilter,
+    requiredFilters,
+    selectedFilters,
+    settingsLoaded,
   ]);
 
   const applyPresetSection = useCallback((
@@ -9503,6 +9652,24 @@ export default function App() {
     flushFilterConfigUndoBatch,
   ]);
 
+  const anchorActivePresetForFilterConfig = useCallback(() => {
+    if (hasTodoEditTargets || openMenuPresetId || !activeMenuPreset) {
+      return;
+    }
+
+    const activeQuickPresetSlotNumber = quickPresetNavItems.find(
+      (item) => item.preset?.id === activeMenuPreset.id,
+    )?.slotNumber ?? null;
+
+    setOpenMenuPresetId(activeMenuPreset.id);
+    setOpenQuickPresetNavSlotNumber(activeQuickPresetSlotNumber);
+  }, [
+    activeMenuPreset,
+    hasTodoEditTargets,
+    openMenuPresetId,
+    quickPresetNavItems,
+  ]);
+
   const handleNavTabPress = useCallback((tab: NavTab) => {
     if (tab !== 'calendar') {
       lastFilterNavTapRef.current = 0;
@@ -9629,6 +9796,7 @@ export default function App() {
       lastFilterNavTapRef.current = 0;
       setActiveTodoMenuId(null);
       setNavTab('calendar');
+      anchorActivePresetForFilterConfig();
       openFilterConfigModal();
       return;
     }
@@ -9641,6 +9809,7 @@ export default function App() {
 
     handleNavTabPress('calendar');
   }, [
+    anchorActivePresetForFilterConfig,
     handleNavTabPress,
     openFilterConfigModal,
     selectedFilterCount,

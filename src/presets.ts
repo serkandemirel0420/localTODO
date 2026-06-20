@@ -30,9 +30,6 @@ const DEFAULT_LIST_NAV_PRESET_SORT_MODE: TodoSortMode = 'newest';
 
 export const normalizeQuickListPresetLabel = (label: string) => label.trim().toLowerCase();
 
-export const isAllListsBoardPresetLabel = (label: string) =>
-  normalizeQuickListPresetLabel(label) === 'lists';
-
 export const getQuickListPresetId = (label: string) =>
   `${QUICK_LIST_PRESET_ID_PREFIX}${normalizeQuickListPresetLabel(label)}`;
 
@@ -42,17 +39,14 @@ export const createQuickListPreset = (
   list: StoredListMenuNode,
   listOrderMode: ListOrderMode,
 ) => {
-  const isAllListsBoard = isAllListsBoardPresetLabel(list.label);
-  const groupMode = isAllListsBoard
-    ? 'list'
-    : list.groupMode ?? DEFAULT_LIST_NAV_PRESET_GROUP_MODE;
+  const groupMode = list.groupMode ?? DEFAULT_LIST_NAV_PRESET_GROUP_MODE;
 
   return {
     id: getQuickListPresetId(list.label),
     label: list.label,
     filters: {
       date: [],
-      list: isAllListsBoard ? [] : [list.label],
+      list: [list.label],
       priority: [],
       reminder: [],
     },

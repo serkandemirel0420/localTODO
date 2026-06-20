@@ -352,6 +352,7 @@ type MenuMode =
   | 'lists'
   | 'main'
   | 'metaTags'
+  | 'presetLists'
   | 'presets'
   | 'presetsQuickApply'
   | 'priority'
@@ -469,6 +470,7 @@ type BottomMenuItem = MenuRow | VisibleListMenuItem;
 const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
   date: 'date',
   lists: 'list',
+  presetLists: 'list',
   priority: 'priority',
 };
 
@@ -3269,6 +3271,10 @@ export default function App() {
   const skipNextTodoListOffsetEffectRef = useRef(false);
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
+  const listMenuBackAccessibilityLabel =
+    menuMode === 'presetLists' || menuMode === 'presetsQuickApply'
+      ? 'Back to presets menu'
+      : 'Back to main filter menu';
   const todoSelectMode = selectedTodoIds.size > 0;
   const selectedTodoCount = selectedTodoIds.size;
   menuModeRef.current = menuMode;
@@ -4449,7 +4455,7 @@ export default function App() {
   const goBackFromMenuDismissGesture = useCallback(() => {
     const currentMenuMode = menuModeRef.current;
 
-    if (currentMenuMode === 'presetsQuickApply') {
+    if (currentMenuMode === 'presetsQuickApply' || currentMenuMode === 'presetLists') {
       setMenuMode('presets');
     } else if (currentMenuMode && currentMenuMode !== 'main') {
       setMenuMode('main');
@@ -4848,7 +4854,7 @@ export default function App() {
       return true;
     }
 
-    if (menuMode === 'presetsQuickApply') {
+    if (menuMode === 'presetsQuickApply' || menuMode === 'presetLists') {
       setMenuMode('presets');
       triggerSubtleHaptic();
       return true;
@@ -6309,13 +6315,6 @@ export default function App() {
     () => (listOrderMode === 'alphabetical' ? sortListMenuTree(listMenuTree) : listMenuTree),
     [listMenuTree, listOrderMode],
   );
-  const visibleListMenuItems = useMemo(
-    () => buildVisibleListMenuItems(
-      orderedListMenuTree,
-      Boolean(activeTodoMenuId) || todoSelectMode,
-    ),
-    [activeTodoMenuId, orderedListMenuTree, todoSelectMode],
-  );
   const filterConfigListItems = useMemo(
     () => buildVisibleListMenuItems(orderedListMenuTree, true),
     [orderedListMenuTree],
@@ -7093,8 +7092,8 @@ export default function App() {
       ),
   );
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
-    if (menuMode === 'lists') {
-      return visibleListMenuItems;
+    if (menuMode === 'lists' || menuMode === 'presetLists') {
+      return filterConfigListItems;
     }
 
     if (menuMode === 'priority') {
@@ -7182,6 +7181,17 @@ export default function App() {
 
     if (menuMode === 'presets') {
       const rows: MenuRow[] = [];
+      const listFilterCount = menuFilters.list.length + menuAvoidedFilters.list.length;
+
+      rows.push({
+        id: 'preset-list-filters',
+        label: 'Lists',
+        menuMode: 'presetLists',
+        type: 'menu',
+        valueLabel: listFilterCount > 0
+          ? formatPresetCount(listFilterCount, 'selected')
+          : formatPresetCount(filterConfigListItems.length, 'list'),
+      });
 
       if (latestMenuPreset) {
         rows.push({
@@ -7290,6 +7300,17 @@ export default function App() {
     const rows: MenuRow[] = [
       ...(pinActionRow ? [pinActionRow] : []),
       {
+        count: (menuFilters.list.length + menuAvoidedFilters.list.length) || undefined,
+        id: 'main-lists',
+        label: 'Lists',
+        menuMode: 'lists',
+        type: 'menu',
+        valueLabel:
+          menuFilters.list.length + menuAvoidedFilters.list.length
+            ? undefined
+            : formatPresetCount(filterConfigListItems.length, 'list'),
+      },
+      {
         count: (menuFilters.priority.length + menuAvoidedFilters.priority.length) || undefined,
         id: 'main-priority',
         label: 'Priority',
@@ -7365,6 +7386,7 @@ export default function App() {
     activeFilterRows,
     activeMenuPreset,
     currentPresetSummary,
+    filterConfigListItems,
     hasTodoEditTargets,
     includeActiveTodoReminderRows,
     latestMenuPreset,
@@ -7381,7 +7403,6 @@ export default function App() {
     todoEditTargetsAllPinned,
     todoSelectMode,
     todoPinActionLabel,
-    visibleListMenuItems,
   ]);
 
   useEffect(() => {
@@ -9270,7 +9291,8 @@ export default function App() {
     setOpenQuickPresetNavSlotNumber(slotNumber);
 
     if (isDoubleTap) {
-      setToggleAllTodoSectionsRequest((current) => current + 1);
+      setNavTab('menu');
+      setMenuMode('presets');
     }
 
     requestAnimationFrame(() => {
@@ -11890,7 +11912,7 @@ export default function App() {
                 >
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={submenuOpen ? 'Back to main filter menu' : 'Close lists menu'}
+                    accessibilityLabel={submenuOpen ? listMenuBackAccessibilityLabel : 'Close lists menu'}
                     onPress={() => {
                       if (submenuOpen) {
                         goBackInMenu();
@@ -12676,7 +12698,7 @@ export default function App() {
                       />
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel={submenuOpen ? 'Back to main filter menu' : 'Close filter menu'}
+                        accessibilityLabel={submenuOpen ? listMenuBackAccessibilityLabel : 'Close filter menu'}
                         onPress={() => {
                           if (submenuOpen) {
                             goBackInMenu();

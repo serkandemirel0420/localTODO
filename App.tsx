@@ -10982,7 +10982,8 @@ export default function App() {
 
       if (item.type === 'sectionHeader') {
         const isExpanded = !item.isCollapsed;
-        const hasExpandedTodos = isExpanded && item.count > 0;
+        const hasExpandedContent = isExpanded;
+        const hasExpandedTodos = hasExpandedContent && item.count > 0;
         const canCreateFromSection = canCreateFromSectionHeader(item.id, item.label);
         const shouldHideSectionAddButton =
           !canCreateFromSection ||
@@ -10995,13 +10996,13 @@ export default function App() {
               collapsable={false}
               style={[
                 styles.todoSectionCardShadow,
-                hasExpandedTodos && styles.todoSectionCardShadowExpanded,
+                hasExpandedContent && styles.todoSectionCardShadowExpanded,
               ]}
             >
               <View
                 style={[
                   styles.todoSectionCard,
-                  hasExpandedTodos && styles.todoSectionCardExpanded,
+                  hasExpandedContent && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
                 ]}
               >
@@ -11047,6 +11048,7 @@ export default function App() {
                     styles.todoSectionGroupedShell,
                     styles.todoSectionGroupedShellLast,
                     styles.searchPresetSectionEmpty,
+                    styles.todoSectionEmptyGroupedShell,
                   ]}
                 >
                   <Text style={styles.searchPresetSectionEmptyText}>
@@ -16476,6 +16478,9 @@ const styles = StyleSheet.create({
   searchPresetSectionEmpty: {
     alignItems: 'center',
     paddingVertical: 16,
+  },
+  todoSectionEmptyGroupedShell: {
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   searchPresetSectionEmptyText: {
     color: THEME_TEXT_SECONDARY,

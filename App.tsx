@@ -64,6 +64,7 @@ import { TodoRow } from './src/components/TodoRow';
 
 import {
   CUSTOM_DATE_LABEL,
+  DATED_DATE_LABEL,
   formatDateDisplayLabel,
   formatDateFilterLabel,
   formatDateFilterValue,
@@ -77,6 +78,7 @@ import {
   isCustomDateLabel,
   isDateFilterOverdue,
   isDateMenuItemSelected,
+  OVERDUE_DATE_LABEL,
   resolveDateFilterValueDate,
   startOfDay,
   toISODateString,
@@ -103,14 +105,14 @@ import {
 import { useInstantPress } from './src/hooks/useInstantPress';
 import {
   createBackupPayload,
+  deleteDriveBackupFile,
   downloadDriveBackup,
-  DRIVE_BACKUP_SLOT_COUNT,
+  DRIVE_BACKUP_SLOT_LIMIT,
   GOOGLE_AUTH_SCOPES,
   listDriveBackupSlots,
   uploadDriveBackup,
   type DriveBackupSlot,
   type DriveBackupScope,
-  type DriveBackupUploadTarget,
 } from './src/google/driveBackup';
 import {
   googleAuthStore,
@@ -142,11 +144,13 @@ import {
   formatMetaTagVisibilitySummary,
   META_TAG_KEYS,
   META_TAG_LABELS,
+  metaTagVisibilityEqual,
   metaTagVisibilityMatchesDefault,
   type HiddenMetaTagKind,
   type MetaTagKey,
   type MetaTagVisibility,
 } from './src/metaTags';
+import { resolveMaterialCommunityIconName } from './src/materialCommunityIconNames';
 import { triggerSubtleHaptic } from './src/haptics';
 import {
   appSettingsStore,
@@ -177,6 +181,7 @@ import {
 import {
   buildMenuPresetByListLabel,
   buildQuickPresetNavItems,
+  isAllListsBoardPresetLabel,
   isListScopedPreset,
   QUICK_LIST_PRESET_ID_PREFIX,
   type QuickPresetNavItem,
@@ -337,8 +342,6 @@ const isListMenuItemSelected = (
   return listFilters.includes(item.label);
 };
 
-type BottomMenuItem = MenuRow | VisibleListMenuItem;
-
 type FilterKey = 'list' | 'date' | 'priority';
 const FILTER_KEYS: FilterKey[] = ['list', 'date', 'priority'];
 
@@ -356,9 +359,10 @@ type MenuMode =
 
 type SelectedFilters = TodoFilters;
 
-type GoogleDriveAction = 'backup' | 'restore';
-type GoogleDriveBackupPickerMode = 'backup' | 'restore';
+type GoogleDriveAction = 'backup' | 'manage' | 'restore';
+type GoogleDriveBackupPickerMode = 'backup' | 'manage' | 'restore';
 type GoogleDriveBackupPickerState = {
+  accessToken: string;
   mode: GoogleDriveBackupPickerMode;
   scope: DriveBackupScope;
   slots: DriveBackupSlot[];
@@ -397,17 +401,6 @@ type MenuRow =
       label: string;
       summary: string;
       type: 'savePreset';
-    }
-  | {
-      id: string;
-      label: string;
-      type: 'updatePreset';
-    }
-  | {
-      id: string;
-      label: string;
-      preset: MenuPreset;
-      type: 'saveOpenPreset';
     }
   | {
       id: string;
@@ -469,6 +462,8 @@ type MenuRow =
       metaTagKey: MetaTagKey;
       type: 'metaTagOption';
     };
+
+type BottomMenuItem = MenuRow | VisibleListMenuItem;
 
 const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
   date: 'date',
@@ -633,41 +628,17 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
       'paw',
       'horse-variant',
       'bird',
-      'crow',
-      'dove',
       'elephant',
       'panda',
       'koala',
-      'fox',
       'sheep',
       'pig-variant',
       'cow',
-      'chicken',
       'snake',
       'spider',
       'bat',
-      'frog',
-      'ant',
-      'mosquito',
-      'parrot',
-      'hedgehog',
-      'deer',
-      'monkey',
       'mouse-variant',
-      'hamster',
-      'raccoon',
-      'squirrel',
-      'wolf',
-      'bear',
-      'lion',
-      'tiger',
-      'zebra',
-      'giraffe',
-      'hippo',
-      'rhino',
-      'camel',
       'donkey',
-      'goat',
       'turkey',
     ].map(toMaterialCommunityIconName),
   },
@@ -675,10 +646,7 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
     title: 'Sea life',
     icons: [
       'dolphin',
-      'whale',
       'shark',
-      'octopus',
-      'crab',
       'jellyfish',
       'fish',
       'turtle',
@@ -719,7 +687,6 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
       'weather-rainy',
       'weather-snowy',
       'umbrella-outline',
-      'rainbow',
       'rocket-launch-outline',
       'airplane',
     ].map(toMaterialCommunityIconName),
@@ -782,6 +749,11 @@ const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
 const UNDO_HISTORY_LIMIT = 20;
+const undoLabelUsesToast = (label: string) => (
+  label.startsWith('Complete') ||
+  label.startsWith('Reopen') ||
+  label.startsWith('Delete')
+);
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -958,6 +930,7 @@ const buildItemSearchRows = (todos: Todo[]): SearchItemTodoRow[] =>
   }));
 
 const PRESET_SWIPE_DELETE_WIDTH = 72;
+const BACKUP_SLOT_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
 const SETTINGS_LIST_ROW_HEIGHT = 54;
 const SETTINGS_LIST_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
@@ -1220,6 +1193,68 @@ const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
 
 const LIST_SUBSECTION_NOT_SECTIONED_LABEL = 'Not Sectioned';
+const CREATE_SECTION_DEFAULT_REPEAT: RepeatPreset = 'daily';
+
+const uniqueCreateFilterValues = (values: string[]) => {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (!value || seen.has(value)) {
+      return false;
+    }
+
+    seen.add(value);
+    return true;
+  });
+};
+
+const mergeCreateSectionFilters = (...filters: TodoFilters[]): TodoFilters => ({
+  date: uniqueCreateFilterValues(filters.flatMap((filter) => filter.date)),
+  list: uniqueCreateFilterValues(filters.flatMap((filter) => filter.list)),
+  priority: uniqueCreateFilterValues(filters.flatMap((filter) => filter.priority)),
+  reminder: uniqueCreateFilterValues(filters.flatMap((filter) => filter.reminder)),
+});
+
+const getOverdueCreateDateLabel = () => {
+  const date = startOfDay(new Date());
+  date.setDate(date.getDate() - 1);
+  return toISODateString(date);
+};
+
+const getCreatableDateLabel = (label: string): string => {
+  const formattedLabel = formatDateFilterValue(label);
+
+  if (!formattedLabel) {
+    return '';
+  }
+
+  if (formattedLabel === OVERDUE_DATE_LABEL) {
+    return getOverdueCreateDateLabel();
+  }
+
+  if (formattedLabel === DATED_DATE_LABEL) {
+    return 'Today';
+  }
+
+  return formattedLabel;
+};
+
+const getCreatableReminderValues = (values: string[]) => {
+  const reminderValues = removeRepeatStatusFilters(values);
+
+  if (!hasRepeatingItemsFilter(values)) {
+    return reminderValues;
+  }
+
+  const currentReminder = decodeTodoReminder(reminderValues);
+  if (currentReminder.repeat !== 'none') {
+    return reminderValues;
+  }
+
+  return encodeTodoReminder({
+    time: currentReminder.time,
+    repeat: CREATE_SECTION_DEFAULT_REPEAT,
+  });
+};
 
 const getCreateFiltersForSectionHeader = (
   sectionId: string,
@@ -1277,6 +1312,14 @@ const getCreateFiltersForSectionHeader = (
   return base;
 };
 
+const canCreateFromSectionHeader = (sectionId: string, sectionLabel: string) => {
+  if (!sectionId.startsWith('group-status-')) {
+    return true;
+  }
+
+  return sectionLabel === 'Active';
+};
+
 const getDefaultCreateDraftFilters = (
   listMenuTree: ListMenuNode[],
 ): SelectedFilters => ({
@@ -1298,10 +1341,13 @@ const getCreateTodoFilters = (
   const priorityLabel = normalized.priority.find((label) => (
     label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
   ));
-  const reminderValues = removeRepeatStatusFilters(normalized.reminder);
+  const reminderValues = getCreatableReminderValues(normalized.reminder);
+  const creatableDateLabel = normalized.date[0]
+    ? getCreatableDateLabel(normalized.date[0])
+    : '';
 
   return {
-    date: normalized.date[0] ? [normalized.date[0]] : [],
+    date: creatableDateLabel ? [creatableDateLabel] : [],
     list: listLabel ? [listLabel] : hasUnknownListLabel ? fallback.list : [],
     priority: priorityLabel ? [priorityLabel] : [],
     reminder: reminderValues,
@@ -1314,7 +1360,7 @@ const hasRememberedCreateDraftFilters = (
 ) => {
   const normalized = normalizeTodoFilters(filters);
   const knownListLabels = new Set(collectListNodeLabels(listMenuTree));
-  const reminderValues = removeRepeatStatusFilters(normalized.reminder);
+  const reminderValues = getCreatableReminderValues(normalized.reminder);
 
   return (
     normalized.date.length > 0 ||
@@ -1470,11 +1516,143 @@ const formatDriveBackupSlotSubtitle = (slot: DriveBackupSlot) => {
   ].filter(Boolean).join(' · ');
 };
 
-const formatDriveBackupScopeLabel = (scope: DriveBackupScope) =>
-  scope === 'test' ? 'test backup' : 'production backup';
+const DRIVE_BACKUP_VARIANT_LABEL = isDevAppVariant ? 'Dev' : 'Prod';
+const DRIVE_BACKUP_VARIANT_LOWER_LABEL = DRIVE_BACKUP_VARIANT_LABEL.toLocaleLowerCase();
+const DRIVE_BACKUP_CONFIG_HINT = isDevAppVariant
+  ? 'Add the EXPO_PUBLIC_GOOGLE_*_DEV_CLIENT_ID for this build and rebuild.'
+  : 'Add the EXPO_PUBLIC_GOOGLE_*_PROD_CLIENT_ID for this build and rebuild.';
 
-const formatDriveBackupScopePluralLabel = (scope: DriveBackupScope) =>
-  scope === 'test' ? 'test backups' : 'production backups';
+const formatDriveBackupScopeLabel = (_scope: DriveBackupScope) =>
+  `${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup`;
+
+const formatDriveBackupScopePluralLabel = (_scope: DriveBackupScope) =>
+  `${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backups`;
+
+const getFilledDriveBackupSlots = (slots: DriveBackupSlot[]) => (
+  slots.filter((slot) => slot.file)
+);
+
+type GoogleDriveBackupSlotRowProps = {
+  actionLabel: string;
+  disabled: boolean;
+  listOnly?: boolean;
+  onDelete: () => void;
+  onPress: () => void;
+  scrollGestureRef?: React.RefObject<React.ComponentRef<typeof GestureScrollView> | null>;
+  slot: DriveBackupSlot;
+};
+
+function GoogleDriveBackupSlotRow({
+  actionLabel,
+  disabled,
+  listOnly = false,
+  onDelete,
+  onPress,
+  scrollGestureRef,
+  slot,
+}: GoogleDriveBackupSlotRowProps) {
+  const canDelete = Boolean(slot.file);
+  const title = formatDriveBackupSlotTitle(slot);
+  const subtitle = formatDriveBackupSlotSubtitle(slot);
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.googleDrivePickerSwipeActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${title}`}
+          activeOpacity={0.82}
+          onPress={onDelete}
+          style={styles.googleDrivePickerSwipeDelete}
+        >
+          <Ionicons color="#FFFFFF" name="trash-outline" size={22} />
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [onDelete, title],
+  );
+
+  return (
+    <View style={styles.googleDrivePickerSwipeShell}>
+      <Swipeable
+        childrenContainerStyle={styles.googleDrivePickerSwipeChildren}
+        containerStyle={styles.googleDrivePickerSwipeContainer}
+        dragOffsetFromLeftEdge={12}
+        dragOffsetFromRightEdge={12}
+        friction={1.1}
+        overshootRight={false}
+        renderRightActions={canDelete ? renderRightActions : undefined}
+        rightThreshold={BACKUP_SLOT_SWIPE_DELETE_WIDTH}
+        simultaneousHandlers={scrollGestureRef}
+      >
+        {listOnly ? (
+          <View
+            accessibilityHint={canDelete ? 'Swipe left to delete this backup.' : undefined}
+            accessibilityLabel={`${title}. ${subtitle}`}
+            accessibilityRole="text"
+            style={[
+              styles.googleDrivePickerChoice,
+              slot.file && styles.googleDrivePickerChoiceFilled,
+            ]}
+          >
+            <View style={styles.googleDrivePickerChoiceTextWrap}>
+              <Text
+                numberOfLines={1}
+                style={styles.googleDrivePickerChoiceTitle}
+              >
+                {title}
+              </Text>
+              <Text
+                numberOfLines={2}
+                style={styles.googleDrivePickerChoiceSubtitle}
+              >
+                {subtitle}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled }}
+            accessibilityHint={canDelete ? 'Swipe left to delete this backup.' : undefined}
+            disabled={disabled}
+            onPress={onPress}
+            style={({ pressed }) => [
+              styles.googleDrivePickerChoice,
+              slot.file && styles.googleDrivePickerChoiceFilled,
+              disabled && styles.googleDrivePickerChoiceDisabled,
+              pressed && !disabled && styles.googleDrivePickerChoicePressed,
+            ]}
+          >
+            <View style={styles.googleDrivePickerChoiceTextWrap}>
+              <Text
+                numberOfLines={1}
+                style={styles.googleDrivePickerChoiceTitle}
+              >
+                {title}
+              </Text>
+              <Text
+                numberOfLines={2}
+                style={styles.googleDrivePickerChoiceSubtitle}
+              >
+                {subtitle}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.googleDrivePickerChoiceAction,
+                disabled && styles.googleDrivePickerChoiceActionDisabled,
+              ]}
+            >
+              {actionLabel}
+            </Text>
+          </Pressable>
+        )}
+      </Swipeable>
+    </View>
+  );
+}
+
+const MemoizedGoogleDriveBackupSlotRow = React.memo(GoogleDriveBackupSlotRow);
 
 const formatDeletedTodoTime = (value: number) =>
   new Date(value).toLocaleString(undefined, {
@@ -1751,6 +1929,35 @@ const getMergedTodoFilters = (items: Todo[]): TodoFilters => {
   return merged;
 };
 
+const syncListDisplaySettingsForSingleListPreset = (
+  tree: ListMenuNode[],
+  listFilters: string[],
+  sortMode: TodoSortMode,
+  groupMode: TodoGroupMode,
+) => {
+  if (listFilters.length !== 1) {
+    return tree;
+  }
+
+  const display = resolveListDisplaySettings(
+    tree,
+    listFilters,
+    sortMode,
+    groupMode,
+  );
+
+  if (!display.listLabel) {
+    return tree;
+  }
+
+  return updateListNodeDisplaySettings(
+    tree,
+    display.listLabel,
+    display.isSubsectionView,
+    { groupMode, sortMode },
+  );
+};
+
 const menuPresetMatchesState = (
   preset: MenuPreset,
   filters: SelectedFilters,
@@ -1759,13 +1966,19 @@ const menuPresetMatchesState = (
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
+  metaTagVisibility: MetaTagVisibility,
 ): boolean =>
   filtersEqual(preset.filters, filters) &&
   filtersEqual(preset.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
   filtersEqual(preset.avoidedFilters, avoidedFilters) &&
   preset.todoSortMode === sortMode &&
   preset.todoGroupMode === groupMode &&
-  preset.listOrderMode === orderMode;
+  preset.listOrderMode === orderMode &&
+  (
+    preset.metaTagVisibility
+      ? metaTagVisibilityEqual(preset.metaTagVisibility, metaTagVisibility)
+      : true
+  );
 
 const formatPresetCount = (count: number, label: string) =>
   `${count} ${label}${count === 1 ? '' : 's'}`;
@@ -1777,6 +1990,7 @@ const formatPresetSummary = (
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
+  metaTagVisibility?: MetaTagVisibility,
 ) => {
   const requiredFilterCount = countFilters(pruneTodoFilters(requiredFilters, filters));
   const avoidedFilterCount = countFilters(avoidedFilters);
@@ -1790,6 +2004,9 @@ const formatPresetSummary = (
     `Sort ${TODO_SORT_LABELS[sortMode]}`,
     `Group ${TODO_GROUP_LABELS[groupMode]}`,
     orderMode === 'alphabetical' ? 'Lists A to Z' : 'Manual lists',
+    metaTagVisibility && !metaTagVisibilityMatchesDefault(metaTagVisibility)
+      ? `Meta ${formatMetaTagVisibilitySummary(metaTagVisibility)}`
+      : null,
   ].filter((part): part is string => Boolean(part));
 
   return parts.join(' · ');
@@ -1860,13 +2077,19 @@ const presetSectionMatchesState = (
   sortMode: TodoSortMode,
   groupMode: TodoGroupMode,
   orderMode: ListOrderMode,
+  metaTagVisibility: MetaTagVisibility,
 ) =>
   filtersEqual(section.filters, filters) &&
   filtersEqual(section.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
   filtersEqual(section.avoidedFilters, avoidedFilters) &&
   section.todoSortMode === sortMode &&
   section.todoGroupMode === groupMode &&
-  section.listOrderMode === orderMode;
+  section.listOrderMode === orderMode &&
+  (
+    section.metaTagVisibility
+      ? metaTagVisibilityEqual(section.metaTagVisibility, metaTagVisibility)
+      : true
+  );
 
 const getQuickPresetNavDetail = (
   preset: MenuPreset,
@@ -2138,10 +2361,10 @@ function MenuPresetSwipeRow({
             accessibilityRole="button"
             accessibilityHint={
               actionLabel === 'Edit'
-                ? 'Opens this preset in the filter menu for editing'
-                : 'Applies this preset section'
+                ? 'Opens this list in the filter menu for editing'
+                : 'Applies this list section'
             }
-            accessibilityLabel={`${actionLabel} preset ${label}`}
+            accessibilityLabel={`${actionLabel} list ${label}`}
             activeOpacity={1}
             onPress={onPress}
             style={styles.listMenuPresetMainPress}
@@ -2178,7 +2401,7 @@ function MenuPresetSwipeRow({
             ) : null}
             <GHTouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={`${actionLabel} preset ${label}`}
+              accessibilityLabel={`${actionLabel} list ${label}`}
               activeOpacity={0.74}
               onPress={onPress}
               style={styles.listMenuPresetActionButton}
@@ -2215,6 +2438,7 @@ function SettingsListSwipeRow({
   onPinPress,
   showInNavbar,
 }: SettingsListSwipeRowProps) {
+  const renderedIconName = resolveMaterialCommunityIconName(listIconName, 'paw');
   const renderRightActions = useCallback(
     () => (
       <View style={styles.settingsListSwipeActions}>
@@ -2258,12 +2482,8 @@ function SettingsListSwipeRow({
               ]}
             >
               <MaterialCommunityIcons
-                color={listIconName ? THEME_ACCENT : '#8F877F'}
-                name={
-                  listIconName
-                    ? toMaterialCommunityIconName(listIconName)
-                    : 'paw'
-                }
+                color={listIconName ? THEME_ACCENT : THEME_TEXT}
+                name={toMaterialCommunityIconName(renderedIconName)}
                 size={17}
               />
             </Pressable>
@@ -2301,7 +2521,7 @@ function SettingsListSwipeRow({
             ]}
           >
             <Ionicons
-              color={showInNavbar ? THEME_ACCENT : '#8F877F'}
+              color={showInNavbar ? THEME_ACCENT : THEME_TEXT}
               name={showInNavbar ? 'pin' : 'pin-outline'}
               size={18}
             />
@@ -2368,7 +2588,7 @@ function SettingsListReorderRow({
               ]}
             >
               <Ionicons
-                color={isReorderHighlighted ? THEME_ACCENT : '#8F877F'}
+                color={isReorderHighlighted ? THEME_ACCENT : THEME_TEXT}
                 name="reorder-three"
                 size={22}
               />
@@ -2398,6 +2618,22 @@ function SettingsListReorderRow({
           style={styles.settingsListIconChoicesScroll}
           contentContainerStyle={styles.settingsListIconChoices}
         >
+          <View style={styles.settingsListIconChoicesHeader}>
+            <Pressable
+              accessibilityLabel={`Close icon picker for ${item.label}`}
+              accessibilityRole="button"
+              onPress={() => {
+                onIconPickerChange(null);
+                triggerSubtleHaptic();
+              }}
+              style={({ pressed }) => [
+                styles.settingsListIconCloseButton,
+                pressed && styles.settingsOptionRowPressed,
+              ]}
+            >
+              <Ionicons color={THEME_TEXT} name="close" size={18} />
+            </Pressable>
+          </View>
           <View style={styles.settingsListIconGroupGrid}>
             <Pressable
               accessibilityLabel={`Remove icon from ${item.label}`}
@@ -2439,7 +2675,7 @@ function SettingsListReorderRow({
                       ]}
                     >
                       <MaterialCommunityIcons
-                        color={selected ? THEME_ACCENT : '#8F877F'}
+                        color={selected ? THEME_ACCENT : THEME_TEXT}
                         name={iconName}
                         size={18}
                       />
@@ -2715,6 +2951,11 @@ export default function App() {
 
     return baseMaxHeight;
   }, [keyboardOverlayInset, windowHeight]);
+  const googleDrivePickerModalLayout = useMemo(() => {
+    const cardHeight = Math.round(windowHeight * 0.92);
+
+    return { cardHeight };
+  }, [windowHeight]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
@@ -2760,6 +3001,7 @@ export default function App() {
     () => new Set(),
   );
   const [undoHistory, setUndoHistory] = useState<UndoHistoryEntry[]>([]);
+  const [redoHistory, setRedoHistory] = useState<UndoHistoryEntry[]>([]);
   const [undoToastEntryId, setUndoToastEntryId] = useState<number | null>(null);
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
@@ -2821,6 +3063,7 @@ export default function App() {
   const googleDriveBackupPickerResolveRef = useRef<(
     (selection: GoogleDriveBackupPickerSelection) => void
   ) | null>(null);
+  const googleDriveBackupPickerScrollRef = useRef<React.ComponentRef<typeof GestureScrollView>>(null);
   const googleDriveBackupEnabledRef = useRef(googleDriveBackupEnabled);
   const hideDoneTodosRef = useRef(hideDoneTodos);
   const lastCreateTodoFiltersRef = useRef<TodoFilters>(lastCreateTodoFilters);
@@ -3011,6 +3254,12 @@ export default function App() {
   const dateStatusNow = useMemo(() => new Date(), [dateStatusKey]);
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const undoHistoryCount = undoHistory.length;
+  const redoHistoryCount = redoHistory.length;
+  const historyButtonMode: 'redo' | 'undo' = redoHistoryCount > 0 ? 'redo' : 'undo';
+  const historyButtonCount = historyButtonMode === 'redo' ? redoHistoryCount : undoHistoryCount;
+  const historyButtonDisabled = historyButtonCount === 0;
+  const historyButtonText = historyButtonMode === 'redo' ? 'Redo' : 'Undo';
+  const historyButtonIcon = historyButtonMode === 'redo' ? 'arrow-redo' : 'arrow-undo';
   const undoToastEntry = undoToastEntryId === null
     ? null
     : undoHistory.find((entry) => entry.id === undoToastEntryId) ?? undoHistory[0] ?? null;
@@ -3521,24 +3770,35 @@ export default function App() {
     setUndoToastEntryId(null);
   }, []);
 
+  const createUndoHistoryEntry = useCallback((
+    label: string,
+    snapshot: UndoSnapshot,
+  ): UndoHistoryEntry => {
+    const entryId = undoHistorySequenceRef.current + 1;
+    undoHistorySequenceRef.current = entryId;
+
+    return {
+      id: entryId,
+      label,
+      snapshot,
+    };
+  }, []);
+
   const recordUndoSnapshot = useCallback((
     label: string,
     snapshot: UndoSnapshot,
     options: { showToast?: boolean } = {},
   ) => {
-    const entryId = undoHistorySequenceRef.current + 1;
-    undoHistorySequenceRef.current = entryId;
-    const entry: UndoHistoryEntry = {
-      id: entryId,
-      label,
-      snapshot,
-    };
+    const entry = createUndoHistoryEntry(label, snapshot);
 
     setUndoHistory((current) => [entry, ...current].slice(0, UNDO_HISTORY_LIMIT));
-    if (options.showToast ?? true) {
-      setUndoToastEntryId(entryId);
+    setRedoHistory([]);
+    if (options.showToast ?? undoLabelUsesToast(label)) {
+      setUndoToastEntryId(entry.id);
+    } else {
+      setUndoToastEntryId(null);
     }
-  }, []);
+  }, [createUndoHistoryEntry]);
 
   const recordUndo = useCallback((label: string, options: { showToast?: boolean } = {}) => {
     recordUndoSnapshot(label, captureUndoSnapshot(), options);
@@ -3740,15 +4000,50 @@ export default function App() {
       return;
     }
 
+    const redoEntry = createUndoHistoryEntry(entry.label, captureUndoSnapshot());
+
     restoreUndoSnapshot(entry.snapshot);
     setUndoHistory((current) => (
       current[0]?.id === entry.id
         ? current.slice(1)
         : current.filter((item) => item.id !== entry.id)
     ));
+    setRedoHistory((current) => [redoEntry, ...current].slice(0, UNDO_HISTORY_LIMIT));
     clearUndoToast();
     triggerSubtleHaptic();
-  }, [clearUndoToast, restoreUndoSnapshot, undoHistory]);
+  }, [
+    captureUndoSnapshot,
+    clearUndoToast,
+    createUndoHistoryEntry,
+    restoreUndoSnapshot,
+    undoHistory,
+  ]);
+
+  const redoLastChange = useCallback(() => {
+    const [entry] = redoHistory;
+
+    if (!entry) {
+      return;
+    }
+
+    const undoEntry = createUndoHistoryEntry(entry.label, captureUndoSnapshot());
+
+    restoreUndoSnapshot(entry.snapshot);
+    setRedoHistory((current) => (
+      current[0]?.id === entry.id
+        ? current.slice(1)
+        : current.filter((item) => item.id !== entry.id)
+    ));
+    setUndoHistory((current) => [undoEntry, ...current].slice(0, UNDO_HISTORY_LIMIT));
+    clearUndoToast();
+    triggerSubtleHaptic();
+  }, [
+    captureUndoSnapshot,
+    clearUndoToast,
+    createUndoHistoryEntry,
+    redoHistory,
+    restoreUndoSnapshot,
+  ]);
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -4337,13 +4632,14 @@ export default function App() {
   }, [resolveGoogleDriveBackupPicker]);
 
   const requestGoogleDriveBackupPickerSelection = useCallback((
+    accessToken: string,
     mode: GoogleDriveBackupPickerMode,
     slots: DriveBackupSlot[],
     scope: DriveBackupScope,
   ) => new Promise<GoogleDriveBackupPickerSelection>((resolve) => {
     googleDriveBackupPickerResolveRef.current?.(null);
     googleDriveBackupPickerResolveRef.current = resolve;
-    setGoogleDriveBackupPicker({ mode, scope, slots });
+    setGoogleDriveBackupPicker({ accessToken, mode, scope, slots });
   }), []);
 
   const backToCreateDrawerInput = useCallback(() => {
@@ -6063,12 +6359,14 @@ export default function App() {
       effectiveSortMode,
       effectiveGroupMode,
       listOrderMode,
+      metaTagVisibility,
     )) ?? null;
   }, [
     activeTodoMenuId,
     effectiveGroupMode,
     effectiveSortMode,
     listOrderMode,
+    metaTagVisibility,
     menuPresets,
     avoidedFilters,
     requiredFilters,
@@ -6087,7 +6385,7 @@ export default function App() {
       return '';
     }
 
-    return menuPresetById.get(searchKeywordEditTarget.presetId)?.label ?? 'Preset';
+    return menuPresetById.get(searchKeywordEditTarget.presetId)?.label ?? 'List';
   }, [menuPresetById, searchKeywordEditTarget]);
   const searchKeywordModalSaveDisabled = useMemo(() => {
     if (!searchKeywordEditTarget || searchKeywordEditTarget.kind !== 'list') {
@@ -6118,6 +6416,7 @@ export default function App() {
       listOrderMode,
       menuPresetById,
       menuPresetByListLabel,
+      menuPresets,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
     }),
@@ -6126,6 +6425,7 @@ export default function App() {
       listOrderMode,
       menuPresetById,
       menuPresetByListLabel,
+      menuPresets,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
     ],
@@ -6165,25 +6465,29 @@ export default function App() {
       ?? quickPresetNavVirtualPresetById.get(openMenuPresetId)
       ?? null
     : null;
+  const openListPresetMatchesSelectedListScope =
+    openListPreset !== null &&
+    isListScopedPreset(openListPreset) &&
+    openListPreset.filters.list.length === selectedFilters.list.length &&
+    openListPreset.filters.list.every((label) => selectedFilters.list.includes(label));
   const activeListPreset = isListScopedPreset(activeMenuPreset)
     ? activeMenuPreset
-    : isListScopedPreset(openListPreset)
+    : openListPresetMatchesSelectedListScope
       ? openListPreset
       : null;
-  const emptyListGroupLabels = useMemo(() => {
-    if (todoListGroupMode !== 'list' || !activeListPreset) {
+  const todoListUseSubsectionLayout =
+    todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
+  const seedListGroupLabels = useMemo(() => {
+    if (todoListGroupMode !== 'list') {
       return EMPTY_LIST_GROUP_LABELS;
     }
 
-    const presetListLabels = activeListPreset.filters.list;
+    const scopedListLabels = activeListPreset?.filters.list.length
+      ? activeListPreset.filters.list
+      : selectedFilters.list;
 
-    return presetListLabels.length > 0 ? presetListLabels : EMPTY_LIST_GROUP_LABELS;
-  }, [
-    activeListPreset,
-    todoListGroupMode,
-  ]);
-  const todoListUseSubsectionLayout =
-    todoListDisplay.isSubsectionView && todoListGroupMode === 'none';
+    return scopedListLabels.length > 0 ? scopedListLabels : todoListOrderedListLabels;
+  }, [activeListPreset, selectedFilters.list, todoListGroupMode, todoListOrderedListLabels]);
   const sortedTodos = useMemo(
     () => [...filteredTodos].sort(createTodoSortComparator(todoListSortMode, dateStatusNow)),
     [dateStatusNow, filteredTodos, todoListSortMode],
@@ -6192,22 +6496,24 @@ export default function App() {
     () => buildTodoListRows(
       sortedTodos,
       todoListGroupMode,
+      todoListSortMode,
       todoListOrderedListLabels,
       listMenuTree,
       selectedFilters.list,
       todoListUseSubsectionLayout,
       dateLabelDisplayMode,
-      emptyListGroupLabels,
+      seedListGroupLabels,
       dateStatusNow,
     ),
     [
       dateLabelDisplayMode,
       dateStatusNow,
-      emptyListGroupLabels,
       listMenuTree,
+      seedListGroupLabels,
       selectedFilters.list,
       sortedTodos,
       todoListGroupMode,
+      todoListSortMode,
       todoListOrderedListLabels,
       todoListUseSubsectionLayout,
     ],
@@ -6536,7 +6842,9 @@ export default function App() {
           return total;
         }
 
-        return todo.filters.list.includes(node.label) ? total + 1 : total;
+        return todoMatchesSelectedListFilters([node.label], todo.filters.list, listMenuTree)
+          ? total + 1
+          : total;
       }, 0);
       const score = getListMenuSearchScore(node, searchPresetQuery);
 
@@ -6617,7 +6925,7 @@ export default function App() {
           return false;
         }
 
-        return todo.filters.list.includes(item.node.label);
+        return todoMatchesSelectedListFilters([item.node.label], todo.filters.list, listMenuTree);
       });
 
       todosByLabel.set(item.node.label, listTodos);
@@ -6626,6 +6934,7 @@ export default function App() {
     return todosByLabel;
   }, [
     hideDoneTodos,
+    listMenuTree,
     pendingDeleteIds,
     searchListMenuItems,
     todos,
@@ -6702,6 +7011,7 @@ export default function App() {
     effectiveSortMode,
     effectiveGroupMode,
     listOrderMode,
+    metaTagVisibility,
   );
   const editingMenuPreset = editingMenuPresetId
     ? menuPresetById.get(editingMenuPresetId) ?? null
@@ -6726,6 +7036,7 @@ export default function App() {
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
+        metaTagVisibility,
       ),
   );
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
@@ -6850,6 +7161,7 @@ export default function App() {
             latestMenuPreset.todoSortMode,
             latestMenuPreset.todoGroupMode,
             latestMenuPreset.listOrderMode,
+            latestMenuPreset.metaTagVisibility,
           ),
           type: 'quickApplyPreset',
         },
@@ -6862,7 +7174,7 @@ export default function App() {
       if (latestMenuPreset) {
         rows.push({
           id: 'preset-quick-apply-menu',
-          label: 'Quick apply',
+          label: 'Latest list',
           menuMode: 'presetsQuickApply',
           type: 'menu',
           valueLabel: latestMenuPreset.label,
@@ -6881,6 +7193,7 @@ export default function App() {
             preset.todoSortMode,
             preset.todoGroupMode,
             preset.listOrderMode,
+            preset.metaTagVisibility,
           ),
           type: 'preset' as const,
         });
@@ -6898,6 +7211,7 @@ export default function App() {
               section.todoSortMode,
               section.todoGroupMode,
               section.listOrderMode,
+              section.metaTagVisibility,
             ),
             type: 'presetSection' as const,
           });
@@ -6907,7 +7221,7 @@ export default function App() {
       if (!hasTodoEditTargets) {
         rows.push({
           id: 'preset-save-current',
-          label: 'Save current as preset',
+          label: 'Save current as list',
           summary: currentPresetSummary,
           type: 'savePreset' as const,
         });
@@ -6962,29 +7276,7 @@ export default function App() {
     }
 
     const rows: MenuRow[] = [
-      ...(editingMenuPreset
-        ? [{
-            id: 'main-update-preset',
-            label: `Update ${editingMenuPreset.label}`,
-            type: 'updatePreset' as const,
-          }]
-        : []),
-      {
-        count: menuPresets.length || undefined,
-        id: 'main-presets',
-        label: 'Presets',
-        menuMode: 'presets',
-        type: 'menu',
-        valueLabel: (openMenuPreset ?? activeMenuPreset)?.label,
-      },
       ...(pinActionRow ? [pinActionRow] : []),
-      {
-        count: (menuFilters.list.length + menuAvoidedFilters.list.length) || undefined,
-        id: 'main-lists',
-        label: 'Lists',
-        menuMode: 'lists',
-        type: 'menu',
-      },
       {
         count: (menuFilters.priority.length + menuAvoidedFilters.priority.length) || undefined,
         id: 'main-priority',
@@ -7041,14 +7333,6 @@ export default function App() {
         label: 'Settings',
         type: 'settings',
       },
-      ...(openMenuPresetHasChanges && openMenuPreset
-        ? [{
-            id: `main-update-open-icon-${openMenuPreset.id}`,
-            label: openQuickPresetNavSlotNumber ? 'Update this icon' : `Update ${openMenuPreset.label}`,
-            preset: openMenuPreset,
-            type: 'saveOpenPreset' as const,
-          }]
-        : []),
     ];
 
     return rows;
@@ -7056,7 +7340,6 @@ export default function App() {
     activeFilterCount,
     activeMenuPreset,
     currentPresetSummary,
-    editingMenuPreset,
     hasTodoEditTargets,
     includeActiveTodoReminderRows,
     latestMenuPreset,
@@ -7066,8 +7349,6 @@ export default function App() {
     menuMode,
     menuPresets,
     openMenuPreset,
-    openMenuPresetHasChanges,
-    openQuickPresetNavSlotNumber,
     effectiveGroupMode,
     effectiveSortMode,
     metaTagVisibility,
@@ -8094,12 +8375,13 @@ export default function App() {
       requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
       avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
       listOrderMode,
+      metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
       todoGroupMode: effectiveGroupMode,
       todoSortMode: effectiveSortMode,
       createdAt,
     };
 
-    recordUndo('Save preset');
+    recordUndo('Save list');
     setMenuPresets((current) => [...current, preset]);
     setOpenMenuPresetId(presetId);
     setOpenQuickPresetNavSlotNumber(null);
@@ -8113,6 +8395,7 @@ export default function App() {
     menuFilters,
     menuRequiredFilters,
     menuAvoidedFilters,
+    metaTagVisibility,
     recordUndo,
   ]);
 
@@ -8274,7 +8557,7 @@ export default function App() {
         return;
       }
 
-      recordUndo('Edit preset keywords');
+      recordUndo('Edit list keywords');
       setMenuPresets((current) => current.map((preset) => (
         preset.id === presetId
           ? {
@@ -8358,7 +8641,7 @@ export default function App() {
   const openSavePresetPrompt = useCallback(() => {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
-    setPresetSaveName(`Preset ${menuPresets.length + 1}`);
+    setPresetSaveName(`List ${menuPresets.length + 1}`);
     setPresetSaveModalVisible(true);
     triggerSubtleHaptic();
   }, [menuPresets.length]);
@@ -8418,6 +8701,17 @@ export default function App() {
     options?: { closeMenu?: boolean; haptic?: boolean },
   ) => {
     const nextFilters = cloneTodoFilters(preset.filters);
+    const singleListFilter = nextFilters.list.length === 1 ? nextFilters.list[0] : null;
+    const appliesStoredAllListsBoard =
+      preset.todoGroupMode === 'list' &&
+      isAllListsBoardPresetLabel(preset.label) &&
+      singleListFilter !== null &&
+      isAllListsBoardPresetLabel(singleListFilter);
+
+    if (appliesStoredAllListsBoard) {
+      nextFilters.list = [];
+    }
+
     const nextRequiredFilters = pruneTodoFilters(preset.requiredFilters, nextFilters);
     const nextAvoidedFilters = cloneTodoFilters(preset.avoidedFilters);
 
@@ -8437,6 +8731,15 @@ export default function App() {
       setListOrderMode(preset.listOrderMode);
       setTodoGroupMode(preset.todoGroupMode);
       setTodoSortMode(preset.todoSortMode);
+      setListMenuTree((current) => syncListDisplaySettingsForSingleListPreset(
+        current,
+        nextFilters.list,
+        preset.todoSortMode,
+        preset.todoGroupMode,
+      ));
+      if (preset.metaTagVisibility) {
+        setMetaTagVisibility(cloneMetaTagVisibility(preset.metaTagVisibility));
+      }
       setOpenMenuPresetId(preset.id);
       setOpenQuickPresetNavSlotNumber(null);
     }
@@ -8479,6 +8782,15 @@ export default function App() {
       setListOrderMode(section.listOrderMode);
       setTodoGroupMode(section.todoGroupMode);
       setTodoSortMode(section.todoSortMode);
+      setListMenuTree((current) => syncListDisplaySettingsForSingleListPreset(
+        current,
+        nextFilters.list,
+        section.todoSortMode,
+        section.todoGroupMode,
+      ));
+      if (section.metaTagVisibility) {
+        setMetaTagVisibility(cloneMetaTagVisibility(section.metaTagVisibility));
+      }
       setOpenMenuPresetId(preset.id);
       setOpenQuickPresetNavSlotNumber(null);
     }
@@ -8511,6 +8823,7 @@ export default function App() {
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
+        metaTagVisibility,
       )
     ));
 
@@ -8531,12 +8844,13 @@ export default function App() {
       requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
       avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
       listOrderMode,
+      metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
       todoGroupMode: effectiveGroupMode,
       todoSortMode: effectiveSortMode,
       createdAt,
     };
 
-    recordUndo('Add preset section');
+    recordUndo('Add list section');
     setMenuPresets((current) => current.map((preset) => (
       preset.id === presetId
         ? {
@@ -8552,6 +8866,7 @@ export default function App() {
     effectiveSortMode,
     hasTodoEditTargets,
     listOrderMode,
+    metaTagVisibility,
     menuAvoidedFilters,
     menuFilters,
     menuPresets,
@@ -8565,7 +8880,7 @@ export default function App() {
       return;
     }
 
-    recordUndo('Delete preset section');
+    recordUndo('Delete list section');
     setMenuPresets((current) => current.map((item) => {
       if (item.id !== presetId) {
         return item;
@@ -8609,7 +8924,11 @@ export default function App() {
       !filtersEqual(currentPreset.avoidedFilters, menuAvoidedFilters) ||
       currentPreset.listOrderMode !== listOrderMode ||
       currentPreset.todoGroupMode !== effectiveGroupMode ||
-      currentPreset.todoSortMode !== effectiveSortMode;
+      currentPreset.todoSortMode !== effectiveSortMode ||
+      !(
+        currentPreset.metaTagVisibility &&
+        metaTagVisibilityEqual(currentPreset.metaTagVisibility, metaTagVisibility)
+      );
 
     if (!hasChanges) {
       setEditingMenuPresetId(null);
@@ -8617,7 +8936,7 @@ export default function App() {
       return;
     }
 
-    recordUndo('Update preset');
+    recordUndo('Update list');
     setMenuPresets((current) => current.map((preset) => (
       preset.id === editingMenuPresetId
         ? {
@@ -8626,6 +8945,7 @@ export default function App() {
             requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
             avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
             listOrderMode,
+            metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
             todoGroupMode: effectiveGroupMode,
             todoSortMode: effectiveSortMode,
           }
@@ -8643,6 +8963,7 @@ export default function App() {
     menuRequiredFilters,
     menuAvoidedFilters,
     menuPresets,
+    metaTagVisibility,
     recordUndo,
   ]);
 
@@ -8663,7 +8984,11 @@ export default function App() {
       !filtersEqual(currentPreset.avoidedFilters, avoidedFilters) ||
       currentPreset.listOrderMode !== listOrderMode ||
       currentPreset.todoGroupMode !== effectiveGroupMode ||
-      currentPreset.todoSortMode !== effectiveSortMode;
+      currentPreset.todoSortMode !== effectiveSortMode ||
+      !(
+        currentPreset.metaTagVisibility &&
+        metaTagVisibilityEqual(currentPreset.metaTagVisibility, metaTagVisibility)
+      );
 
     if (!hasChanges) {
       setOpenMenuPresetId(presetId);
@@ -8672,7 +8997,7 @@ export default function App() {
       return;
     }
 
-    recordUndo('Update preset');
+    recordUndo('Update list');
     if (existingPreset) {
       setMenuPresets((current) => current.map((preset) => (
         preset.id === presetId
@@ -8682,6 +9007,7 @@ export default function App() {
               requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
               avoidedFilters: cloneTodoFilters(avoidedFilters),
               listOrderMode,
+              metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
               todoGroupMode: effectiveGroupMode,
               todoSortMode: effectiveSortMode,
             }
@@ -8698,6 +9024,7 @@ export default function App() {
         requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
         avoidedFilters: cloneTodoFilters(avoidedFilters),
         listOrderMode,
+        metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
         todoGroupMode: effectiveGroupMode,
         todoSortMode: effectiveSortMode,
         createdAt,
@@ -8733,8 +9060,34 @@ export default function App() {
     quickPresetNavVirtualPresetById,
     recordUndo,
     avoidedFilters,
+    metaTagVisibility,
     requiredFilters,
     selectedFilters,
+  ]);
+
+  const listMenuPresetSaveLabel = editingMenuPreset
+    ? `Save list ${editingMenuPreset.label}`
+    : openMenuPreset
+      ? `Save list ${openMenuPreset.label}`
+      : 'Save list';
+  const canSaveListMenuPreset = Boolean(
+    editingMenuPreset || (openMenuPresetHasChanges && openMenuPreset),
+  );
+  const saveListMenuPreset = useCallback(() => {
+    if (editingMenuPreset) {
+      updateEditingMenuPreset();
+      return;
+    }
+
+    if (openMenuPresetHasChanges && openMenuPreset) {
+      saveOpenMenuPreset(openMenuPreset.id);
+    }
+  }, [
+    editingMenuPreset,
+    openMenuPreset,
+    openMenuPresetHasChanges,
+    saveOpenMenuPreset,
+    updateEditingMenuPreset,
   ]);
 
   const applyQuickPresetNavPreset = useCallback((
@@ -8815,10 +9168,11 @@ export default function App() {
         effectiveSortMode,
         effectiveGroupMode,
         listOrderMode,
+        metaTagVisibility,
       ),
     );
 
-    recordUndo('Delete preset');
+    recordUndo('Delete list');
     setMenuPresets((current) => current.filter((preset) => preset.id !== id));
     setQuickPresetNavPresetIds((current) => (
       current.length === 0
@@ -8843,6 +9197,7 @@ export default function App() {
     effectiveSortMode,
     listOrderMode,
     menuPresets,
+    metaTagVisibility,
     openMenuPresetId,
     recordUndo,
     avoidedFilters,
@@ -9419,7 +9774,9 @@ export default function App() {
   const getFreshGoogleAccessToken = useCallback(async (authOverride?: StoredGoogleAuth) => {
     const clientId = getGoogleClientIdForPlatform();
     if (!clientId) {
-      throw new Error('Google OAuth client ID is not configured for this platform.');
+      throw new Error(
+        `Google OAuth client ID is not configured for this ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} build.`,
+      );
     }
 
     const storedAuth = authOverride ?? googleAuth ?? await googleAuthStore.load();
@@ -9479,6 +9836,60 @@ export default function App() {
       triggerSubtleHaptic();
     }
   }, []);
+
+  const deleteGoogleDriveBackupSlot = useCallback((slot: DriveBackupSlot) => {
+    const picker = googleDriveBackupPicker;
+    const file = slot.file;
+
+    if (!picker || !file) {
+      return;
+    }
+
+    const slotTitle = formatDriveBackupSlotTitle(slot);
+    const backupLabel = formatDriveBackupScopeLabel(picker.scope);
+
+    Alert.alert(
+      `Delete ${slotTitle}?`,
+      `This removes only this ${backupLabel} from Google Drive.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setGoogleDriveBackupStatus(`Deleting ${slotTitle.toLocaleLowerCase()}...`);
+            deleteDriveBackupFile(picker.accessToken, file, picker.scope)
+              .then(() => listDriveBackupSlots(picker.accessToken, picker.scope))
+              .then((slots) => {
+                setGoogleDriveBackupPicker((current) => {
+                  if (
+                    !current ||
+                    current.accessToken !== picker.accessToken ||
+                    current.scope !== picker.scope
+                  ) {
+                    return current;
+                  }
+
+                  const nextSlots = current.mode === 'manage'
+                    ? getFilledDriveBackupSlots(slots)
+                    : slots;
+
+                  return {
+                    ...current,
+                    slots: nextSlots,
+                  };
+                });
+                setGoogleDriveBackupStatus(`${slotTitle} deleted`);
+                triggerSubtleHaptic();
+              })
+              .catch((error) => {
+                handleGoogleDriveError(error, 'Google Drive backup delete failed');
+              });
+          },
+        },
+      ],
+    );
+  }, [googleDriveBackupPicker, handleGoogleDriveError]);
 
   const authenticateWithAndroidGoogle = useCallback(async () => {
     let nativeGoogleSignIn: NativeGoogleSignIn;
@@ -9551,11 +9962,12 @@ export default function App() {
     options: {
       notify?: boolean;
       scope?: DriveBackupScope;
-      target?: DriveBackupUploadTarget;
     } = {},
   ) => {
     const backupScope = options.scope ?? 'main';
-    setGoogleDriveBackupStatus(`Backing up ${formatDriveBackupScopeLabel(backupScope)}...`);
+    setGoogleDriveBackupStatus(
+      `Creating ${formatDriveBackupScopeLabel(backupScope)} snapshot...`,
+    );
 
     const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
     const payload = createBackupPayload(backupTodos, {
@@ -9583,17 +9995,14 @@ export default function App() {
       todoSortMode,
       metaTagVisibility,
     });
-    if (backupScope === 'test') {
-      payload.settings.googleDriveLastBackupAt = googleDriveLastBackupAt;
-    }
-    await uploadDriveBackup(accessToken, payload, options.target, backupScope);
+    const uploadResult = await uploadDriveBackup(accessToken, payload, undefined, backupScope);
     if (backupScope === 'main') {
       setGoogleDriveLastBackupAt(payload.exportedAt);
     }
     setGoogleDriveBackupStatus(
-      `${backupScope === 'test' ? 'Test backed up' : 'Backed up'} ${backupTodos.length} items · ${
-        formatBackupTime(payload.exportedAt)
-      }`,
+      `${DRIVE_BACKUP_VARIANT_LABEL} backup ${uploadResult.file.name} created · ${
+        backupTodos.length
+      } items · ${formatBackupTime(payload.exportedAt)}`,
     );
     if (options.notify !== false) {
       triggerSubtleHaptic();
@@ -9634,12 +10043,15 @@ export default function App() {
     const backupSlots = await listDriveBackupSlots(accessToken, scope);
 
     setGoogleDriveBackupStatus(`Choose a ${formatDriveBackupScopeLabel(scope)} slot to restore`);
-    const selection = await requestGoogleDriveBackupPickerSelection('restore', backupSlots, scope);
+    const selection = await requestGoogleDriveBackupPickerSelection(
+      accessToken,
+      'restore',
+      backupSlots,
+      scope,
+    );
 
     if (!selection || selection.type !== 'slot' || !selection.slot.file) {
-      setGoogleDriveBackupStatus(
-        scope === 'test' ? 'Test restore cancelled' : 'Production restore cancelled',
-      );
+      setGoogleDriveBackupStatus(`${DRIVE_BACKUP_VARIANT_LABEL} restore cancelled`);
       return;
     }
 
@@ -9707,7 +10119,7 @@ export default function App() {
       shouldHighlightCreatePriorityPicker(restoredLastCreateTodoFilters),
     );
     setGoogleDriveBackupStatus(
-      `${scope === 'test' ? 'Restored test backup' : 'Restored'} ${
+      `Restored ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup ${
         backup.payload.todos.length
       } items · ${formatBackupTime(restoredAt)}`,
     );
@@ -9722,20 +10134,26 @@ export default function App() {
     const accessToken = await getFreshGoogleAccessToken(authOverride);
 
     if (action === 'backup') {
+      await uploadBackupWithToken(accessToken, { scope });
+      return;
+    }
+
+    if (action === 'manage') {
       setGoogleDriveBackupStatus(`Loading ${formatDriveBackupScopePluralLabel(scope)}...`);
-      const backupSlots = await listDriveBackupSlots(accessToken, scope);
-      setGoogleDriveBackupStatus(`Choose a ${formatDriveBackupScopeLabel(scope)} slot`);
-      const selection = await requestGoogleDriveBackupPickerSelection('backup', backupSlots, scope);
-
-      if (!selection) {
-        setGoogleDriveBackupStatus(
-          scope === 'test' ? 'Test backup cancelled' : 'Production backup cancelled',
-        );
-        return;
-      }
-
-      const target: DriveBackupUploadTarget = { slot: selection.slot, type: 'slot' };
-      await uploadBackupWithToken(accessToken, { scope, target });
+      const backupSlots = getFilledDriveBackupSlots(
+        await listDriveBackupSlots(accessToken, scope),
+      );
+      setGoogleDriveBackupStatus(
+        backupSlots.length > 0
+          ? `Showing ${formatDriveBackupScopePluralLabel(scope)}`
+          : `No ${formatDriveBackupScopePluralLabel(scope)} found`,
+      );
+      await requestGoogleDriveBackupPickerSelection(
+        accessToken,
+        'manage',
+        backupSlots,
+        scope,
+      );
       return;
     }
 
@@ -9752,7 +10170,9 @@ export default function App() {
     scope: DriveBackupScope = 'main',
   ) => {
     if (!googleOAuthConfigured) {
-      setGoogleDriveBackupStatus('Google sign-in is not configured for this build.');
+      setGoogleDriveBackupStatus(
+        `Google sign-in is not configured for this ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} build.`,
+      );
       triggerSubtleHaptic();
       return;
     }
@@ -9833,13 +10253,11 @@ export default function App() {
 
       handleGoogleDriveError(
         error,
-        scope === 'test'
-          ? action === 'backup'
-            ? 'Google Drive test backup failed'
-            : 'Google Drive test restore failed'
-          : action === 'backup'
-            ? 'Google Drive backup failed'
-            : 'Google Drive restore failed',
+        action === 'backup'
+          ? 'Google Drive backup failed'
+          : action === 'restore'
+            ? 'Google Drive restore failed'
+            : 'Google Drive backups failed',
       );
     } finally {
       setGoogleDriveBusy(false);
@@ -9860,12 +10278,8 @@ export default function App() {
     await performGoogleDriveAction('restore');
   }, [performGoogleDriveAction]);
 
-  const backupToGoogleDriveTest = useCallback(async () => {
-    await performGoogleDriveAction('backup', 'test');
-  }, [performGoogleDriveAction]);
-
-  const restoreFromGoogleDriveTest = useCallback(async () => {
-    await performGoogleDriveAction('restore', 'test');
+  const showGoogleDriveBackups = useCallback(async () => {
+    await performGoogleDriveAction('manage');
   }, [performGoogleDriveAction]);
 
   useEffect(() => {
@@ -10139,6 +10553,10 @@ export default function App() {
   const renderVisibleTodoRowGap = useCallback(
     (gapBefore: boolean) => (gapBefore ? <View style={styles.todoListRowGap} /> : null),
     [],
+  );
+  const currentCreateSectionFilters = useMemo(
+    () => mergeCreateSectionFilters(requiredFilters, selectedFilters),
+    [requiredFilters, selectedFilters],
   );
 
   const renderTodoSectionAddButton = useCallback((
@@ -10433,7 +10851,7 @@ export default function App() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityHint="Tap to expand or collapse. Press and hold to edit hidden search keywords."
-                  accessibilityLabel={`Preset ${item.preset.label}, ${item.count} items`}
+                  accessibilityLabel={`List ${item.preset.label}, ${item.count} items`}
                   accessibilityState={{ expanded: isExpanded }}
                   collapsable={false}
                   onLongPress={() => openPresetSearchKeywordPrompt(item.preset)}
@@ -10458,7 +10876,7 @@ export default function App() {
                 <View style={styles.todoSectionHeaderMeta}>
                   {renderTodoSectionAddButton(
                     `Add todo to ${item.preset.label}`,
-                    cloneTodoFilters(item.preset.filters),
+                    mergeCreateSectionFilters(item.preset.requiredFilters, item.preset.filters),
                   )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
@@ -10563,9 +10981,12 @@ export default function App() {
       }
 
       if (item.type === 'sectionHeader') {
-        const isExpanded = !item.isCollapsed && item.count > 0;
+        const isExpanded = !item.isCollapsed;
+        const hasExpandedTodos = isExpanded && item.count > 0;
+        const canCreateFromSection = canCreateFromSectionHeader(item.id, item.label);
         const shouldHideSectionAddButton =
-          hidePresetTodoSectionAddButton && !item.id.startsWith('group-list-');
+          !canCreateFromSection ||
+          (hidePresetTodoSectionAddButton && !item.id.startsWith('group-list-'));
 
         return (
           <View>
@@ -10574,13 +10995,13 @@ export default function App() {
               collapsable={false}
               style={[
                 styles.todoSectionCardShadow,
-                isExpanded && styles.todoSectionCardShadowExpanded,
+                hasExpandedTodos && styles.todoSectionCardShadowExpanded,
               ]}
             >
               <View
                 style={[
                   styles.todoSectionCard,
-                  isExpanded && styles.todoSectionCardExpanded,
+                  hasExpandedTodos && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
                 ]}
               >
@@ -10606,7 +11027,11 @@ export default function App() {
                     ? null
                     : renderTodoSectionAddButton(
                       `Add todo to ${item.label}`,
-                      getCreateFiltersForSectionHeader(item.id, item.label, selectedFilters),
+                      getCreateFiltersForSectionHeader(
+                        item.id,
+                        item.label,
+                        currentCreateSectionFilters,
+                      ),
                     )}
                   <Text style={styles.todoGroupCount}>{item.count}</Text>
                   <Ionicons
@@ -10616,6 +11041,19 @@ export default function App() {
                   />
                 </View>
               </View>
+              {isExpanded && item.count === 0 ? (
+                <View
+                  style={[
+                    styles.todoSectionGroupedShell,
+                    styles.todoSectionGroupedShellLast,
+                    styles.searchPresetSectionEmpty,
+                  ]}
+                >
+                  <Text style={styles.searchPresetSectionEmptyText}>
+                    No items
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
         );
@@ -10761,6 +11199,7 @@ export default function App() {
     [
       activeTodoMenuId,
       activeTodoMenuHighlightId,
+      currentCreateSectionFilters,
       dateStatusKey,
       dateLabelDisplayMode,
       deleteTodo,
@@ -10870,22 +11309,25 @@ export default function App() {
               <View style={styles.appHeaderActions}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Undo last change"
-                  accessibilityState={{ disabled: undoHistoryCount === 0 }}
-                  disabled={undoHistoryCount === 0}
-                  onPress={undoLastChange}
+                  accessibilityLabel={`${historyButtonText} ${historyButtonCount} change${historyButtonCount === 1 ? '' : 's'}`}
+                  accessibilityState={{ disabled: historyButtonDisabled }}
+                  disabled={historyButtonDisabled}
+                  onPress={historyButtonMode === 'redo' ? redoLastChange : undoLastChange}
                   style={({ pressed }) => [
                     styles.appHeaderActionButton,
-                    undoHistoryCount > 0 && styles.appHeaderUndoButtonAvailable,
-                    undoHistoryCount === 0 && styles.appHeaderUndoButtonDisabled,
+                    historyButtonCount > 0 && styles.appHeaderUndoButtonAvailable,
+                    historyButtonDisabled && styles.appHeaderUndoButtonDisabled,
                     pressed && styles.appHeaderSideButtonPressed,
                   ]}
                 >
                   <Ionicons
-                    color={undoHistoryCount > 0 ? NAV_ACCENT : THEME_TEXT_TERTIARY}
-                    name="arrow-undo"
+                    color={historyButtonCount > 0 ? NAV_ACCENT : THEME_TEXT_TERTIARY}
+                    name={historyButtonIcon}
                     size={22}
                   />
+                  {historyButtonCount > 0 ? (
+                    <Text style={styles.appHeaderUndoCountBadge}>{historyButtonCount}</Text>
+                  ) : null}
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
@@ -10955,9 +11397,9 @@ export default function App() {
                     searchPresetItems.length === 0 &&
                     searchListMenuItems.length === 0 ? (
                     <View style={styles.searchFiltersEmpty}>
-                      <Text style={styles.searchFiltersEmptyTitle}>No saved presets</Text>
+                      <Text style={styles.searchFiltersEmptyTitle}>No saved lists</Text>
                       <Text style={styles.searchFiltersEmptyText}>
-                        Save presets from the filter menu to search them here.
+                        Save lists from the filter menu to search them here.
                       </Text>
                     </View>
                   ) : (
@@ -11056,7 +11498,7 @@ export default function App() {
                         {navTab === 'search' ? (
                           <View style={styles.searchModeToggle}>
                             <Pressable
-                              accessibilityLabel="Preset search"
+                              accessibilityLabel="List search"
                               accessibilityRole="button"
                               accessibilityState={{ selected: searchMode === 'preset' }}
                               onPress={() => handleSearchModeChange('preset')}
@@ -11311,6 +11753,20 @@ export default function App() {
                     >
                       <View style={styles.menuDragHandle} accessibilityRole="adjustable">
                         <View style={styles.menuDragPill} />
+                        {canSaveListMenuPreset ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={listMenuPresetSaveLabel}
+                            hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                            onPress={saveListMenuPreset}
+                            style={({ pressed }) => [
+                              styles.listMenuHeaderSaveButton,
+                              pressed && styles.listMenuArrowButtonPressed,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="save-outline" size={20} />
+                          </Pressable>
+                        ) : null}
                       </View>
                       <PanGestureHandler
                         activeOffsetX={[-10000, 32]}
@@ -11600,44 +12056,6 @@ export default function App() {
   	                              </Pressable>
   	                            );
   	                          }
-
-                            if (item.type === 'saveOpenPreset') {
-                              return (
-                                <Pressable
-                                  accessibilityRole="button"
-                                  accessibilityLabel={item.label}
-                                  onPress={() => saveOpenMenuPreset(item.preset.id)}
-                                  style={({ pressed }) => [
-                                    styles.listMenuRow,
-                                    pressed && styles.listMenuRowPressed,
-                                  ]}
-                                >
-                                  <View style={styles.listMenuRowTextWrap}>
-                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-                                  </View>
-                                  <Text style={styles.listMenuApplyText}>Save</Text>
-                                </Pressable>
-                              );
-                            }
-
-                            if (item.type === 'updatePreset') {
-                              return (
-                                <Pressable
-                                  accessibilityRole="button"
-                                  accessibilityLabel={item.label}
-                                  onPress={updateEditingMenuPreset}
-                                  style={({ pressed }) => [
-                                    styles.listMenuRow,
-                                    pressed && styles.listMenuRowPressed,
-                                  ]}
-                                >
-                                  <View style={styles.listMenuRowTextWrap}>
-                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-                                  </View>
-                                  <Ionicons color={THEME_ACCENT} name="checkmark" size={21} />
-                                </Pressable>
-                              );
-                            }
 
                             if (item.type === 'quickApplyPreset') {
                               return (
@@ -12738,28 +13156,30 @@ export default function App() {
               <View style={styles.settingsHeaderActions}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Undo last change"
-                  accessibilityState={{ disabled: undoHistoryCount === 0 }}
-                  disabled={undoHistoryCount === 0}
-                  onPress={undoLastChange}
+                  accessibilityLabel={`${historyButtonText} ${historyButtonCount} change${historyButtonCount === 1 ? '' : 's'}`}
+                  accessibilityState={{ disabled: historyButtonDisabled }}
+                  disabled={historyButtonDisabled}
+                  onPress={historyButtonMode === 'redo' ? redoLastChange : undoLastChange}
                   style={({ pressed }) => [
                     styles.settingsUndoButton,
-                    undoHistoryCount === 0 && styles.settingsUndoButtonDisabled,
+                    historyButtonDisabled && styles.settingsUndoButtonDisabled,
                     pressed && styles.settingsUndoButtonPressed,
                   ]}
                 >
                   <Ionicons
-                    color={undoHistoryCount === 0 ? '#B8B0A8' : NAV_ACCENT}
-                    name="arrow-undo"
+                    color={historyButtonDisabled ? '#B8B0A8' : NAV_ACCENT}
+                    name={historyButtonIcon}
                     size={16}
                   />
                   <Text
                     style={[
                       styles.settingsUndoButtonText,
-                      undoHistoryCount === 0 && styles.settingsUndoButtonTextDisabled,
+                      historyButtonDisabled && styles.settingsUndoButtonTextDisabled,
                     ]}
                   >
-                    {undoHistoryCount > 0 ? `Undo ${undoHistoryCount}` : 'Undo'}
+                    {historyButtonCount > 0
+                      ? `${historyButtonText} ${historyButtonCount}`
+                      : 'Undo'}
                   </Text>
                 </Pressable>
                 <Pressable
@@ -12871,7 +13291,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Backup</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      Google Drive · 10 production slots · 10 test slots
+                      Google Drive · up to {DRIVE_BACKUP_SLOT_LIMIT} {DRIVE_BACKUP_VARIANT_LOWER_LABEL} backups
                     </Text>
                   </View>
                   <Pressable
@@ -12902,7 +13322,7 @@ export default function App() {
                       <View style={styles.settingsRowTextWrap}>
                         <Text style={styles.settingsRowTitle}>Backup all data</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          {activeTodoCount} items · {countFilters(selectedFilters)} filters · restore any slot
+                          {activeTodoCount} items · {countFilters(selectedFilters)} filters · restore any backup
                         </Text>
                       </View>
                       <View
@@ -12924,7 +13344,7 @@ export default function App() {
 
                     {!googleOAuthConfigured ? (
                       <Text style={styles.settingsWarningText}>
-                        Google sign-in is not configured for this build. Add the EXPO_PUBLIC_GOOGLE_* client IDs and rebuild.
+                        Google sign-in is not configured for this {DRIVE_BACKUP_VARIANT_LOWER_LABEL} build. {DRIVE_BACKUP_CONFIG_HINT}
                       </Text>
                     ) : null}
 
@@ -12939,7 +13359,9 @@ export default function App() {
                         pressed && styles.settingsOptionRowPressed,
                       ]}
                     >
-                      <Text style={styles.settingsOptionText}>Auto backup to slot 1</Text>
+                      <Text style={styles.settingsOptionText}>
+                        Auto backup new snapshots
+                      </Text>
                       <Text style={styles.settingsOptionValue}>
                         {googleDriveBackupEnabled ? 'Enabled' : 'Disabled'}
                       </Text>
@@ -12956,7 +13378,7 @@ export default function App() {
                       ]}
                     >
                       <Text style={styles.settingsPrimaryButtonText}>
-                        {googleDriveBusy ? 'Working...' : 'Back up production slot'}
+                        {googleDriveBusy ? 'Working...' : `Backup ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} data`}
                       </Text>
                     </Pressable>
 
@@ -12970,43 +13392,25 @@ export default function App() {
                         pressed && styles.settingsSecondaryButtonPressed,
                       ]}
                     >
-                      <Text style={styles.settingsRestoreButtonText}>Restore production slot</Text>
+                      <Text style={styles.settingsRestoreButtonText}>
+                        Restore {DRIVE_BACKUP_VARIANT_LOWER_LABEL} data
+                      </Text>
                     </Pressable>
 
-                    <View style={styles.settingsBackupTestBlock}>
-                      <View style={styles.settingsRowTextWrap}>
-                        <Text style={styles.settingsRowTitle}>Test slots</Text>
-                        <Text style={styles.settingsRowSubtitle}>
-                          10 separate slots for trial restores and experiments.
-                        </Text>
-                      </View>
-
-                      <Pressable
-                        accessibilityRole="button"
-                        disabled={googleDriveBusy || !googleDriveActionReady}
-                        onPress={backupToGoogleDriveTest}
-                        style={({ pressed }) => [
-                          styles.settingsRestoreButton,
-                          (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
-                          pressed && styles.settingsSecondaryButtonPressed,
-                        ]}
-                      >
-                        <Text style={styles.settingsRestoreButtonText}>Back up test slot</Text>
-                      </Pressable>
-
-                      <Pressable
-                        accessibilityRole="button"
-                        disabled={googleDriveBusy || !googleDriveActionReady}
-                        onPress={restoreFromGoogleDriveTest}
-                        style={({ pressed }) => [
-                          styles.settingsRestoreButton,
-                          (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
-                          pressed && styles.settingsSecondaryButtonPressed,
-                        ]}
-                      >
-                        <Text style={styles.settingsRestoreButtonText}>Restore test slot</Text>
-                      </Pressable>
-                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={googleDriveBusy || !googleDriveActionReady}
+                      onPress={showGoogleDriveBackups}
+                      style={({ pressed }) => [
+                        styles.settingsRestoreButton,
+                        (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                        pressed && styles.settingsSecondaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsRestoreButtonText}>
+                        Show {DRIVE_BACKUP_VARIANT_LOWER_LABEL} backups
+                      </Text>
+                    </Pressable>
 
                     {googleConnected ? (
                       <Pressable
@@ -13210,52 +13614,6 @@ export default function App() {
 
                 {settingsListsExpanded ? (
                   <View style={styles.settingsCard}>
-                    {quickPresetNavItems.length > 0 ? (
-                      <View style={styles.settingsNavbarShortcutSection}>
-                        <Text style={styles.settingsListMenuOrderTitle}>Navbar shortcuts</Text>
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={styles.settingsNavbarShortcutList}
-                        >
-                          {quickPresetNavItems.map((item) => (
-                            <Pressable
-                              accessibilityLabel={
-                                item.preset
-                                  ? `Apply navbar shortcut ${item.preset.label}`
-                                  : `Navbar shortcut slot ${item.slotNumber}`
-                              }
-                              accessibilityRole="button"
-                              disabled={!item.preset}
-                              key={item.id}
-                              onPress={() => {
-                                if (item.preset) {
-                                  applyQuickPresetNavPreset(item.preset, item.slotNumber, Date.now());
-                                }
-                              }}
-                              style={({ pressed }) => [
-                                styles.settingsNavbarShortcutChip,
-                                !item.preset && styles.settingsButtonDisabled,
-                                pressed && styles.settingsOptionRowPressed,
-                              ]}
-                            >
-                              <MaterialCommunityIcons
-                                color={item.preset ? THEME_ACCENT : THEME_TEXT_TERTIARY}
-                                name={toMaterialCommunityIconName(item.iconName)}
-                                size={17}
-                              />
-                              <Text
-                                numberOfLines={1}
-                                style={styles.settingsNavbarShortcutText}
-                              >
-                                {item.preset?.label ?? `Slot ${item.slotNumber}`}
-                              </Text>
-                            </Pressable>
-                          ))}
-                        </ScrollView>
-                      </View>
-                    ) : null}
-
                     <View style={styles.settingsAddListRow}>
                       <TextInput
                         autoCapitalize="words"
@@ -13283,7 +13641,7 @@ export default function App() {
 
                     <Text style={styles.settingsListReorderHint}>
                       {listMenuTree.length > 1
-                        ? 'Tap the handle on one list, then another to swap. Swipe left to delete.'
+                        ? 'Tap the handle on one list, then another to swap. Swipe left to delete. Pin to show in navbar.'
                         : 'Swipe left to delete. Pin to show in navbar.'}
                     </Text>
 
@@ -13419,7 +13777,7 @@ export default function App() {
                     <View style={styles.settingsRowTextWrap}>
                       <Text style={styles.settingsSectionTitle}>Dev test data</Text>
                       <Text style={styles.settingsSectionSubtitle}>
-                        {devTestTodoCount}/{DEV_TEST_TODO_COUNT} todos · {devTestMenuPresetCount}/{DEV_TEST_MENU_PRESET_COUNT} presets · {devTestListMenuNodeCount} seed lists
+                        {devTestTodoCount}/{DEV_TEST_TODO_COUNT} todos · {devTestMenuPresetCount}/{DEV_TEST_MENU_PRESET_COUNT} saved lists · {devTestListMenuNodeCount} seed lists
                       </Text>
                     </View>
                   </View>
@@ -13471,83 +13829,75 @@ export default function App() {
           transparent
           visible={googleDriveBackupPicker !== null}
         >
-          <View style={styles.presetSaveModalBackdrop}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss Google Drive backup picker"
-              onPress={closeGoogleDriveBackupPicker}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.presetSaveModalCenter}>
-              <View style={[styles.presetSaveModalCard, styles.googleDrivePickerCard]}>
+          <GestureHandlerRootView style={styles.googleDrivePickerModalRoot}>
+            <View style={styles.presetSaveModalBackdrop}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss Google Drive backup picker"
+                onPress={closeGoogleDriveBackupPicker}
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={styles.presetSaveModalCenter}>
+              <View
+                style={[
+                  styles.presetSaveModalCard,
+                  styles.googleDrivePickerCard,
+                  { height: googleDrivePickerModalLayout.cardHeight },
+                ]}
+              >
                 {googleDriveBackupPicker ? (
                   <>
                     <Text style={styles.presetSaveModalTitle}>
                       {googleDriveBackupPicker.mode === 'backup'
-                        ? googleDriveBackupPicker.scope === 'test'
-                          ? 'Back up test slot'
-                          : 'Back up production slot'
-                        : googleDriveBackupPicker.scope === 'test'
-                          ? 'Restore test slot'
-                          : 'Restore production slot'}
+                        ? `Backup ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} data`
+                        : googleDriveBackupPicker.mode === 'restore'
+                          ? `Restore ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} data`
+                          : `${DRIVE_BACKUP_VARIANT_LABEL} backups`}
                     </Text>
                     <Text style={styles.presetSaveModalMessage}>
                       {googleDriveBackupPicker.mode === 'backup'
-                        ? `Choose 1 of ${DRIVE_BACKUP_SLOT_COUNT} slots. Empty slots save a new snapshot; filled slots are replaced.`
-                        : googleDriveBackupPicker.scope === 'test'
-                          ? 'Choose a filled test slot to restore.'
-                          : 'Choose a filled production slot to restore.'}
+                        ? `Each backup creates a new snapshot. The oldest is removed after ${DRIVE_BACKUP_SLOT_LIMIT}.`
+                        : googleDriveBackupPicker.mode === 'restore'
+                          ? `Choose a saved ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup to restore.`
+                          : `Swipe left on a backup to delete it from Google Drive.`}
                     </Text>
 
-                    <ScrollView
+                    <GestureScrollView
+                      ref={googleDriveBackupPickerScrollRef}
                       contentContainerStyle={styles.googleDrivePickerListContent}
+                      directionalLockEnabled
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={googleDriveBackupPicker.slots.length > 6}
                       style={styles.googleDrivePickerList}
                     >
-                      {googleDriveBackupPicker.slots.map((slot) => {
+                      {googleDriveBackupPicker.slots.length === 0 ? (
+                        <Text style={styles.googleDrivePickerEmptyText}>
+                          No saved {DRIVE_BACKUP_VARIANT_LOWER_LABEL} backups
+                        </Text>
+                      ) : googleDriveBackupPicker.slots.map((slot) => {
+                        const isManageMode = googleDriveBackupPicker.mode === 'manage';
                         const disabled =
                           googleDriveBackupPicker.mode === 'restore' && !slot.file;
+                        const actionLabel = googleDriveBackupPicker.mode === 'backup'
+                          ? 'Save'
+                          : googleDriveBackupPicker.mode === 'restore'
+                            ? slot.file ? 'Restore' : 'Empty'
+                            : 'Saved';
+
                         return (
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityState={{ disabled }}
+                          <MemoizedGoogleDriveBackupSlotRow
+                            actionLabel={actionLabel}
                             disabled={disabled}
                             key={slot.slot}
+                            listOnly={isManageMode}
                             onPress={() => resolveGoogleDriveBackupPicker({ slot, type: 'slot' })}
-                            style={({ pressed }) => [
-                              styles.googleDrivePickerChoice,
-                              slot.file && styles.googleDrivePickerChoiceFilled,
-                              disabled && styles.googleDrivePickerChoiceDisabled,
-                              pressed && styles.googleDrivePickerChoicePressed,
-                            ]}
-                          >
-                            <View style={styles.googleDrivePickerChoiceTextWrap}>
-                              <Text
-                                numberOfLines={1}
-                                style={styles.googleDrivePickerChoiceTitle}
-                              >
-                                {formatDriveBackupSlotTitle(slot)}
-                              </Text>
-                              <Text
-                                numberOfLines={2}
-                                style={styles.googleDrivePickerChoiceSubtitle}
-                              >
-                                {formatDriveBackupSlotSubtitle(slot)}
-                              </Text>
-                            </View>
-                            <Text
-                              style={[
-                                styles.googleDrivePickerChoiceAction,
-                                disabled && styles.googleDrivePickerChoiceActionDisabled,
-                              ]}
-                            >
-                              {googleDriveBackupPicker.mode === 'backup'
-                                ? slot.file ? 'Replace' : 'Save'
-                                : slot.file ? 'Restore' : 'Empty'}
-                            </Text>
-                          </Pressable>
+                            onDelete={() => deleteGoogleDriveBackupSlot(slot)}
+                            scrollGestureRef={googleDriveBackupPickerScrollRef}
+                            slot={slot}
+                          />
                         );
                       })}
-                    </ScrollView>
+                    </GestureScrollView>
 
                     <View style={styles.presetSaveModalActions}>
                       <Pressable
@@ -13559,7 +13909,9 @@ export default function App() {
                           pressed && styles.presetSaveModalButtonPressed,
                         ]}
                       >
-                        <Text style={styles.presetSaveModalButtonSecondaryText}>Cancel</Text>
+                        <Text style={styles.presetSaveModalButtonSecondaryText}>
+                          {googleDriveBackupPicker.mode === 'manage' ? 'Done' : 'Cancel'}
+                        </Text>
                       </Pressable>
                     </View>
                   </>
@@ -13567,6 +13919,7 @@ export default function App() {
               </View>
             </View>
           </View>
+          </GestureHandlerRootView>
         </Modal>
         <Modal
           animationType="fade"
@@ -13578,7 +13931,7 @@ export default function App() {
           <View style={styles.presetSaveModalBackdrop}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Dismiss save preset dialog"
+              accessibilityLabel="Dismiss save list dialog"
               onPress={closePresetSaveModal}
               style={StyleSheet.absoluteFill}
             />
@@ -13587,9 +13940,9 @@ export default function App() {
               style={styles.presetSaveModalCenter}
             >
               <View style={styles.presetSaveModalCard}>
-                <Text style={styles.presetSaveModalTitle}>Save preset</Text>
+                <Text style={styles.presetSaveModalTitle}>Save list</Text>
                 <Text style={styles.presetSaveModalMessage}>
-                  Enter a name for this preset.
+                  Enter a name for this list.
                 </Text>
                 <TextInput
                   ref={presetSaveInputRef}
@@ -13600,7 +13953,7 @@ export default function App() {
                   onSubmitEditing={(event) => {
                     commitMenuPreset(event.nativeEvent.text || presetSaveName);
                   }}
-                  placeholder="Preset name"
+                  placeholder="List name"
                   placeholderTextColor="#A69D94"
                   returnKeyType="done"
                   selectTextOnFocus
@@ -13700,7 +14053,7 @@ export default function App() {
                 >
                   {searchKeywordEditTarget?.kind === 'list'
                     ? 'Hidden words for matching this list from Search.'
-                    : 'Hidden words for matching this preset from Search.'}
+                    : 'Hidden words for matching this list from Search.'}
                 </Text>
                 <TextInput
                   ref={presetSearchKeywordInputRef}
@@ -14100,18 +14453,49 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     paddingTop: 10,
   },
+  googleDrivePickerModalRoot: {
+    flex: 1,
+  },
   googleDrivePickerCard: {
-    maxHeight: '82%',
+    flexDirection: 'column',
+    width: '100%',
   },
   googleDrivePickerList: {
+    flex: 1,
     marginHorizontal: -4,
     marginTop: 12,
-    maxHeight: 340,
+    minHeight: 0,
   },
   googleDrivePickerListContent: {
     gap: 8,
     paddingHorizontal: 4,
     paddingVertical: 2,
+  },
+  googleDrivePickerSwipeShell: {
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  googleDrivePickerSwipeContainer: {
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  googleDrivePickerSwipeChildren: {
+    backgroundColor: THEME_BG,
+  },
+  googleDrivePickerSwipeActions: {
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    minHeight: 62,
+    width: BACKUP_SLOT_SWIPE_DELETE_WIDTH,
+  },
+  googleDrivePickerSwipeDelete: {
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    justifyContent: 'center',
+    minHeight: 62,
+    width: BACKUP_SLOT_SWIPE_DELETE_WIDTH,
   },
   googleDrivePickerChoice: {
     alignItems: 'center',
@@ -14514,38 +14898,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 2,
   },
-  settingsNavbarShortcutSection: {
-    borderBottomColor: '#F2EBE3',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    marginBottom: 14,
-    paddingBottom: 14,
-  },
-  settingsNavbarShortcutList: {
-    alignItems: 'center',
-    gap: 8,
-    paddingRight: 2,
-    paddingTop: 10,
-  },
-  settingsNavbarShortcutChip: {
-    alignItems: 'center',
-    backgroundColor: '#F7F3EE',
-    borderColor: '#E8E2DA',
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 7,
-    maxWidth: 156,
-    minHeight: 34,
-    paddingHorizontal: 10,
-  },
-  settingsNavbarShortcutText: {
-    color: THEME_ACCENT,
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    letterSpacing: 0.1,
-    lineHeight: 17,
-    maxWidth: 108,
-  },
   settingsListEditor: {
     borderTopColor: '#F2EBE3',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -14604,8 +14956,8 @@ const styles = StyleSheet.create({
   settingsListIconButton: {
     alignItems: 'center',
     alignSelf: 'center',
-    backgroundColor: '#F7F3EE',
-    borderColor: '#E4DED6',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_TEXT,
     borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexShrink: 0,
@@ -14661,9 +15013,10 @@ const styles = StyleSheet.create({
   },
   settingsListIconButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT,
   },
   settingsListIconChoicesScroll: {
-    borderTopColor: '#F7F1EA',
+    borderTopColor: THEME_ACCENT_SOFT,
     borderTopWidth: StyleSheet.hairlineWidth,
     marginTop: -2,
     maxHeight: 300,
@@ -14673,11 +15026,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingTop: 10,
   },
+  settingsListIconChoicesHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: 8,
+  },
+  settingsListIconCloseButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_TEXT,
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 34,
+    justifyContent: 'center',
+    width: 36,
+  },
   settingsListIconGroup: {
     marginTop: 12,
   },
   settingsListIconGroupTitle: {
-    color: THEME_TEXT_SECONDARY,
+    color: THEME_TEXT,
     fontSize: 11,
     fontWeight: FONT_MEDIUM,
     letterSpacing: 0.2,
@@ -14692,8 +15061,8 @@ const styles = StyleSheet.create({
   },
   settingsListIconChoiceButton: {
     alignItems: 'center',
-    backgroundColor: '#F7F3EE',
-    borderColor: '#E4DED6',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_TEXT,
     borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     height: 34,
@@ -14705,8 +15074,8 @@ const styles = StyleSheet.create({
     borderColor: THEME_ACCENT,
   },
   settingsListIconChoiceEmpty: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#DAD3CB',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_TEXT,
     borderRadius: 5,
     borderWidth: StyleSheet.hairlineWidth,
     height: 12,
@@ -15097,12 +15466,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: 0.1,
   },
-  settingsBackupTestBlock: {
-    borderTopColor: '#F2EBE3',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    marginTop: 14,
-    paddingTop: 14,
-  },
   settingsRestoreButton: {
     minHeight: 48,
     borderRadius: 14,
@@ -15189,6 +15552,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     height: 36,
     justifyContent: 'center',
+    position: 'relative',
     width: 36,
   },
   appHeaderUndoButtonAvailable: {
@@ -15196,6 +15560,23 @@ const styles = StyleSheet.create({
   },
   appHeaderUndoButtonDisabled: {
     opacity: 0.46,
+  },
+  appHeaderUndoCountBadge: {
+    backgroundColor: NAV_ACCENT,
+    borderColor: THEME_CARD,
+    borderRadius: 9,
+    borderWidth: 1,
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 14,
+    minWidth: 17,
+    overflow: 'hidden',
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -3,
+    textAlign: 'center',
+    top: -3,
   },
   appHeaderCreateFromSettingsCue: {
     alignItems: 'center',
@@ -15582,12 +15963,23 @@ const styles = StyleSheet.create({
     minHeight: 28,
     paddingBottom: 4,
     paddingTop: 8,
+    position: 'relative',
   },
   menuDragPill: {
     backgroundColor: '#D8D0C8',
     borderRadius: 999,
     height: 5,
     width: 42,
+  },
+  listMenuHeaderSaveButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 34,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 4,
+    top: 3,
+    width: 34,
   },
   listMenuFooterButton: {
     minHeight: 50,

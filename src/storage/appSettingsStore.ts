@@ -14,6 +14,10 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
+  normalizeMaterialCommunityIconName,
+  resolveMaterialCommunityIconName,
+} from '../materialCommunityIconNames';
+import {
   cloneDeletedTodos,
   cloneTodoFilters,
   formatListLabel,
@@ -28,7 +32,13 @@ const STORAGE_KEY = 'local-todo.settings.v1';
 
 export type ListOrderMode = 'alphabetical' | 'manual';
 export type TodoGroupMode = 'date' | 'list' | 'none' | 'priority' | 'status';
-export type TodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' | 'priority';
+export type TodoSortMode =
+  | 'alphabetical'
+  | 'date'
+  | 'newest'
+  | 'oldest'
+  | 'priority'
+  | 'priorityDate';
 
 export type StoredListMenuNode = {
   label: string;
@@ -53,6 +63,7 @@ export type StoredMenuPreset = {
   id: string;
   label: string;
   searchKeywords?: string;
+  metaTagVisibility?: MetaTagVisibility;
   filters: TodoFilters;
   requiredFilters: TodoFilters;
   avoidedFilters: TodoFilters;
@@ -68,6 +79,7 @@ export type StoredMenuPreset = {
 export type StoredMenuPresetSection = {
   id: string;
   label: string;
+  metaTagVisibility?: MetaTagVisibility;
   filters: TodoFilters;
   requiredFilters: TodoFilters;
   avoidedFilters: TodoFilters;
@@ -178,17 +190,21 @@ export type AppSettings = {
 };
 
 export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNode[] =>
-  nodes.map((node) => ({
-    label: node.label,
-    ...(node.iconName ? { iconName: node.iconName } : {}),
-    ...(node.showInNavbar === false ? { showInNavbar: false } : {}),
-    ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
-    sortMode: node.sortMode,
-    groupMode: node.groupMode,
-    subsectionSortMode: node.subsectionSortMode,
-    subsectionGroupMode: node.subsectionGroupMode,
-    children: node.children ? cloneListMenuTree(node.children) : undefined,
-  }));
+  nodes.map((node) => {
+    const iconName = normalizeMaterialCommunityIconName(node.iconName);
+
+    return {
+      label: node.label,
+      ...(iconName ? { iconName } : {}),
+      ...(node.showInNavbar === false ? { showInNavbar: false } : {}),
+      ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
+      sortMode: node.sortMode,
+      groupMode: node.groupMode,
+      subsectionSortMode: node.subsectionSortMode,
+      subsectionGroupMode: node.subsectionGroupMode,
+      children: node.children ? cloneListMenuTree(node.children) : undefined,
+    };
+  });
 
 export const cloneMenuPresetSections = (
   sections: StoredMenuPresetSection[] = [],
@@ -196,6 +212,9 @@ export const cloneMenuPresetSections = (
   sections.map((section) => ({
     id: section.id,
     label: section.label,
+    ...(section.metaTagVisibility
+      ? { metaTagVisibility: cloneMetaTagVisibility(section.metaTagVisibility) }
+      : {}),
     filters: cloneTodoFilters(section.filters),
     requiredFilters: pruneTodoFilters(section.requiredFilters, section.filters),
     avoidedFilters: cloneTodoFilters(section.avoidedFilters),
@@ -213,6 +232,9 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
       id: preset.id,
       label: preset.label,
       ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
+      ...(preset.metaTagVisibility
+        ? { metaTagVisibility: cloneMetaTagVisibility(preset.metaTagVisibility) }
+        : {}),
       filters: cloneTodoFilters(preset.filters),
       requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
       avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
@@ -241,19 +263,12 @@ export const cloneQuickPresetNavPresetIds = (
   presetIds: QuickPresetNavPresetIds,
 ): QuickPresetNavPresetIds => normalizeQuickPresetNavPresetIds(presetIds);
 
-const QUICK_PRESET_NAV_ICON_NAME_PATTERN = /^[a-z0-9-]+$/i;
-
 const normalizeQuickPresetNavIconName = (value: unknown, index: number): string => {
-  if (
-    typeof value === 'string' &&
-    QUICK_PRESET_NAV_ICON_NAME_PATTERN.test(value.trim())
-  ) {
-    return value.trim();
-  }
-
-  return DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+  const fallbackIconName = DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
     index % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
   ] ?? 'star-four-points';
+
+  return resolveMaterialCommunityIconName(value, fallbackIconName);
 };
 
 export const normalizeQuickPresetNavIconNames = (
@@ -435,7 +450,8 @@ const normalizeTodoSortMode = (value: unknown): TodoSortMode => {
     value === 'date' ||
     value === 'newest' ||
     value === 'oldest' ||
-    value === 'priority'
+    value === 'priority' ||
+    value === 'priorityDate'
   ) {
     return value;
   }
@@ -458,7 +474,8 @@ const parseOptionalTodoSortMode = (value: unknown): TodoSortMode | undefined => 
     value === 'date' ||
     value === 'newest' ||
     value === 'oldest' ||
-    value === 'priority'
+    value === 'priority' ||
+    value === 'priorityDate'
   ) {
     return value;
   }
@@ -716,9 +733,7 @@ const normalizeListMenuTreeNodes = (
       const groupMode = parseOptionalTodoGroupMode(item.groupMode);
       const subsectionSortMode = parseOptionalTodoSortMode(item.subsectionSortMode);
       const subsectionGroupMode = parseOptionalTodoGroupMode(item.subsectionGroupMode);
-      const iconName = typeof item.iconName === 'string' && item.iconName.trim()
-        ? item.iconName.trim()
-        : undefined;
+      const iconName = normalizeMaterialCommunityIconName(item.iconName);
       const showInNavbar = item.showInNavbar === false ? false : undefined;
       const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
 
@@ -776,6 +791,7 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         return {
           id,
           label,
+          metaTagVisibility: normalizeMetaTagVisibility(section.metaTagVisibility),
           filters,
           requiredFilters: pruneTodoFilters(normalizeTodoFilters(section.requiredFilters), filters),
           avoidedFilters: normalizeTodoFilters(section.avoidedFilters),
@@ -799,7 +815,7 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         : `preset-${index + 1}`;
       const label = typeof item.label === 'string' && item.label.trim()
         ? item.label.trim()
-        : `Preset ${index + 1}`;
+        : `List ${index + 1}`;
       const createdAt = typeof item.createdAt === 'number' && Number.isFinite(item.createdAt)
         ? item.createdAt
         : 0;
@@ -811,6 +827,7 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
         id,
         label,
         ...(searchKeywords ? { searchKeywords } : {}),
+        metaTagVisibility: normalizeMetaTagVisibility(item.metaTagVisibility),
         filters,
         requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
         avoidedFilters: normalizeTodoFilters(item.avoidedFilters),

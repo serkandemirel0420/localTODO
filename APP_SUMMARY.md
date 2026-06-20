@@ -462,21 +462,21 @@ Backups do not include OAuth tokens.
 
 Current backup behavior:
 
-- 10 production backup slots.
-- 10 test backup slots.
+- Unlimited numbered backup slots.
 - Slot picker for backup.
 - Slot picker for restore.
+- The picker shows saved slots plus the next empty slot for a new snapshot.
 - Empty restore slots are disabled.
 - Backing up to a filled slot replaces that slot.
+- Saved slots can be deleted from the picker with a left swipe and confirmation.
 - Automatic backup writes to slot 1.
 - Legacy one-file and timestamped backups are still restorable through slot 1.
 
-Production and test scopes use different basenames. Dev builds use a dev
-production basename so local testing cannot overwrite installed production app
-backup data.
+Dev builds use a dev production basename so local testing cannot overwrite
+installed production app backup data.
 
 Backup/restore must preserve list navbar visibility. `showInNavbar` is part of
-the list tree and should round-trip through both production and test backups.
+the list tree and should round-trip through Drive backups.
 
 ## Development Test Data
 
@@ -567,9 +567,9 @@ when todos change and when the app resumes.
 
 ### Backup Work
 
-Use Settings > Backup for Google Drive backup/restore. Choose production slots
-for real app snapshots and test slots for trial restores. Do not overwrite a
-filled slot unless replacing that version is intentional.
+Use Settings > Backup for Google Drive backup/restore. Choose an empty slot for
+a new snapshot or a filled slot to replace that version intentionally. Swipe a
+saved backup left in the picker when a specific Drive backup should be deleted.
 
 ## Architecture Responsibilities
 

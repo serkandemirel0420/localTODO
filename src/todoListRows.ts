@@ -13,6 +13,7 @@ import {
 import { getEffectiveTodoDateLabels } from './todoDates';
 import { type Todo } from './todos';
 import {
+  findListMenuNode,
   getListSubsectionContext,
   type ListSubsectionContext,
   type StoredListMenuNode,
@@ -78,6 +79,11 @@ type TodoGroup = {
   rank: number;
 };
 
+type TodoGroupBucket = TodoGroup & {
+  firstTodoIndex: number;
+  todos: Todo[];
+};
+
 const getListGroupRank = (label: string, orderedListLabels: string[]) => {
   const rank = orderedListLabels.indexOf(label);
   return rank >= 0 ? rank : orderedListLabels.length + 1;
@@ -99,8 +105,10 @@ const getTodoListGroupForLabel = (
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
 ): TodoGroup => {
+  const normalizedLabel = label.toLocaleLowerCase();
+
   for (const parent of listMenuTree) {
-    if (parent.label === label) {
+    if (parent.label.toLocaleLowerCase() === normalizedLabel) {
       return parent.children?.length
         ? createListGroup(
           `${parent.label}::${NOT_SECTIONED_LABEL}`,
@@ -111,13 +119,94 @@ const getTodoListGroupForLabel = (
         : createListGroup(parent.label, parent.label, orderedListLabels);
     }
 
-    const child = parent.children?.find((item) => item.label === label);
+    const child = parent.children?.find((item) => (
+      item.label.toLocaleLowerCase() === normalizedLabel
+    ));
     if (child) {
       return createListGroup(child.label, child.label, orderedListLabels);
     }
   }
 
   return createListGroup(label, label, orderedListLabels);
+};
+
+export const collectListGroupsFromMenuTree = (
+  listMenuTree: StoredListMenuNode[],
+  orderedListLabels: string[],
+): TodoGroup[] => {
+  const groups: TodoGroup[] = [];
+  const seenKeys = new Set<string>();
+
+  const addGroup = (group: TodoGroup) => {
+    if (seenKeys.has(group.key)) {
+      return;
+    }
+
+    seenKeys.add(group.key);
+    groups.push(group);
+  };
+
+  for (const parent of listMenuTree) {
+    if (!parent.children?.length) {
+      addGroup(createListGroup(parent.label, parent.label, orderedListLabels));
+      continue;
+    }
+
+    parent.children.forEach((child) => {
+      addGroup(createListGroup(child.label, child.label, orderedListLabels));
+    });
+
+    addGroup(createListGroup(
+      `${parent.label}::${NOT_SECTIONED_LABEL}`,
+      NOT_SECTIONED_LABEL,
+      orderedListLabels,
+      parent.label,
+    ));
+  }
+
+  addGroup(createListGroup('No list', 'No list', orderedListLabels));
+
+  return groups;
+};
+
+const collectListGroupsForLabels = (
+  labels: string[],
+  listMenuTree: StoredListMenuNode[],
+  orderedListLabels: string[],
+): TodoGroup[] => {
+  const groups: TodoGroup[] = [];
+  const seenKeys = new Set<string>();
+
+  const addGroup = (group: TodoGroup) => {
+    if (seenKeys.has(group.key)) {
+      return;
+    }
+
+    seenKeys.add(group.key);
+    groups.push(group);
+  };
+
+  labels.forEach((label) => {
+    const node = findListMenuNode(listMenuTree, label);
+
+    if (!node?.children?.length) {
+      addGroup(getTodoListGroupForLabel(label, orderedListLabels, listMenuTree));
+      return;
+    }
+
+    node.children.forEach((child) => {
+      addGroup(createListGroup(child.label, child.label, orderedListLabels));
+    });
+
+    addGroup(createListGroup(
+      `${node.label}::${NOT_SECTIONED_LABEL}`,
+      NOT_SECTIONED_LABEL,
+      orderedListLabels,
+      node.label,
+    ));
+  });
+
+  return groups;
 };
 
 const shouldGapBeforeVisibleRow = (
@@ -280,6 +369,13 @@ const compareTodosByPinned = (first: Todo, second: Todo) =>
 const getTodoRowEstimate = (todo: Todo, baseEstimate: number) =>
   todo.content.trim() ? baseEstimate + TODO_CONTENT_ROW_ESTIMATE : baseEstimate;
 
+const compareTodosByPriorityRank = (first: Todo, second: Todo) =>
+  getFilterRank(first.filters.priority, PRIORITY_MENU_ITEMS) -
+  getFilterRank(second.filters.priority, PRIORITY_MENU_ITEMS);
+
+const compareTodosByDateRank = (first: Todo, second: Todo, now = new Date()) =>
+  getTodoDateSortRank(first, now) - getTodoDateSortRank(second, now);
+
 export const compareTodosBySortMode = (
   first: Todo,
   second: Todo,
@@ -305,16 +401,20 @@ export const compareTodosBySortMode = (
   }
 
   if (sortMode === 'priority') {
+    return compareTodosByPriorityRank(first, second) || compareTodosByFallback(first, second);
+  }
+
+  if (sortMode === 'priorityDate') {
     return (
-      getFilterRank(first.filters.priority, PRIORITY_MENU_ITEMS) -
-      getFilterRank(second.filters.priority, PRIORITY_MENU_ITEMS) ||
+      compareTodosByPriorityRank(first, second) ||
+      compareTodosByDateRank(first, second, now) ||
       compareTodosByFallback(first, second)
     );
   }
 
   if (sortMode === 'date') {
     return (
-      getTodoDateSortRank(first, now) - getTodoDateSortRank(second, now) ||
+      compareTodosByDateRank(first, second, now) ||
       compareTodosByFallback(first, second)
     );
   }
@@ -326,7 +426,7 @@ export const createTodoSortComparator = (
   sortMode: TodoSortMode,
   now = new Date(),
 ) => {
-  if (sortMode !== 'date') {
+  if (sortMode !== 'date' && sortMode !== 'priorityDate') {
     return (first: Todo, second: Todo) => (
       compareTodosBySortMode(first, second, sortMode, now)
     );
@@ -347,11 +447,18 @@ export const createTodoSortComparator = (
   return (first: Todo, second: Todo) => {
     const pinnedCompare = compareTodosByPinned(first, second);
 
-    return (
-      pinnedCompare ||
-      getCachedDateRank(first) - getCachedDateRank(second) ||
-      compareTodosByFallback(first, second)
-    );
+    const dateCompare = getCachedDateRank(first) - getCachedDateRank(second);
+
+    if (sortMode === 'priorityDate') {
+      return (
+        pinnedCompare ||
+        compareTodosByPriorityRank(first, second) ||
+        dateCompare ||
+        compareTodosByFallback(first, second)
+      );
+    }
+
+    return pinnedCompare || dateCompare || compareTodosByFallback(first, second);
   };
 };
 
@@ -363,43 +470,18 @@ const getTodoListGroupLabels = (
   const groups: TodoGroup[] = [];
   const seenKeys = new Set<string>();
 
-  const addGroup = (key: string, label: string, rankLabel = label) => {
-    if (seenKeys.has(key)) {
+  todo.filters.list.forEach((label) => {
+    const group = getTodoListGroupForLabel(label, orderedListLabels, listMenuTree);
+    if (seenKeys.has(group.key)) {
       return;
     }
 
-    seenKeys.add(key);
-    groups.push(createListGroup(key, label, orderedListLabels, rankLabel));
-  };
-
-  for (const parent of listMenuTree) {
-    if (!parent.children?.length) {
-      if (todo.filters.list.includes(parent.label)) {
-        addGroup(parent.label, parent.label);
-      }
-
-      continue;
-    }
-
-    parent.children.forEach((child) => {
-      if (todo.filters.list.includes(child.label)) {
-        addGroup(child.label, child.label);
-      }
-    });
-
-    if (todo.filters.list.includes(parent.label)) {
-      addGroup(`${parent.label}::${NOT_SECTIONED_LABEL}`, NOT_SECTIONED_LABEL, parent.label);
-    }
-  }
-
-  todo.filters.list.forEach((label) => {
-    if (!orderedListLabels.includes(label)) {
-      addGroup(label, label);
-    }
+    seenKeys.add(group.key);
+    groups.push(group);
   });
 
   if (groups.length === 0) {
-    addGroup('No list', 'No list');
+    groups.push(createListGroup('No list', 'No list', orderedListLabels));
   }
 
   return groups;
@@ -522,13 +604,14 @@ const buildSubsectionRows = (
 const buildGroupedSectionRows = (
   todos: Todo[],
   groupMode: Exclude<TodoGroupMode, 'none'>,
+  sortMode: TodoSortMode,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
   dateLabelDisplayMode: DateLabelDisplayMode,
-  emptyListGroupLabels: string[] = [],
+  seedListGroupLabels: string[] = [],
   now = new Date(),
 ): TodoListRow[] => {
-  const groups = new Map<string, { key: string; label: string; rank: number; todos: Todo[] }>();
+  const groups = new Map<string, TodoGroupBucket>();
   const ensureGroup = (group: TodoGroup) => {
     if (groups.has(group.key)) {
       return;
@@ -538,17 +621,20 @@ const buildGroupedSectionRows = (
       key: group.key,
       label: group.label,
       rank: group.rank,
+      firstTodoIndex: Number.POSITIVE_INFINITY,
       todos: [],
     });
   };
 
-  if (groupMode === 'list') {
-    emptyListGroupLabels.forEach((label) => {
-      ensureGroup(getTodoListGroupForLabel(label, orderedListLabels, listMenuTree));
-    });
+  if (groupMode === 'list' && seedListGroupLabels.length > 0) {
+    collectListGroupsForLabels(
+      seedListGroupLabels,
+      listMenuTree,
+      orderedListLabels,
+    ).forEach(ensureGroup);
   }
 
-  todos.forEach((todo) => {
+  todos.forEach((todo, todoIndex) => {
     getTodoGroups(
       todo,
       groupMode,
@@ -561,6 +647,7 @@ const buildGroupedSectionRows = (
 
       if (existingGroup) {
         existingGroup.todos.push(todo);
+        existingGroup.firstTodoIndex = Math.min(existingGroup.firstTodoIndex, todoIndex);
         return;
       }
 
@@ -568,14 +655,27 @@ const buildGroupedSectionRows = (
         key: group.key,
         label: group.label,
         rank: group.rank,
+        firstTodoIndex: todoIndex,
         todos: [todo],
       });
     });
   });
   const rows: TodoListRow[] = [];
+  const sortDateGroupsByTodoOrder =
+    groupMode === 'date' && (sortMode === 'newest' || sortMode === 'oldest');
 
   [...groups.values()]
-    .sort((first, second) => first.rank - second.rank || first.label.localeCompare(second.label))
+    .sort((first, second) => {
+      if (sortDateGroupsByTodoOrder) {
+        return (
+          first.firstTodoIndex - second.firstTodoIndex ||
+          first.rank - second.rank ||
+          first.label.localeCompare(second.label)
+        );
+      }
+
+      return first.rank - second.rank || first.label.localeCompare(second.label);
+    })
     .forEach((group) => {
       const groupId = `group-${groupMode}-${group.key}`;
 
@@ -588,12 +688,13 @@ const buildGroupedSectionRows = (
 export const buildTodoListRows = (
   todos: Todo[],
   groupMode: TodoGroupMode,
+  sortMode: TodoSortMode,
   orderedListLabels: string[],
   listMenuTree: StoredListMenuNode[],
   selectedListFilters: string[],
   useSubsectionLayout: boolean,
   dateLabelDisplayMode: DateLabelDisplayMode = 'exact',
-  emptyListGroupLabels: string[] = [],
+  seedListGroupLabels: string[] = [],
   now = new Date(),
 ): TodoListRow[] => {
   const subsectionContext = useSubsectionLayout
@@ -615,10 +716,11 @@ export const buildTodoListRows = (
   return buildGroupedSectionRows(
     todos,
     groupMode,
+    sortMode,
     orderedListLabels,
     listMenuTree,
     dateLabelDisplayMode,
-    emptyListGroupLabels,
+    seedListGroupLabels,
     now,
   );
 };

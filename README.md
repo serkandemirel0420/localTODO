@@ -73,9 +73,10 @@ The default Metro port is `8083`. Override it with `make start PORT=8090`.
 Google Drive backup is one action in the app: tap **Back up to Google Drive**,
 Google login opens if permission is needed, then the backup continues. Android
 uses native Google Sign-In authorization; iOS uses the OAuth browser flow. The
-production build uploads `local-todo-backup.json` to Drive `appDataFolder`.
-Development builds use `local-todo-dev-backup.json` so dev and prod restores do
-not overwrite each other.
+production build uploads unlimited `local-todo-backup-slot-NN.json` files to
+Drive `appDataFolder`. Development builds use
+`local-todo-dev-backup-slot-NN.json` so dev and prod restores do not overwrite
+each other.
 
 There is no API key or client secret in the app. Google still requires OAuth
 client IDs so the user can grant Drive permission to each build identity. Create

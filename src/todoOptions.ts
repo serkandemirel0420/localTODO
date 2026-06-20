@@ -1,4 +1,4 @@
-import { DATE_FILTER_PRESETS, OVERDUE_DATE_LABEL } from './dates';
+import { DATE_FILTER_PRESETS, DATED_DATE_LABEL, OVERDUE_DATE_LABEL } from './dates';
 import { REMINDER_PICKER_LABEL, REPEAT_PICKER_LABEL } from './reminders';
 import {
   type TodoGroupMode,
@@ -6,7 +6,11 @@ import {
 } from './storage/appSettingsStore';
 
 export const PRIORITY_MENU_ITEMS = ['High', 'Medium', 'Low', 'None'];
-export const DATE_MENU_ITEMS: string[] = [OVERDUE_DATE_LABEL, ...DATE_FILTER_PRESETS];
+export const DATE_MENU_ITEMS: string[] = [
+  OVERDUE_DATE_LABEL,
+  DATED_DATE_LABEL,
+  ...DATE_FILTER_PRESETS,
+];
 
 /** Date drawer list: presets + custom date + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
@@ -41,6 +45,7 @@ export const TODO_SORT_OPTIONS: Array<{ label: string; mode: TodoSortMode }> = [
   { label: 'Oldest first', mode: 'oldest' },
   { label: 'A to Z', mode: 'alphabetical' },
   { label: 'Priority', mode: 'priority' },
+  { label: 'Priority then date', mode: 'priorityDate' },
   { label: 'Date', mode: 'date' },
 ];
 
@@ -58,6 +63,7 @@ export const TODO_SORT_LABELS: Record<TodoSortMode, string> = {
   newest: 'Newest',
   oldest: 'Oldest',
   priority: 'Priority',
+  priorityDate: 'Priority then date',
 };
 
 export const TODO_GROUP_LABELS: Record<TodoGroupMode, string> = {

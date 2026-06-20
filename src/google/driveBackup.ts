@@ -23,6 +23,7 @@ import {
   normalizeMetaTagVisibility,
   type MetaTagVisibility,
 } from '../metaTags';
+import { normalizeMaterialCommunityIconName } from '../materialCommunityIconNames';
 import {
   cloneFilterConfigUiState,
   cloneQuickPresetNavIconNames,
@@ -41,13 +42,17 @@ export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive
 export const GOOGLE_AUTH_SCOPES = [GOOGLE_DRIVE_APPDATA_SCOPE];
 
 const MAIN_BACKUP_FILE_BASENAME = isDevAppVariant ? 'local-todo-dev-backup' : 'local-todo-backup';
-const TEST_BACKUP_FILE_BASENAME = 'local-todo-test-backup';
 const BACKUP_MIME_TYPE = 'application/json';
-export const DRIVE_BACKUP_SLOT_COUNT = 10;
 
 export type BackupListOrderMode = 'alphabetical' | 'manual';
 export type BackupTodoGroupMode = 'date' | 'list' | 'none' | 'priority' | 'status';
-export type BackupTodoSortMode = 'alphabetical' | 'date' | 'newest' | 'oldest' | 'priority';
+export type BackupTodoSortMode =
+  | 'alphabetical'
+  | 'date'
+  | 'newest'
+  | 'oldest'
+  | 'priority'
+  | 'priorityDate';
 
 export type BackupListMenuNode = {
   label: string;
@@ -65,6 +70,7 @@ export type BackupMenuPreset = {
   id: string;
   label: string;
   searchKeywords?: string;
+  metaTagVisibility?: MetaTagVisibility;
   filters: TodoFilters;
   requiredFilters: TodoFilters;
   avoidedFilters: TodoFilters;
@@ -80,6 +86,7 @@ export type BackupMenuPreset = {
 export type BackupMenuPresetSection = {
   id: string;
   label: string;
+  metaTagVisibility?: MetaTagVisibility;
   filters: TodoFilters;
   requiredFilters: TodoFilters;
   avoidedFilters: TodoFilters;
@@ -145,7 +152,9 @@ export type DriveBackupUploadTarget = {
   type: 'slot';
 };
 
-export type DriveBackupScope = 'main' | 'test';
+export type DriveBackupScope = 'main';
+
+export const DRIVE_BACKUP_SLOT_LIMIT = 50;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -177,7 +186,8 @@ const normalizeBackupTodoSortMode = (value: unknown): BackupTodoSortMode => {
     value === 'date' ||
     value === 'newest' ||
     value === 'oldest' ||
-    value === 'priority'
+    value === 'priority' ||
+    value === 'priorityDate'
   ) {
     return value;
   }
@@ -191,7 +201,8 @@ const parseOptionalBackupTodoSortMode = (value: unknown): BackupTodoSortMode | u
     value === 'date' ||
     value === 'newest' ||
     value === 'oldest' ||
-    value === 'priority'
+    value === 'priority' ||
+    value === 'priorityDate'
   ) {
     return value;
   }
@@ -235,9 +246,7 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
   const groupMode = parseOptionalBackupTodoGroupMode(item.groupMode);
   const subsectionSortMode = parseOptionalBackupTodoSortMode(item.subsectionSortMode);
   const subsectionGroupMode = parseOptionalBackupTodoGroupMode(item.subsectionGroupMode);
-  const iconName = typeof item.iconName === 'string' && item.iconName.trim()
-    ? item.iconName.trim()
-    : undefined;
+  const iconName = normalizeMaterialCommunityIconName(item.iconName);
   const showInNavbar = item.showInNavbar === false ? false : undefined;
   const searchKeywords = typeof item.searchKeywords === 'string'
     ? item.searchKeywords.replace(/\s+/g, ' ').trim()
@@ -257,17 +266,21 @@ const normalizeBackupListMenuNode = (item: Record<string, unknown>): BackupListM
 };
 
 const cloneListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuNode[] =>
-  nodes.map((node) => ({
-    label: node.label,
-    ...(node.iconName ? { iconName: node.iconName } : {}),
-    ...(node.showInNavbar === false ? { showInNavbar: false } : {}),
-    ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
-    sortMode: node.sortMode,
-    groupMode: node.groupMode,
-    subsectionSortMode: node.subsectionSortMode,
-    subsectionGroupMode: node.subsectionGroupMode,
-    children: node.children ? cloneListMenuTree(node.children) : undefined,
-  }));
+  nodes.map((node) => {
+    const iconName = normalizeMaterialCommunityIconName(node.iconName);
+
+    return {
+      label: node.label,
+      ...(iconName ? { iconName } : {}),
+      ...(node.showInNavbar === false ? { showInNavbar: false } : {}),
+      ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
+      sortMode: node.sortMode,
+      groupMode: node.groupMode,
+      subsectionSortMode: node.subsectionSortMode,
+      subsectionGroupMode: node.subsectionGroupMode,
+      children: node.children ? cloneListMenuTree(node.children) : undefined,
+    };
+  });
 
 const cloneMenuPresetSections = (
   sections: BackupMenuPresetSection[] = [],
@@ -275,6 +288,9 @@ const cloneMenuPresetSections = (
   sections.map((section) => ({
     id: section.id,
     label: section.label,
+    ...(section.metaTagVisibility
+      ? { metaTagVisibility: cloneMetaTagVisibility(section.metaTagVisibility) }
+      : {}),
     filters: cloneTodoFilters(section.filters),
     requiredFilters: pruneTodoFilters(section.requiredFilters, section.filters),
     avoidedFilters: cloneTodoFilters(section.avoidedFilters),
@@ -292,6 +308,9 @@ const cloneMenuPresets = (presets: BackupMenuPreset[]): BackupMenuPreset[] =>
       id: preset.id,
       label: preset.label,
       ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
+      ...(preset.metaTagVisibility
+        ? { metaTagVisibility: cloneMetaTagVisibility(preset.metaTagVisibility) }
+        : {}),
       filters: cloneTodoFilters(preset.filters),
       requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
       avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
@@ -311,10 +330,12 @@ const flattenBackupListMenuTree = (nodes: BackupListMenuNode[]): BackupListMenuN
     for (const item of items) {
       const key = item.label.toLocaleLowerCase();
       if (!seen.has(key)) {
+        const iconName = normalizeMaterialCommunityIconName(item.iconName);
+
         seen.add(key);
         flattened.push({
           label: item.label,
-          ...(item.iconName ? { iconName: item.iconName } : {}),
+          ...(iconName ? { iconName } : {}),
           ...(item.showInNavbar === false ? { showInNavbar: false } : {}),
           ...(item.searchKeywords ? { searchKeywords: item.searchKeywords } : {}),
         });
@@ -375,6 +396,7 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
         return {
           id,
           label,
+          metaTagVisibility: normalizeMetaTagVisibility(section.metaTagVisibility),
           filters,
           requiredFilters: pruneTodoFilters(normalizeTodoFilters(section.requiredFilters), filters),
           avoidedFilters: normalizeTodoFilters(section.avoidedFilters),
@@ -398,7 +420,7 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
         : `preset-${index + 1}`;
       const label = typeof item.label === 'string' && item.label.trim()
         ? item.label.trim()
-        : `Preset ${index + 1}`;
+        : `List ${index + 1}`;
       const createdAt = typeof item.createdAt === 'number' && Number.isFinite(item.createdAt)
         ? item.createdAt
         : 0;
@@ -412,6 +434,7 @@ const normalizeBackupMenuPresets = (value: unknown): BackupMenuPreset[] => {
         id,
         label,
         ...(searchKeywords ? { searchKeywords } : {}),
+        metaTagVisibility: normalizeMetaTagVisibility(item.metaTagVisibility),
         filters,
         requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
         avoidedFilters: normalizeTodoFilters(item.avoidedFilters),
@@ -475,32 +498,112 @@ const parseDriveFile = (value: unknown): DriveBackupFile | null => {
   };
 };
 
-const getBackupFileBasename = (scope: DriveBackupScope) =>
-  scope === 'test' ? TEST_BACKUP_FILE_BASENAME : MAIN_BACKUP_FILE_BASENAME;
+const getBackupFileBasename = () => MAIN_BACKUP_FILE_BASENAME;
 
 const padBackupSlot = (slot: number) => String(slot).padStart(2, '0');
 
 const normalizeBackupSlot = (slot: number) => (
-  Number.isInteger(slot) && slot >= 1 && slot <= DRIVE_BACKUP_SLOT_COUNT ? slot : 1
+  Number.isInteger(slot) && slot >= 1 ? slot : 1
 );
 
-const getLegacyBackupFileName = (scope: DriveBackupScope) => `${getBackupFileBasename(scope)}.json`;
+const getLegacyBackupFileName = (_scope: DriveBackupScope) => `${getBackupFileBasename()}.json`;
 
-const getLegacyBackupFileNamePrefix = (scope: DriveBackupScope) =>
-  `${getBackupFileBasename(scope)}-`;
+const getLegacyBackupFileNamePrefix = (_scope: DriveBackupScope) =>
+  `${getBackupFileBasename()}-`;
 
-const getBackupSlotFileName = (scope: DriveBackupScope, slot: number) =>
-  `${getBackupFileBasename(scope)}-slot-${padBackupSlot(normalizeBackupSlot(slot))}.json`;
+const getBackupSlotFileName = (_scope: DriveBackupScope, slot: number) =>
+  `${getBackupFileBasename()}-slot-${padBackupSlot(normalizeBackupSlot(slot))}.json`;
 
-const parseBackupSlotFromFileName = (fileName: string, scope: DriveBackupScope) => {
-  const escapedBasename = getBackupFileBasename(scope).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`^${escapedBasename}-slot-(\\d{2})\\.json$`).exec(fileName);
+const parseBackupSlotFromFileName = (fileName: string, _scope: DriveBackupScope) => {
+  const escapedBasename = getBackupFileBasename().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`^${escapedBasename}-slot-(\\d+)\\.json$`).exec(fileName);
   if (!match) {
     return null;
   }
 
   const slot = Number(match[1]);
-  return Number.isInteger(slot) && slot >= 1 && slot <= DRIVE_BACKUP_SLOT_COUNT ? slot : null;
+  return Number.isInteger(slot) && slot >= 1 ? slot : null;
+};
+
+const compareBackupSlotOldestFirst = (
+  first: DriveBackupSlot,
+  second: DriveBackupSlot,
+) => {
+  const firstModifiedTime = Date.parse(first.file?.modifiedTime ?? '') || 0;
+  const secondModifiedTime = Date.parse(second.file?.modifiedTime ?? '') || 0;
+
+  return firstModifiedTime - secondModifiedTime || first.slot - second.slot;
+};
+
+const compareBackupSlotNewestFirst = (
+  first: DriveBackupSlot,
+  second: DriveBackupSlot,
+) => {
+  if (!first.file && !second.file) {
+    return first.slot - second.slot;
+  }
+
+  if (!first.file) {
+    return 1;
+  }
+
+  if (!second.file) {
+    return -1;
+  }
+
+  const firstModifiedTime = Date.parse(first.file.modifiedTime ?? '') || 0;
+  const secondModifiedTime = Date.parse(second.file.modifiedTime ?? '') || 0;
+
+  return secondModifiedTime - firstModifiedTime || second.slot - first.slot;
+};
+
+const getNextEmptyBackupSlot = (filledSlots: Iterable<number>) => {
+  const filled = new Set(filledSlots);
+  let slot = 1;
+
+  while (slot <= DRIVE_BACKUP_SLOT_LIMIT && filled.has(slot)) {
+    slot += 1;
+  }
+
+  return slot <= DRIVE_BACKUP_SLOT_LIMIT ? slot : null;
+};
+
+const getNextBackupUploadPlan = (slots: DriveBackupSlot[]) => {
+  const filledSlots = slots.filter((slot) => slot.file);
+  const usedSlots = new Set(
+    filledSlots
+      .filter((slot) => slot.slot >= 1 && slot.slot <= DRIVE_BACKUP_SLOT_LIMIT)
+      .map((slot) => slot.slot),
+  );
+  const emptySlot = getNextEmptyBackupSlot(usedSlots);
+  const oldestInLimitSlot = filledSlots
+    .filter((slot) => slot.slot >= 1 && slot.slot <= DRIVE_BACKUP_SLOT_LIMIT)
+    .sort(compareBackupSlotOldestFirst)[0] ?? null;
+  const targetSlot = emptySlot ?? oldestInLimitSlot?.slot ?? 1;
+  const filesToPrune = new Map<string, DriveBackupFile>();
+  const targetSlotFile = emptySlot === null ? oldestInLimitSlot?.file ?? null : null;
+
+  if (targetSlotFile) {
+    filesToPrune.set(targetSlotFile.id, targetSlotFile);
+  }
+
+  const pruneCount = Math.max(0, filledSlots.length + 1 - DRIVE_BACKUP_SLOT_LIMIT);
+  const sortedFilledSlots = [...filledSlots].sort(compareBackupSlotOldestFirst);
+
+  for (const slot of sortedFilledSlots) {
+    if (filesToPrune.size >= pruneCount) {
+      break;
+    }
+
+    if (slot.file) {
+      filesToPrune.set(slot.file.id, slot.file);
+    }
+  }
+
+  return {
+    filesToPrune: [...filesToPrune.values()],
+    targetSlot,
+  };
 };
 
 export const createBackupPayload = (
@@ -608,7 +711,7 @@ export const listDriveBackupFiles = async (
   let pageToken: string | undefined;
   const legacyBackupFileName = getLegacyBackupFileName(scope);
   const legacyBackupFileNamePrefix = getLegacyBackupFileNamePrefix(scope);
-  const slotBackupFileNamePrefix = `${getBackupFileBasename(scope)}-slot-`;
+  const slotBackupFileNamePrefix = `${getBackupFileBasename()}-slot-`;
 
   do {
     const params = new URLSearchParams({
@@ -670,7 +773,9 @@ export const listDriveBackupSlots = async (
   files.forEach((file) => {
     const slot = parseBackupSlotFromFileName(file.name, scope);
     if (slot) {
-      filesBySlot.set(slot, file);
+      if (!filesBySlot.has(slot)) {
+        filesBySlot.set(slot, file);
+      }
       return;
     }
 
@@ -685,13 +790,21 @@ export const listDriveBackupSlots = async (
     filesBySlot.set(1, newestLegacyFile);
   }
 
-  return Array.from({ length: DRIVE_BACKUP_SLOT_COUNT }, (_, index) => {
-    const slot = index + 1;
-    return {
-      file: filesBySlot.get(slot) ?? null,
-      slot,
-    };
-  });
+  const filledSlots = [...filesBySlot.keys()].sort((first, second) => first - second);
+  const nextEmptySlot = getNextEmptyBackupSlot(filledSlots);
+  const slots = filledSlots.map((slot) => ({
+    file: filesBySlot.get(slot) ?? null,
+    slot,
+  }));
+
+  if (nextEmptySlot !== null) {
+    slots.push({
+      file: null,
+      slot: nextEmptySlot,
+    });
+  }
+
+  return slots.sort(compareBackupSlotNewestFirst);
 };
 
 export const findDriveBackupFile = async (
@@ -728,10 +841,11 @@ export const uploadDriveBackup = async (
   target?: DriveBackupUploadTarget,
   scope: DriveBackupScope = 'main',
 ): Promise<DriveUploadResult> => {
-  const targetSlot = target?.slot.slot ?? 1;
-  const existingFile = target
-    ? target.slot.file
-    : (await listDriveBackupSlots(accessToken, scope))[targetSlot - 1]?.file ?? null;
+  const uploadPlan = target
+    ? { filesToPrune: [], targetSlot: target.slot.slot }
+    : getNextBackupUploadPlan(await listDriveBackupSlots(accessToken, scope));
+  const targetSlot = uploadPlan.targetSlot;
+  const existingFile = target ? target.slot.file : null;
   const backupFileName = getBackupSlotFileName(scope, targetSlot);
   const metadata = existingFile
     ? { mimeType: BACKUP_MIME_TYPE, name: backupFileName }
@@ -757,10 +871,26 @@ export const uploadDriveBackup = async (
     throw new Error('Google Drive returned an invalid backup file response.');
   }
 
+  await Promise.all(
+    uploadPlan.filesToPrune.map((backupFile) => deleteDriveBackupFile(accessToken, backupFile, scope)),
+  );
+
   return {
     file,
     uploadedAt: payload.exportedAt,
   };
+};
+
+export const deleteDriveBackupFile = async (
+  accessToken: string,
+  backupFile: DriveBackupFile,
+  _scope: DriveBackupScope = 'main',
+) => {
+  await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupFile.id)}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
 };
 
 export const downloadDriveBackup = async (

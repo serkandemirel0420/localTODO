@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 
+import { resolveMaterialCommunityIconName } from '../materialCommunityIconNames';
 import type { QuickPresetNavItem } from '../presets';
 
 type MaterialCommunityIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -44,8 +45,8 @@ const toMaterialCommunityIconName = (iconName: string): MaterialCommunityIconNam
   iconName as MaterialCommunityIconName
 );
 
-// The quick nav is list-first: each visible Settings list appears as a preset-like
-// shortcut, and explicit saved-preset assignments can override a slot.
+// The quick nav is list-first: each visible Settings list appears as a saved list,
+// and explicit saved-list assignments can override a slot.
 export function QuickPresetNav({
   accentColor,
   activePresetId,
@@ -115,13 +116,13 @@ export function QuickPresetNav({
                 accessibilityRole="button"
                 accessibilityHint={
                   item.preset
-                    ? 'Applies this list shortcut or saved preset. Long press shows details'
-                    : 'No list or preset assigned'
+                    ? 'Applies this list. Long press shows details'
+                    : 'No list assigned'
                 }
                 accessibilityLabel={
                   item.preset
                     ? `Apply ${item.preset.label}`
-                    : `Shortcut slot ${item.slotNumber}`
+                    : `List slot ${item.slotNumber}`
                 }
                 accessibilityState={{ disabled: !item.preset, selected }}
                 disabled={!item.preset}
@@ -144,7 +145,9 @@ export function QuickPresetNav({
               >
                 <MaterialCommunityIcons
                   color={iconColor}
-                  name={toMaterialCommunityIconName(item.iconName)}
+                  name={toMaterialCommunityIconName(
+                    resolveMaterialCommunityIconName(item.iconName, 'star-four-points')
+                  )}
                   size={20}
                 />
               </Pressable>

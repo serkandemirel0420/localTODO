@@ -1,4 +1,5 @@
 export const CUSTOM_DATE_LABEL = 'Custom date';
+export const DATED_DATE_LABEL = 'Dated items';
 export const LATER_DATE_LABEL = 'Later';
 export const OVERDUE_DATE_LABEL = 'Overdue';
 export const SOMEDAY_DATE_LABEL = 'Someday';
@@ -17,6 +18,10 @@ export const DATE_FILTER_PRESETS = [
 const DATE_PRESET_LABELS: Record<string, string> = {
   custom: CUSTOM_DATE_LABEL,
   'custom date': CUSTOM_DATE_LABEL,
+  dated: DATED_DATE_LABEL,
+  'dated items': DATED_DATE_LABEL,
+  hasdate: DATED_DATE_LABEL,
+  'has date': DATED_DATE_LABEL,
   later: LATER_DATE_LABEL,
   overdue: OVERDUE_DATE_LABEL,
   someday: LATER_DATE_LABEL,
@@ -151,6 +156,7 @@ export const resolveDateFilterValueDate = (
 
   if (
     !formattedLabel
+    || formattedLabel === DATED_DATE_LABEL
     || formattedLabel === OVERDUE_DATE_LABEL
     || formattedLabel === LATER_DATE_LABEL
     || formattedLabel === CUSTOM_DATE_LABEL
@@ -222,6 +228,7 @@ const getDateLabelDayOffset = (
   const formattedLabel = formatDateFilterValue(label);
 
   if (
+    formattedLabel === DATED_DATE_LABEL ||
     formattedLabel === OVERDUE_DATE_LABEL
     || formattedLabel === LATER_DATE_LABEL
     || formattedLabel === CUSTOM_DATE_LABEL
@@ -247,6 +254,7 @@ export const formatRemainingDaysLabel = (
   const formattedLabel = formatDateFilterValue(label);
 
   if (
+    formattedLabel === DATED_DATE_LABEL ||
     formattedLabel === OVERDUE_DATE_LABEL
     || formattedLabel === LATER_DATE_LABEL
     || formattedLabel === CUSTOM_DATE_LABEL
@@ -317,6 +325,7 @@ export const formatCompactDateFilterLabel = (
   const formattedLabel = formatDateFilterValue(label);
 
   if (
+    formattedLabel === DATED_DATE_LABEL ||
     formattedLabel === OVERDUE_DATE_LABEL
     || formattedLabel === LATER_DATE_LABEL
     || formattedLabel === CUSTOM_DATE_LABEL
@@ -469,6 +478,10 @@ export const dateFilterValueMatches = (
 
   if (!todoDateValue || !selectedDateValue || selectedDateValue === CUSTOM_DATE_LABEL) {
     return false;
+  }
+
+  if (selectedDateValue === DATED_DATE_LABEL) {
+    return true;
   }
 
   if (selectedDateValue === OVERDUE_DATE_LABEL) {

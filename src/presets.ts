@@ -9,6 +9,7 @@ import {
   type TodoGroupMode,
   type TodoSortMode,
 } from './storage/appSettingsStore';
+import { resolveMaterialCommunityIconName } from './materialCommunityIconNames';
 import { cloneTodoFilters } from './todos';
 
 export type QuickPresetNavItem = {
@@ -29,6 +30,9 @@ const DEFAULT_LIST_NAV_PRESET_SORT_MODE: TodoSortMode = 'newest';
 
 export const normalizeQuickListPresetLabel = (label: string) => label.trim().toLowerCase();
 
+export const isAllListsBoardPresetLabel = (label: string) =>
+  normalizeQuickListPresetLabel(label) === 'lists';
+
 export const getQuickListPresetId = (label: string) =>
   `${QUICK_LIST_PRESET_ID_PREFIX}${normalizeQuickListPresetLabel(label)}`;
 
@@ -37,36 +41,42 @@ export const getQuickListPresetId = (label: string) =>
 export const createQuickListPreset = (
   list: StoredListMenuNode,
   listOrderMode: ListOrderMode,
-): StoredMenuPreset => ({
-  id: getQuickListPresetId(list.label),
-  label: list.label,
-  filters: {
-    date: [],
-    list: [list.label],
-    priority: [],
-    reminder: [],
-  },
-  requiredFilters: cloneTodoFilters(),
-  avoidedFilters: cloneTodoFilters(),
-  listOrderMode,
-  todoGroupMode: list.groupMode ?? DEFAULT_LIST_NAV_PRESET_GROUP_MODE,
-  todoSortMode: list.sortMode ?? DEFAULT_LIST_NAV_PRESET_SORT_MODE,
-  createdAt: 0,
-});
+) => {
+  const isAllListsBoard = isAllListsBoardPresetLabel(list.label);
+  const groupMode = isAllListsBoard
+    ? 'list'
+    : list.groupMode ?? DEFAULT_LIST_NAV_PRESET_GROUP_MODE;
+
+  return {
+    id: getQuickListPresetId(list.label),
+    label: list.label,
+    filters: {
+      date: [],
+      list: isAllListsBoard ? [] : [list.label],
+      priority: [],
+      reminder: [],
+    },
+    requiredFilters: cloneTodoFilters(),
+    avoidedFilters: cloneTodoFilters(),
+    listOrderMode,
+    todoGroupMode: groupMode,
+    todoSortMode: list.sortMode ?? DEFAULT_LIST_NAV_PRESET_SORT_MODE,
+    createdAt: 0,
+  };
+};
 
 export const isListScopedPreset = (preset: StoredMenuPreset | null | undefined) =>
   Boolean(preset && preset.filters.list.length > 0);
 
-// If the user has saved a preset named exactly like a list, prefer it over the
-// generated shortcut so their custom sort/group choices win.
+// If the user has saved a preset named exactly like a navbar list label, prefer
+// it over the generated shortcut so their custom board/sort/group choices win.
 export const buildMenuPresetByListLabel = (menuPresets: StoredMenuPreset[]) => {
   const presetsByLabel = new Map<string, StoredMenuPreset>();
 
   menuPresets.forEach((preset) => {
-    const listLabel = preset.filters.list.length === 1 ? preset.filters.list[0] : null;
-    const normalizedLabel = listLabel ? normalizeQuickListPresetLabel(listLabel) : '';
+    const normalizedLabel = normalizeQuickListPresetLabel(preset.label);
 
-    if (normalizedLabel && normalizeQuickListPresetLabel(preset.label) === normalizedLabel) {
+    if (normalizedLabel) {
       presetsByLabel.set(normalizedLabel, preset);
     }
   });
@@ -76,11 +86,13 @@ export const buildMenuPresetByListLabel = (menuPresets: StoredMenuPreset[]) => {
 
 export const getQuickPresetNavSlotLimit = (
   listMenuTree: StoredListMenuNode[],
+  menuPresets: StoredMenuPreset[],
   quickPresetNavIconNames: QuickPresetNavIconNames,
-  quickPresetNavPresetIds: QuickPresetNavPresetIds,
+  quickPresetNavPresetIds: Array<string | null>,
 ) => Math.min(
   Math.max(
     DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
+    menuPresets.length,
     quickPresetNavIconNames.length,
     quickPresetNavPresetIds.length,
     listMenuTree.length,
@@ -94,13 +106,14 @@ export const resolveQuickPresetNavSlotIconName = (
   quickPresetNavIconName?: string,
 ): string => {
   const listAtSettingsIndex = listMenuTree[slotIndex];
+  const fallbackIconName = DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+    slotIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+  ] ?? 'star-four-points';
 
-  return listAtSettingsIndex?.iconName
-    ?? quickPresetNavIconName
-    ?? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
-      slotIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
-    ]
-    ?? 'star-four-points';
+  return resolveMaterialCommunityIconName(
+    listAtSettingsIndex?.iconName ?? quickPresetNavIconName,
+    fallbackIconName,
+  );
 };
 
 export const buildQuickPresetNavItems = ({
@@ -108,6 +121,7 @@ export const buildQuickPresetNavItems = ({
   listOrderMode,
   menuPresetById,
   menuPresetByListLabel,
+  menuPresets,
   quickPresetNavIconNames,
   quickPresetNavPresetIds,
 }: {
@@ -115,18 +129,22 @@ export const buildQuickPresetNavItems = ({
   listOrderMode: ListOrderMode;
   menuPresetById: Map<string, StoredMenuPreset>;
   menuPresetByListLabel: Map<string, StoredMenuPreset>;
+  menuPresets: StoredMenuPreset[];
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
 }): QuickPresetNavItem[] => {
   const slotLimit = getQuickPresetNavSlotLimit(
     listMenuTree,
+    menuPresets,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
   );
-  const usesAutomaticSlots =
-    quickPresetNavPresetIds.length === 0 && quickPresetNavIconNames.length === 0;
+  const usesAutomaticSlots = quickPresetNavPresetIds.length === 0;
   const slotCount = usesAutomaticSlots
-    ? Math.min(Math.max(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length, listMenuTree.length), slotLimit)
+    ? Math.min(
+      Math.max(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length, menuPresets.length, listMenuTree.length),
+      slotLimit,
+    )
     : Math.min(
       Math.max(quickPresetNavPresetIds.length, quickPresetNavIconNames.length, listMenuTree.length, 1),
       slotLimit,
@@ -135,19 +153,22 @@ export const buildQuickPresetNavItems = ({
 
   for (let index = 0; index < slotCount; index += 1) {
     const list = listMenuTree[index];
-    if (!usesAutomaticSlots && list?.showInNavbar === false) {
+    const explicitPresetId = usesAutomaticSlots ? null : quickPresetNavPresetIds[index] ?? null;
+    if (!explicitPresetId && !usesAutomaticSlots && list?.showInNavbar === false) {
       continue;
     }
 
-    // Explicit saved-preset assignments are honored, then each visible Settings
-    // list falls back to a generated list shortcut. Nothing hardcoded is needed.
-    const explicitPresetId = usesAutomaticSlots ? null : quickPresetNavPresetIds[index] ?? null;
+    if (items.length >= QUICK_PRESET_NAV_MAX_SLOT_COUNT) {
+      continue;
+    }
+
+    const automaticPreset = usesAutomaticSlots ? menuPresets[index] ?? null : null;
     const explicitPreset = explicitPresetId ? menuPresetById.get(explicitPresetId) ?? null : null;
-    const listPreset = !explicitPreset && list
+    const listPreset = !automaticPreset && !explicitPreset && list
       ? menuPresetByListLabel.get(normalizeQuickListPresetLabel(list.label))
         ?? createQuickListPreset(list, listOrderMode)
       : null;
-    const preset = explicitPreset ?? listPreset;
+    const preset = automaticPreset ?? explicitPreset ?? listPreset;
 
     items.push({
       iconName: resolveQuickPresetNavSlotIconName(

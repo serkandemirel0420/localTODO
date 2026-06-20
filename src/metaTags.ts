@@ -50,6 +50,11 @@ export const normalizeMetaTagVisibility = (value: unknown): MetaTagVisibility =>
 export const metaTagVisibilityMatchesDefault = (visibility: MetaTagVisibility) =>
   META_TAG_KEYS.every((key) => visibility[key] === DEFAULT_META_TAG_VISIBILITY[key]);
 
+export const metaTagVisibilityEqual = (
+  left: MetaTagVisibility,
+  right: MetaTagVisibility,
+) => META_TAG_KEYS.every((key) => left[key] === right[key]);
+
 export const applyHiddenMetaTagKinds = (
   visibility: MetaTagVisibility,
   hiddenKinds: readonly HiddenMetaTagKind[],

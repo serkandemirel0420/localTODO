@@ -9368,6 +9368,10 @@ export default function App() {
       return filters;
     }
 
+    if (findListMenuNode(listMenuTree, singleListFilter)) {
+      return filters;
+    }
+
     const selfListHasVisibleTodo = todos.some((todo) => {
       if (pendingDeleteIds.has(todo.id)) {
         return false;
@@ -10590,6 +10594,14 @@ export default function App() {
     selectedTodoCount,
     todoSelectMode,
   ]);
+  const appHeaderTitleLeftAligned =
+    !todoSelectMode
+    && !hasTodoEditTargets
+    && Boolean(
+      openQuickPresetNavItem?.displayLabel
+      || openMenuPreset?.label
+      || activeMenuPreset?.label,
+    );
 
   const focusHeaderSearchInput = useCallback(() => {
     searchInputRef.current?.blur();
@@ -10729,6 +10741,7 @@ export default function App() {
         openFilterConfigModal();
         break;
       case 'menu':
+        anchorActivePresetForFilterConfig();
         setNavTab('menu');
         Keyboard.dismiss();
         setMenuMode('main');
@@ -10742,6 +10755,7 @@ export default function App() {
 
     triggerSubtleHaptic();
   }, [
+    anchorActivePresetForFilterConfig,
     closeFilterConfigModal,
     closeListMenu,
     closeSettingsModal,
@@ -12421,7 +12435,13 @@ export default function App() {
               <Ionicons color={NAV_ACCENT} name="close" size={24} />
             </Pressable>
           ) : null}
-          <Text numberOfLines={1} style={styles.appHeaderTitle}>
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.appHeaderTitle,
+              appHeaderTitleLeftAligned && styles.appHeaderTitleLeftAligned,
+            ]}
+          >
             {appHeaderTitle}
           </Text>
           {todoSelectMode ? (
@@ -17078,6 +17098,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 94,
     textAlign: 'center',
     width: '100%',
+  },
+  appHeaderTitleLeftAligned: {
+    paddingLeft: 0,
+    paddingRight: 94,
+    textAlign: 'left',
   },
   appHeaderSideButton: {
     alignItems: 'center',

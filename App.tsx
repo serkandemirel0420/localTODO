@@ -78,6 +78,7 @@ import {
   isCustomDateLabel,
   isDateFilterOverdue,
   isDateMenuItemSelected,
+  normalizeDateLabelDisplayMode,
   OVERDUE_DATE_LABEL,
   resolveDateFilterValueDate,
   startOfDay,
@@ -184,6 +185,7 @@ import {
 import {
   buildMenuPresetByListLabel,
   buildQuickPresetNavItems,
+  getQuickListPresetId,
   isListScopedPreset,
   normalizeQuickListPresetLabel,
   QUICK_LIST_PRESET_ID_PREFIX,
@@ -1201,6 +1203,39 @@ const getPresetSearchScore = (preset: MenuPreset, query: string) =>
 const getListMenuSearchScore = (node: ListMenuNode, query: string) =>
   getSearchTextScore('', node.searchKeywords, query);
 
+const DATE_LABEL_DISPLAY_MODE_SEQUENCE: DateLabelDisplayMode[] = ['exact', 'remaining', 'both'];
+const DATE_LABEL_DISPLAY_MODE_LABELS: Record<DateLabelDisplayMode, string> = {
+  exact: 'Exact',
+  remaining: 'Remaining',
+  both: 'Both',
+};
+const DATE_LABEL_DISPLAY_MODE_SUMMARIES: Record<DateLabelDisplayMode, string> = {
+  exact: 'Exact day',
+  remaining: 'Days remaining',
+  both: 'Both',
+};
+const DATE_LABEL_DISPLAY_MODE_DESCRIPTIONS: Record<DateLabelDisplayMode, string> = {
+  exact: 'Today, Tomorrow, Jun 5...',
+  remaining: 'Today, Tomorrow, 3 days...',
+  both: '3 days with Jun 5 shown smaller.',
+};
+
+const getNextDateLabelDisplayMode = (mode: DateLabelDisplayMode): DateLabelDisplayMode => {
+  const index = DATE_LABEL_DISPLAY_MODE_SEQUENCE.indexOf(mode);
+  return DATE_LABEL_DISPLAY_MODE_SEQUENCE[
+    (index + 1) % DATE_LABEL_DISPLAY_MODE_SEQUENCE.length
+  ];
+};
+
+const formatDateFilterDisplayLabel = (
+  value: string,
+  dateLabelDisplayMode: DateLabelDisplayMode,
+): string => (
+  dateLabelDisplayMode === 'exact'
+    ? formatDateFilterLabel(value)
+    : formatDateDisplayLabel(value, dateLabelDisplayMode)
+);
+
 const buildActiveFilterItems = (
   filters: SelectedFilters,
   dateLabelDisplayMode: DateLabelDisplayMode,
@@ -1209,11 +1244,7 @@ const buildActiveFilterItems = (
     ...FILTER_KEYS.flatMap((filterKey) =>
       filters[filterKey].map((value) => ({
         displayLabel: filterKey === 'date'
-          ? (
-            dateLabelDisplayMode === 'remaining'
-              ? formatDateDisplayLabel(value, 'remaining')
-              : formatDateFilterLabel(value)
-          )
+          ? formatDateFilterDisplayLabel(value, dateLabelDisplayMode)
           : value,
         filterKey,
         id: `search-filter-${filterKey}-${value}`,
@@ -1449,6 +1480,10 @@ const formatCreateDrawerDateLabel = (
 
   if (!primary) {
     return 'No date';
+  }
+
+  if (dateLabelDisplayMode === 'both') {
+    return formatDateDisplayLabel(primary, 'both');
   }
 
   if (dateLabelDisplayMode === 'remaining') {
@@ -1878,19 +1913,25 @@ const renameListLabelInPreset = (
   preset: MenuPreset,
   oldLabel: string,
   newLabel: string,
-): MenuPreset => ({
-  ...preset,
-  filters: renameListLabelInFilters(preset.filters, oldLabel, newLabel),
-  requiredFilters: renameListLabelInFilters(preset.requiredFilters, oldLabel, newLabel),
-  avoidedFilters: renameListLabelInFilters(preset.avoidedFilters, oldLabel, newLabel),
-  ...(preset.sections
-    ? {
-        sections: preset.sections.map((section) => (
-          renameListLabelInPresetSection(section, oldLabel, newLabel)
-        )),
-      }
-    : {}),
-});
+): MenuPreset => {
+  const presetLabelMatchesList =
+    normalizeQuickListPresetLabel(preset.label) === normalizeQuickListPresetLabel(oldLabel);
+
+  return {
+    ...preset,
+    label: presetLabelMatchesList ? newLabel : preset.label,
+    filters: renameListLabelInFilters(preset.filters, oldLabel, newLabel),
+    requiredFilters: renameListLabelInFilters(preset.requiredFilters, oldLabel, newLabel),
+    avoidedFilters: renameListLabelInFilters(preset.avoidedFilters, oldLabel, newLabel),
+    ...(preset.sections
+      ? {
+          sections: preset.sections.map((section) => (
+            renameListLabelInPresetSection(section, oldLabel, newLabel)
+          )),
+        }
+      : {}),
+  };
+};
 
 const renameListLabelInTodo = <T extends Todo>(
   todo: T,
@@ -6830,12 +6871,14 @@ export default function App() {
 
     return presetsById;
   }, [menuPresetById, quickPresetNavItems]);
-  const heldQuickPresetNavPreset = heldQuickPresetNavSlotNumber
-    ? quickPresetNavItems.find((item) => item.slotNumber === heldQuickPresetNavSlotNumber)?.preset
-      ?? null
+  const heldQuickPresetNavItem = heldQuickPresetNavSlotNumber
+    ? quickPresetNavItems.find((item) => item.slotNumber === heldQuickPresetNavSlotNumber) ?? null
     : null;
-  const heldQuickPresetNavDetail = heldQuickPresetNavPreset
-    ? getQuickPresetNavDetail(heldQuickPresetNavPreset, dateLabelDisplayMode)
+  const heldQuickPresetNavDetail = heldQuickPresetNavItem?.preset
+    ? {
+        ...getQuickPresetNavDetail(heldQuickPresetNavItem.preset, dateLabelDisplayMode),
+        title: heldQuickPresetNavItem.displayLabel || heldQuickPresetNavItem.preset.label,
+      }
     : null;
   const openQuickPresetNavItem = openQuickPresetNavSlotNumber
     ? quickPresetNavItems.find((item) => item.slotNumber === openQuickPresetNavSlotNumber) ?? null
@@ -8655,9 +8698,7 @@ export default function App() {
 
   const toggleDateLabelDisplayMode = useCallback(() => {
     recordFilterConfigUndo('Change date labels');
-    setDateLabelDisplayMode((current) => (
-      current === 'remaining' ? 'exact' : 'remaining'
-    ));
+    setDateLabelDisplayMode((current) => getNextDateLabelDisplayMode(current));
     triggerSubtleHaptic();
   }, [recordFilterConfigUndo]);
 
@@ -8958,6 +8999,15 @@ export default function App() {
     const nextMenuPresets = menuPresetsRef.current.map((preset) => (
       renameListLabelInPreset(preset, oldLabel, newLabel)
     ));
+    const oldQuickListPresetId = getQuickListPresetId(oldLabel);
+    const newQuickListPresetId = getQuickListPresetId(newLabel);
+    const currentQuickPresetNavPresetIds = quickPresetNavPresetIdsRef.current;
+    const nextQuickPresetNavPresetIds = currentQuickPresetNavPresetIds.map((presetId) => (
+      presetId === oldQuickListPresetId ? newQuickListPresetId : presetId
+    ));
+    const quickPresetNavPresetIdsChanged = nextQuickPresetNavPresetIds.some(
+      (presetId, index) => presetId !== currentQuickPresetNavPresetIds[index],
+    );
     const nextDeletedTodos = deletedTodosRef.current.map((todo) => (
       renameListLabelInTodo(todo, oldLabel, newLabel)
     ));
@@ -8974,6 +9024,9 @@ export default function App() {
     lastCreateTodoFiltersRef.current = nextLastCreateTodoFilters;
     filterColorsRef.current = nextFilterColors;
     menuPresetsRef.current = nextMenuPresets;
+    if (quickPresetNavPresetIdsChanged) {
+      quickPresetNavPresetIdsRef.current = nextQuickPresetNavPresetIds;
+    }
     deletedTodosRef.current = nextDeletedTodos;
     todosRef.current = nextTodos;
     listMenuTreeRef.current = nextListMenuTree;
@@ -8987,9 +9040,15 @@ export default function App() {
     ));
     setFilterColors(nextFilterColors);
     setMenuPresets(nextMenuPresets);
+    if (quickPresetNavPresetIdsChanged) {
+      setQuickPresetNavPresetIds(nextQuickPresetNavPresetIds);
+    }
     setDeletedTodos(nextDeletedTodos);
     setTodos(nextTodos);
     setListMenuTree(nextListMenuTree);
+    setOpenMenuPresetId((current) => (
+      current === oldQuickListPresetId ? newQuickListPresetId : current
+    ));
     setCollapsedSearchListLabels((current) => {
       if (!current.has(oldLabel)) {
         return current;
@@ -9011,6 +9070,7 @@ export default function App() {
       lastCreateTodoFilters: cloneTodoFilters(nextLastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(nextListMenuTree),
       menuPresets: cloneMenuPresets(nextMenuPresets),
+      quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(nextQuickPresetNavPresetIds),
       avoidedFilters: cloneTodoFilters(nextAvoidedFilters),
       requiredFilters: cloneTodoFilters(prunedRequiredFilters),
       selectedFilters: cloneTodoFilters(nextSelectedFilters),
@@ -10155,7 +10215,10 @@ export default function App() {
 
     const activePresetTitle =
       !hasTodoEditTargets
-        ? openMenuPreset?.label ?? activeMenuPreset?.label ?? null
+        ? openQuickPresetNavItem?.displayLabel
+          || openMenuPreset?.label
+          || activeMenuPreset?.label
+          || null
         : null;
 
     if (activePresetTitle) {
@@ -10181,6 +10244,7 @@ export default function App() {
     menuMode,
     activeMenuPreset,
     openMenuPreset,
+    openQuickPresetNavItem,
     selectedFilters,
     selectedTodoCount,
     todoSelectMode,
@@ -10835,9 +10899,9 @@ export default function App() {
     setGoogleDriveLastRestoreAt(restoredAt);
     setHideDoneTodos(backup.payload.settings.hideDoneTodos);
     setShowOverdueMetaTags(backup.payload.settings.showOverdueMetaTags);
-    setDateLabelDisplayMode(
-      backup.payload.settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
-    );
+    setDateLabelDisplayMode(normalizeDateLabelDisplayMode(
+      backup.payload.settings.dateLabelDisplayMode,
+    ));
     const restoredListMenuTree = cloneListMenuTree(
       backup.payload.settings.listMenuTree.length > 0
         ? backup.payload.settings.listMenuTree
@@ -12633,11 +12697,7 @@ export default function App() {
                               const displayLabel = isRepeatStatusFilterValue(item.label)
                                 ? getRepeatStatusFilterDisplayLabel(item.label)
                                 : item.filterKey === 'date'
-                                  ? (
-                                    dateLabelDisplayMode === 'remaining'
-                                      ? formatDateDisplayLabel(item.label, 'remaining')
-                                      : formatDateFilterLabel(item.label)
-                                  )
+                                  ? formatDateFilterDisplayLabel(item.label, dateLabelDisplayMode)
                                   : item.label;
                               const isRequired = !hasTodoEditTargets && isFilterValueRequired(
                                 menuRequiredFilters,
@@ -14049,7 +14109,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Date labels</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {dateLabelDisplayMode === 'remaining' ? 'Days remaining' : 'Exact day'}
+                      {DATE_LABEL_DISPLAY_MODE_SUMMARIES[dateLabelDisplayMode]}
                       {' · '}
                       {showOverdueMetaTags ? 'Overdue count' : 'No overdue count'}
                     </Text>
@@ -14079,8 +14139,9 @@ export default function App() {
                 {settingsDateLabelsExpanded ? (
                   <View style={styles.settingsCard}>
                     <Pressable
-                      accessibilityRole="switch"
-                      accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
+                      accessibilityLabel="Date label style"
+                      accessibilityRole="button"
+                      accessibilityValue={{ text: DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode] }}
                       onPress={toggleDateLabelDisplayMode}
                       style={({ pressed }) => [
                         styles.settingsRow,
@@ -14088,24 +14149,24 @@ export default function App() {
                       ]}
                     >
                       <View style={styles.settingsRowTextWrap}>
-                        <Text style={styles.settingsRowTitle}>Show days remaining</Text>
+                        <Text style={styles.settingsRowTitle}>Date label style</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          Today, Tomorrow, 3 days… instead of exact calendar dates.
+                          {DATE_LABEL_DISPLAY_MODE_DESCRIPTIONS[dateLabelDisplayMode]}
                         </Text>
                       </View>
                       <View
                         style={[
                           styles.settingsStatusPill,
-                          dateLabelDisplayMode === 'remaining' && styles.settingsStatusPillEnabled,
+                          dateLabelDisplayMode !== 'exact' && styles.settingsStatusPillEnabled,
                         ]}
                       >
                         <Text
                           style={[
                             styles.settingsStatusText,
-                            dateLabelDisplayMode === 'remaining' && styles.settingsStatusTextEnabled,
+                            dateLabelDisplayMode !== 'exact' && styles.settingsStatusTextEnabled,
                           ]}
                         >
-                          {dateLabelDisplayMode === 'remaining' ? 'Remaining' : 'Exact'}
+                          {DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode]}
                         </Text>
                       </View>
                     </Pressable>

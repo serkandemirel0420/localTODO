@@ -4,7 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import {
   type DateLabelAnchor,
-  formatDateDisplayLabel,
+  formatDateDisplayLabelParts,
   formatDateFilterValue,
   formatOverdueDaysLabel,
   isDateFilterDueToday,
@@ -50,6 +50,7 @@ type MetaTagDescriptor = {
   displayLabel: string;
   filterKey?: FilterColorKey;
   lookupValue: string;
+  secondaryLabel?: string;
 };
 
 type StatusIconDescriptor = {
@@ -138,6 +139,17 @@ function MetaTag({
         ]}
       >
         {descriptor.displayLabel}
+        {descriptor.secondaryLabel ? (
+          <Text
+            style={[
+              styles.tagSecondaryText,
+              { color: textColor },
+              done && styles.tagTextDone,
+            ]}
+          >
+            {` ${descriptor.secondaryLabel}`}
+          </Text>
+        ) : null}
       </Text>
     </View>
   );
@@ -203,16 +215,20 @@ function buildMetaTags(
     const overdueLabel = showOverdueMetaTags
       ? formatOverdueDaysLabel(dateLabel, now, dateLabelAnchor)
       : null;
-    tags.push({
-      dateTone: isOverdue ? 'overdue' : isDueToday ? 'due' : undefined,
-      displayLabel: overdueLabel ?? formatDateDisplayLabel(
+    const displayLabelParts = overdueLabel
+      ? { primary: overdueLabel }
+      : formatDateDisplayLabelParts(
         dateLabel,
         dateLabelDisplayMode,
         now,
         dateLabelAnchor,
-      ),
+      );
+    tags.push({
+      dateTone: isOverdue ? 'overdue' : isDueToday ? 'due' : undefined,
+      displayLabel: displayLabelParts.primary,
       filterKey: 'date',
       lookupValue: lookupValue || dateLabel,
+      secondaryLabel: displayLabelParts.secondary,
     });
   }
 
@@ -241,12 +257,14 @@ function buildMetaTags(
     });
   }
 
-  tagLabels?.forEach((label) => {
-    tags.push({
-      displayLabel: `#${label}`,
-      lookupValue: label,
+  if (visibility.tags) {
+    tagLabels?.forEach((label) => {
+      tags.push({
+        displayLabel: `#${label}`,
+        lookupValue: label,
+      });
     });
-  });
+  }
 
   return tags;
 }
@@ -375,6 +393,10 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 13,
     minWidth: 0,
+  },
+  tagSecondaryText: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   tagTextDone: {
     opacity: 0.9,

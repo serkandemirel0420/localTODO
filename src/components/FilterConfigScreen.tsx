@@ -124,6 +124,26 @@ const formatSelectionSummary = (values: string[], emptyLabel: string) => {
   return `${values.length} selected`;
 };
 
+const DATE_LABEL_DISPLAY_MODE_LABELS: Record<DateLabelDisplayMode, string> = {
+  exact: 'Exact',
+  remaining: 'Remaining',
+  both: 'Both',
+};
+const DATE_LABEL_DISPLAY_MODE_DESCRIPTIONS: Record<DateLabelDisplayMode, string> = {
+  exact: 'Today, Tomorrow, Jun 5...',
+  remaining: 'Today, Tomorrow, 3 days...',
+  both: '3 days with Jun 5 shown smaller.',
+};
+
+const formatDateFilterDisplayLabel = (
+  value: string,
+  dateLabelDisplayMode: DateLabelDisplayMode,
+): string => (
+  dateLabelDisplayMode === 'exact'
+    ? formatDateFilterLabel(value)
+    : formatDateDisplayLabel(value, dateLabelDisplayMode)
+);
+
 const AccordionSection = ({
   title,
   subtitle,
@@ -222,9 +242,7 @@ export const FilterConfigScreen = ({
   const scrollOffsetYRef = useRef(0);
   const { height: windowHeight } = useWindowDimensions();
   const formatActiveDateLabel = (value: string) => (
-    dateLabelDisplayMode === 'remaining'
-      ? formatDateDisplayLabel(value, 'remaining')
-      : formatDateFilterLabel(value)
+    formatDateFilterDisplayLabel(value, dateLabelDisplayMode)
   );
   const getDateMenuDisplayLabel = (menuLabel: string) =>
     getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
@@ -531,8 +549,9 @@ export const FilterConfigScreen = ({
             title="Date"
           >
             <Pressable
-              accessibilityRole="switch"
-              accessibilityState={{ checked: dateLabelDisplayMode === 'remaining' }}
+              accessibilityLabel="Date label style"
+              accessibilityRole="button"
+              accessibilityValue={{ text: DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode] }}
               onPress={onToggleDateLabelDisplayMode}
               style={({ pressed }) => [
                 styles.dateDisplayModeRow,
@@ -540,15 +559,13 @@ export const FilterConfigScreen = ({
               ]}
             >
               <View style={styles.dateDisplayModeTextWrap}>
-                <Text style={styles.optionLabel}>Show days remaining</Text>
+                <Text style={styles.optionLabel}>Date label style</Text>
                 <Text style={styles.dateDisplayModeSubtitle}>
-                  {dateLabelDisplayMode === 'remaining'
-                    ? 'Today, Tomorrow, 3 days…'
-                    : 'Today, Tomorrow, Jun 5…'}
+                  {DATE_LABEL_DISPLAY_MODE_DESCRIPTIONS[dateLabelDisplayMode]}
                 </Text>
               </View>
               <Text style={styles.dateDisplayModeValue}>
-                {dateLabelDisplayMode === 'remaining' ? 'On' : 'Off'}
+                {DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode]}
               </Text>
             </Pressable>
             {getDateMenuItemsForDateLabels(DATE_MENU_ITEMS, filters.date).map((label) => {

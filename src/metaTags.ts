@@ -1,19 +1,20 @@
 import { startOfDay, toISODateString } from './dates';
 import { type FilterColorKey } from './filterColors';
 
-export type MetaTagKey = 'createdAt' | 'date' | 'list' | 'priority';
+export type MetaTagKey = 'createdAt' | 'date' | 'list' | 'priority' | 'tags';
 
 export type HiddenMetaTagKind = FilterColorKey | 'created';
 
 export type MetaTagVisibility = Record<MetaTagKey, boolean>;
 
-export const META_TAG_KEYS: MetaTagKey[] = ['date', 'list', 'priority', 'createdAt'];
+export const META_TAG_KEYS: MetaTagKey[] = ['date', 'list', 'tags', 'priority', 'createdAt'];
 
 export const META_TAG_LABELS: Record<MetaTagKey, string> = {
   createdAt: 'Created',
   date: 'Date',
   list: 'List',
   priority: 'Priority',
+  tags: 'Tags',
 };
 
 export const DEFAULT_META_TAG_VISIBILITY: MetaTagVisibility = {
@@ -21,6 +22,7 @@ export const DEFAULT_META_TAG_VISIBILITY: MetaTagVisibility = {
   date: true,
   list: true,
   priority: false,
+  tags: true,
 };
 
 export const cloneMetaTagVisibility = (
@@ -30,6 +32,7 @@ export const cloneMetaTagVisibility = (
   date: visibility.date,
   list: visibility.list,
   priority: visibility.priority,
+  tags: visibility.tags,
 });
 
 export const normalizeMetaTagVisibility = (value: unknown): MetaTagVisibility => {
@@ -44,6 +47,7 @@ export const normalizeMetaTagVisibility = (value: unknown): MetaTagVisibility =>
     date: record.date !== false,
     list: record.list !== false,
     priority: record.priority === true,
+    tags: record.tags !== false,
   };
 };
 
@@ -63,6 +67,7 @@ export const applyHiddenMetaTagKinds = (
   date: visibility.date && !hiddenKinds.includes('date'),
   list: visibility.list && !hiddenKinds.includes('list'),
   priority: visibility.priority && !hiddenKinds.includes('priority'),
+  tags: visibility.tags,
 });
 
 export const formatMetaTagVisibilitySummary = (visibility: MetaTagVisibility) => {
@@ -74,7 +79,7 @@ export const formatMetaTagVisibilitySummary = (visibility: MetaTagVisibility) =>
     return 'None';
   }
 
-  if (enabledLabels.length <= 2) {
+  if (enabledLabels.length <= 3) {
     return enabledLabels.join(', ');
   }
 

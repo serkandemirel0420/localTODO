@@ -6,6 +6,7 @@ import {
   type FilterColorSettings,
 } from '../filterColors';
 import {
+  normalizeDateLabelDisplayMode,
   type DateLabelDisplayMode,
 } from '../dates';
 import {
@@ -405,9 +406,6 @@ const normalizeCollapsedTodoGroupIds = (value: unknown): string[] => {
 
   return value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
 };
-
-const normalizeDateLabelDisplayMode = (value: unknown): DateLabelDisplayMode =>
-  value === 'remaining' ? 'remaining' : 'exact';
 
 const normalizeBooleanRecordValue = (
   record: Record<string, unknown>,

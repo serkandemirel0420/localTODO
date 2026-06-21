@@ -13,6 +13,7 @@ import { resolveMaterialCommunityIconName } from './materialCommunityIconNames';
 import { cloneTodoFilters } from './todos';
 
 export type QuickPresetNavItem = {
+  displayLabel: string;
   iconName: string;
   id: string;
   // Index into the persisted quick-nav arrays and Settings list tree. This is
@@ -149,7 +150,7 @@ export const buildQuickPresetNavItems = ({
   for (let index = 0; index < slotCount; index += 1) {
     const list = listMenuTree[index];
     const explicitPresetId = usesAutomaticSlots ? null : quickPresetNavPresetIds[index] ?? null;
-    if (!explicitPresetId && list?.showInNavbar === false) {
+    if (list?.showInNavbar === false) {
       continue;
     }
 
@@ -167,6 +168,7 @@ export const buildQuickPresetNavItems = ({
     const preset = explicitPreset ?? listPreset ?? automaticPreset;
 
     items.push({
+      displayLabel: list?.label ?? preset?.label ?? '',
       iconName: resolveQuickPresetNavSlotIconName(
         index,
         listMenuTree,

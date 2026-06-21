@@ -17,6 +17,7 @@ import {
   type FilterColorSettings,
 } from '../filterColors';
 import {
+  normalizeDateLabelDisplayMode,
   type DateLabelDisplayMode,
 } from '../dates';
 import {
@@ -678,7 +679,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
     settings: {
       collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
       customTags: normalizeTodoTags(settings.customTags),
-      dateLabelDisplayMode: settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
+      dateLabelDisplayMode: normalizeDateLabelDisplayMode(settings.dateLabelDisplayMode),
       deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
       filterConfigUiState: normalizeFilterConfigUiState(settings.filterConfigUiState),
       filterColors: normalizeFilterColors(settings.filterColors),

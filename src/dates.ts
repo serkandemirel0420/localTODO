@@ -4,7 +4,16 @@ export const LATER_DATE_LABEL = 'Later';
 export const OVERDUE_DATE_LABEL = 'Overdue';
 export const SOMEDAY_DATE_LABEL = 'Someday';
 
-export type DateLabelDisplayMode = 'exact' | 'remaining';
+export type DateLabelDisplayMode = 'exact' | 'remaining' | 'both';
+
+export type DateDisplayLabelParts = {
+  primary: string;
+  secondary?: string;
+};
+
+export const normalizeDateLabelDisplayMode = (value: unknown): DateLabelDisplayMode => (
+  value === 'remaining' || value === 'both' ? value : 'exact'
+);
 
 export const DATE_FILTER_PRESETS = [
   'Today',
@@ -300,20 +309,56 @@ export const formatOverdueDaysLabel = (
   return `${overdueDays} ${overdueDays === 1 ? 'day' : 'days'} overdue`;
 };
 
+const formatSupplementalCalendarDateLabel = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): string | null => {
+  const resolvedDate = resolveDateFilterValueDate(label, now, anchor);
+  if (!resolvedDate) {
+    return null;
+  }
+
+  return resolvedDate.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
+export const formatDateDisplayLabelParts = (
+  label: string,
+  mode: DateLabelDisplayMode = 'exact',
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): DateDisplayLabelParts => {
+  if (mode === 'remaining') {
+    const remainingLabel = formatRemainingDaysLabel(label, now, anchor);
+    if (remainingLabel) {
+      return { primary: remainingLabel };
+    }
+  }
+
+  if (mode === 'both') {
+    const remainingLabel = formatRemainingDaysLabel(label, now, anchor);
+    if (remainingLabel) {
+      const supplementalDateLabel = formatSupplementalCalendarDateLabel(label, now, anchor);
+      return supplementalDateLabel
+        ? { primary: remainingLabel, secondary: supplementalDateLabel }
+        : { primary: remainingLabel };
+    }
+  }
+
+  return { primary: formatCompactDateFilterLabel(label, now, anchor) };
+};
+
 export const formatDateDisplayLabel = (
   label: string,
   mode: DateLabelDisplayMode = 'exact',
   now = new Date(),
   anchor?: DateLabelAnchor,
 ): string => {
-  if (mode === 'remaining') {
-    const remainingLabel = formatRemainingDaysLabel(label, now, anchor);
-    if (remainingLabel) {
-      return remainingLabel;
-    }
-  }
-
-  return formatCompactDateFilterLabel(label, now, anchor);
+  const parts = formatDateDisplayLabelParts(label, mode, now, anchor);
+  return parts.secondary ? `${parts.primary} · ${parts.secondary}` : parts.primary;
 };
 
 /** Short labels for list meta and group headers (Today, Yesterday, May 30). */
@@ -571,6 +616,10 @@ export const getDateMenuItemDisplayLabel = (
         }
       }
 
+      if (mode === 'both') {
+        return formatDateDisplayLabel(customDate, mode, now);
+      }
+
       const compactLabel = formatCompactDateFilterLabel(customDate, now);
       if (compactLabel === 'Today' || compactLabel === 'Tomorrow' || compactLabel === 'Yesterday') {
         return compactLabel;
@@ -580,11 +629,8 @@ export const getDateMenuItemDisplayLabel = (
     }
   }
 
-  if (mode === 'remaining') {
-    const remainingLabel = formatRemainingDaysLabel(menuLabel, now);
-    if (remainingLabel) {
-      return remainingLabel;
-    }
+  if (mode === 'remaining' || mode === 'both') {
+    return formatDateDisplayLabel(menuLabel, mode, now);
   }
 
   return formatDateFilterLabel(menuLabel);

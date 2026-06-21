@@ -217,7 +217,7 @@ const shouldGapBeforeVisibleRow = (
   }
 
   if (previous.type === 'sectionHeader') {
-    return previous.isCollapsed;
+    return previous.isCollapsed || previous.count === 0;
   }
 
   if (previous.type === 'groupedTodoBatch' && !previous.isLastBatch) {

@@ -121,7 +121,7 @@ export function QuickPresetNav({
                 }
                 accessibilityLabel={
                   item.preset
-                    ? `Apply ${item.preset.label}`
+                    ? `Apply ${item.displayLabel || item.preset.label}`
                     : `List slot ${item.slotNumber}`
                 }
                 accessibilityState={{ disabled: !item.preset, selected }}

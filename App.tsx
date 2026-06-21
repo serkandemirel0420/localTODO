@@ -184,11 +184,7 @@ import {
 } from './src/storage/appSettingsStore';
 import {
   buildQuickPresetNavItems,
-  createQuickListPreset,
-  getQuickListPresetId,
   isListScopedPreset,
-  normalizeQuickListPresetLabel,
-  QUICK_LIST_PRESET_ID_PREFIX,
   type QuickPresetNavItem,
 } from './src/presets';
 import {
@@ -1080,6 +1076,9 @@ const normalizePresetSearchInput = (value: string) =>
 const normalizePresetSearchKeywords = (value: string) =>
   value.replace(/\s+/g, ' ').trim();
 
+const formatNavbarLabel = (value: string) =>
+  value.replace(/\s+/g, ' ').trim();
+
 const isOrderedSubsequence = (needle: string, haystack: string) => {
   if (!needle) {
     return true;
@@ -1875,6 +1874,8 @@ const dateFilterValuesIncludeExactDay = (
 
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
+
+const normalizePresetSelfListLabel = (label: string) => normalizeTodoText(label).toLocaleLowerCase();
 
 const renameListLabelInValues = (values: string[], oldLabel: string, newLabel: string) => {
   let changed = false;
@@ -6839,7 +6840,7 @@ export default function App() {
     }
 
     if (searchKeywordEditTarget.kind === 'navbar') {
-      return !normalizeTodoText(searchKeywordTitleDraft);
+      return !formatNavbarLabel(searchKeywordTitleDraft);
     }
 
     if (searchKeywordEditTarget.kind !== 'list') {
@@ -6866,16 +6867,12 @@ export default function App() {
   }, [listMenuTree, searchKeywordEditTarget, searchKeywordTitleDraft]);
   const quickPresetNavItems = useMemo<QuickPresetNavItem[]>(
     () => buildQuickPresetNavItems({
-      listMenuTree,
-      listOrderMode,
       menuPresetById,
       menuPresets,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
     }),
     [
-      listMenuTree,
-      listOrderMode,
       menuPresetById,
       menuPresets,
       quickPresetNavIconNames,
@@ -6889,36 +6886,13 @@ export default function App() {
     });
     return itemsByIndex;
   }, [quickPresetNavItems]);
-  const settingsNavbarItems = useMemo(
-    () => listMenuTree.map((item, index) => {
-      const navItem = quickPresetNavItemByNavIndex.get(index);
-      if (!navItem) {
-        return item;
-      }
-
-      return {
-        ...item,
-        iconName: navItem.iconName,
-        label: navItem.displayLabel || item.label,
-      };
-    }),
-    [listMenuTree, quickPresetNavItemByNavIndex],
+  const settingsNavbarItems = useMemo<ListMenuNode[]>(
+    () => quickPresetNavItems.map((item) => ({
+      iconName: item.iconName,
+      label: item.displayLabel || item.preset?.label || '',
+    })),
+    [quickPresetNavItems],
   );
-  const quickPresetNavVirtualPresetById = useMemo(() => {
-    const presetsById = new Map<string, MenuPreset>();
-
-    quickPresetNavItems.forEach((item) => {
-      if (
-        item.preset &&
-        item.preset.id.startsWith(QUICK_LIST_PRESET_ID_PREFIX) &&
-        !menuPresetById.has(item.preset.id)
-      ) {
-        presetsById.set(item.preset.id, item.preset);
-      }
-    });
-
-    return presetsById;
-  }, [menuPresetById, quickPresetNavItems]);
   const heldQuickPresetNavItem = heldQuickPresetNavSlotNumber
     ? quickPresetNavItems.find((item) => item.slotNumber === heldQuickPresetNavSlotNumber) ?? null
     : null;
@@ -6932,14 +6906,8 @@ export default function App() {
     ? quickPresetNavItems.find((item) => item.slotNumber === openQuickPresetNavSlotNumber) ?? null
     : null;
   const openQuickPresetNavIndex = openQuickPresetNavItem?.navIndex ?? null;
-  const settingsNavbarPinnedListCount = useMemo(
-    () => listMenuTree.filter((list) => list.showInNavbar !== false).length,
-    [listMenuTree],
-  );
   const openListPreset = openMenuPresetId
-    ? menuPresetById.get(openMenuPresetId)
-      ?? quickPresetNavVirtualPresetById.get(openMenuPresetId)
-      ?? null
+    ? menuPresetById.get(openMenuPresetId) ?? null
     : null;
   const openListPresetMatchesSelectedListScope =
     openListPreset !== null &&
@@ -7520,9 +7488,7 @@ export default function App() {
     ? menuPresetById.get(editingMenuPresetId) ?? null
     : null;
   const openMenuPreset = openMenuPresetId
-    ? menuPresetById.get(openMenuPresetId)
-      ?? quickPresetNavVirtualPresetById.get(openMenuPresetId)
-      ?? null
+    ? menuPresetById.get(openMenuPresetId) ?? null
     : null;
   const hidePresetTodoSectionAddButton = navTab !== 'search' && Boolean(
     openMenuPreset || activeMenuPreset,
@@ -9019,20 +8985,18 @@ export default function App() {
     setSearchKeywordDraft(listItem.searchKeywords ?? '');
   }, [listMenuTree]);
 
-  const openSettingsNavbarNamePrompt = useCallback((navIndex: number) => {
-    const listItem = listMenuTree[navIndex];
-    if (!listItem) {
+  const openSettingsNavbarNamePrompt = useCallback((settingsIndex: number) => {
+    const navItem = quickPresetNavItems[settingsIndex] ?? null;
+    if (!navItem) {
       return;
     }
 
-    const navItem = quickPresetNavItemByNavIndex.get(navIndex);
-
     triggerSubtleHaptic();
     Keyboard.dismiss();
-    setSearchKeywordEditTarget({ kind: 'navbar', navIndex });
-    setSearchKeywordTitleDraft(navItem?.displayLabel || listItem.label);
+    setSearchKeywordEditTarget({ kind: 'navbar', navIndex: navItem.navIndex });
+    setSearchKeywordTitleDraft(navItem.displayLabel || navItem.preset?.label || '');
     setSearchKeywordDraft('');
-  }, [listMenuTree, quickPresetNavItemByNavIndex]);
+  }, [quickPresetNavItems]);
 
   const applyListLabelRename = useCallback((
     oldLabel: string,
@@ -9071,15 +9035,6 @@ export default function App() {
     const nextMenuPresets = menuPresetsRef.current.map((preset) => (
       renameListLabelInPreset(preset, oldLabel, newLabel)
     ));
-    const oldQuickListPresetId = getQuickListPresetId(oldLabel);
-    const newQuickListPresetId = getQuickListPresetId(newLabel);
-    const currentQuickPresetNavPresetIds = quickPresetNavPresetIdsRef.current;
-    const nextQuickPresetNavPresetIds = currentQuickPresetNavPresetIds.map((presetId) => (
-      presetId === oldQuickListPresetId ? newQuickListPresetId : presetId
-    ));
-    const quickPresetNavPresetIdsChanged = nextQuickPresetNavPresetIds.some(
-      (presetId, index) => presetId !== currentQuickPresetNavPresetIds[index],
-    );
     const nextDeletedTodos = deletedTodosRef.current.map((todo) => (
       renameListLabelInTodo(todo, oldLabel, newLabel)
     ));
@@ -9096,9 +9051,6 @@ export default function App() {
     lastCreateTodoFiltersRef.current = nextLastCreateTodoFilters;
     filterColorsRef.current = nextFilterColors;
     menuPresetsRef.current = nextMenuPresets;
-    if (quickPresetNavPresetIdsChanged) {
-      quickPresetNavPresetIdsRef.current = nextQuickPresetNavPresetIds;
-    }
     deletedTodosRef.current = nextDeletedTodos;
     todosRef.current = nextTodos;
     listMenuTreeRef.current = nextListMenuTree;
@@ -9112,15 +9064,9 @@ export default function App() {
     ));
     setFilterColors(nextFilterColors);
     setMenuPresets(nextMenuPresets);
-    if (quickPresetNavPresetIdsChanged) {
-      setQuickPresetNavPresetIds(nextQuickPresetNavPresetIds);
-    }
     setDeletedTodos(nextDeletedTodos);
     setTodos(nextTodos);
     setListMenuTree(nextListMenuTree);
-    setOpenMenuPresetId((current) => (
-      current === oldQuickListPresetId ? newQuickListPresetId : current
-    ));
     setCollapsedSearchListLabels((current) => {
       if (!current.has(oldLabel)) {
         return current;
@@ -9142,7 +9088,6 @@ export default function App() {
       lastCreateTodoFilters: cloneTodoFilters(nextLastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(nextListMenuTree),
       menuPresets: cloneMenuPresets(nextMenuPresets),
-      quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(nextQuickPresetNavPresetIds),
       avoidedFilters: cloneTodoFilters(nextAvoidedFilters),
       requiredFilters: cloneTodoFilters(prunedRequiredFilters),
       selectedFilters: cloneTodoFilters(nextSelectedFilters),
@@ -9171,17 +9116,17 @@ export default function App() {
   ), []);
 
   const commitSettingsNavbarName = useCallback((navIndex: number, rawName: string) => {
-    const label = normalizeTodoText(rawName);
+    const label = formatNavbarLabel(rawName);
     if (!label) {
       return false;
     }
 
-    const listItem = listMenuTreeRef.current[navIndex];
-    if (!listItem) {
+    const navItemPreset = quickPresetNavItemByNavIndex.get(navIndex)?.preset ?? null;
+    if (!navItemPreset) {
       return false;
     }
 
-    const currentPresetId = quickPresetNavPresetIdsRef.current[navIndex] ?? null;
+    const currentPresetId = quickPresetNavPresetIdsRef.current[navIndex] ?? navItemPreset.id;
     const existingPreset = currentPresetId
       ? menuPresetsRef.current.find((preset) => preset.id === currentPresetId) ?? null
       : null;
@@ -9203,12 +9148,10 @@ export default function App() {
       return true;
     }
 
-    const navItemPreset = quickPresetNavItemByNavIndex.get(navIndex)?.preset;
-    const sourcePreset = navItemPreset ?? createQuickListPreset(listItem, listOrderModeRef.current);
     const createdAt = Date.now();
     const presetId = `preset-${createdAt}-${Math.random().toString(36).slice(2)}`;
     const [savedPreset] = cloneMenuPresets([{
-      ...sourcePreset,
+      ...navItemPreset,
       id: presetId,
       label,
       createdAt,
@@ -9222,7 +9165,6 @@ export default function App() {
     const nextPresetIdLength = Math.max(
       quickPresetNavPresetIdsRef.current.length,
       quickPresetNavIconNamesRef.current.length,
-      listMenuTreeRef.current.length,
       navIndex + 1,
     );
     const nextQuickPresetNavPresetIds = Array.from(
@@ -9238,7 +9180,7 @@ export default function App() {
     quickPresetNavPresetIdsRef.current = normalizedQuickPresetNavPresetIds;
     setMenuPresets(nextMenuPresets);
     setQuickPresetNavPresetIds(normalizedQuickPresetNavPresetIds);
-    setOpenMenuPresetId((current) => (current === sourcePreset.id ? presetId : current));
+    setOpenMenuPresetId((current) => (current === navItemPreset.id ? presetId : current));
     void persistAppSettings({
       menuPresets: cloneMenuPresets(nextMenuPresets),
       quickPresetNavPresetIds: normalizedQuickPresetNavPresetIds,
@@ -9307,8 +9249,12 @@ export default function App() {
       );
 
       if (labelChanged) {
+        const newLabelKey = newLabel.toLocaleLowerCase();
         const hasDuplicate = collectListNodeLabels(currentListMenuTree).some(
-          (label) => label.toLocaleLowerCase() === newLabel.toLocaleLowerCase(),
+          (label) => (
+            label !== oldLabel &&
+            label.toLocaleLowerCase() === newLabelKey
+          ),
         );
         if (hasDuplicate) {
           return;
@@ -9412,8 +9358,8 @@ export default function App() {
 
     if (
       singleListFilter === null ||
-      normalizeQuickListPresetLabel(singleListFilter) !==
-        normalizeQuickListPresetLabel(preset.label)
+      normalizePresetSelfListLabel(singleListFilter) !==
+        normalizePresetSelfListLabel(preset.label)
     ) {
       return filters;
     }
@@ -9774,8 +9720,7 @@ export default function App() {
   ]);
 
   const saveOpenMenuPreset = useCallback((presetId: string) => {
-    const currentPreset = menuPresets.find((preset) => preset.id === presetId)
-      ?? quickPresetNavVirtualPresetById.get(presetId);
+    const currentPreset = menuPresets.find((preset) => preset.id === presetId) ?? null;
     if (!currentPreset) {
       return;
     }
@@ -9842,7 +9787,6 @@ export default function App() {
           const nextLength = Math.max(
             current.length,
             quickPresetNavIconNames.length,
-            listMenuTree.length,
             openQuickPresetNavIndex + 1,
           );
           const next = Array.from({ length: nextLength }, (_, index) => current[index] ?? null);
@@ -9859,11 +9803,9 @@ export default function App() {
     effectiveGroupMode,
     effectiveSortMode,
     listOrderMode,
-    listMenuTree.length,
     menuPresets,
     openQuickPresetNavIndex,
     quickPresetNavIconNames.length,
-    quickPresetNavVirtualPresetById,
     recordUndo,
     avoidedFilters,
     metaTagVisibility,
@@ -10196,11 +10138,13 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistListMenuTree, recordUndo]);
 
-  const setSettingsNavbarIcon = useCallback((index: number, iconName: string | null) => {
-    if (!listMenuTreeRef.current[index]) {
+  const setSettingsNavbarIcon = useCallback((settingsIndex: number, iconName: string | null) => {
+    const navItem = quickPresetNavItems[settingsIndex] ?? null;
+    if (!navItem) {
       return;
     }
 
+    const index = navItem.navIndex;
     const defaultIconName = DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
       index % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
     ] ?? 'star-four-points';
@@ -10212,7 +10156,7 @@ export default function App() {
     recordUndo('Change navbar icon');
     const nextLength = Math.max(
       quickPresetNavIconNamesRef.current.length,
-      listMenuTreeRef.current.length,
+      quickPresetNavPresetIdsRef.current.length,
       index + 1,
     );
     const nextIconNames = Array.from({ length: nextLength }, (_, itemIndex) => (
@@ -10229,29 +10173,45 @@ export default function App() {
     setQuickPresetNavIconNames(normalizedIconNames);
     void persistAppSettings({ quickPresetNavIconNames: normalizedIconNames });
     triggerSubtleHaptic();
-  }, [persistAppSettings, recordUndo]);
+  }, [persistAppSettings, quickPresetNavItems, recordUndo]);
 
-  const toggleSettingsListNavbarPinned = useCallback((index: number) => {
-    if (!listMenuTreeRef.current[index]) {
+  const swapSettingsNavbarItems = useCallback((indexA: number, indexB: number) => {
+    if (indexA === indexB) {
       return;
     }
 
-    recordUndo('Change list navbar', { showToast: false });
-    setListMenuTree((current) => {
-      const next = current.map((item, itemIndex) => {
-        if (itemIndex !== index) {
-          return item;
-        }
+    const itemA = quickPresetNavItems[indexA] ?? null;
+    const itemB = quickPresetNavItems[indexB] ?? null;
+    if (!itemA || !itemB) {
+      return;
+    }
 
-        return item.showInNavbar === false
-          ? { ...item, showInNavbar: true }
-          : { ...item, showInNavbar: false };
-      });
-      persistListMenuTree(next);
-      return next;
+    const nextPresetIds = quickPresetNavItems.map((item) => item.presetId ?? item.preset?.id ?? null);
+    const nextIconNames = quickPresetNavItems.map((item) => (
+      quickPresetNavIconNamesRef.current[item.navIndex] ?? item.iconName
+    ));
+    [nextPresetIds[indexA], nextPresetIds[indexB]] = [nextPresetIds[indexB], nextPresetIds[indexA]];
+    [nextIconNames[indexA], nextIconNames[indexB]] = [nextIconNames[indexB], nextIconNames[indexA]];
+
+    const normalizedPresetIds = cloneQuickPresetNavPresetIds(nextPresetIds);
+    const normalizedIconNames = cloneQuickPresetNavIconNames(
+      nextIconNames,
+      normalizedPresetIds.length,
+    );
+
+    recordUndo('Reorder navbar');
+    quickPresetNavPresetIdsRef.current = normalizedPresetIds;
+    quickPresetNavIconNamesRef.current = normalizedIconNames;
+    setQuickPresetNavPresetIds(normalizedPresetIds);
+    setQuickPresetNavIconNames(normalizedIconNames);
+    setSettingsPresetIconPickerIndex(null);
+    setOpenQuickPresetNavSlotNumber(null);
+    setHeldQuickPresetNavSlotNumber(null);
+    void persistAppSettings({
+      quickPresetNavIconNames: normalizedIconNames,
+      quickPresetNavPresetIds: normalizedPresetIds,
     });
-    triggerSubtleHaptic();
-  }, [persistListMenuTree, recordUndo]);
+  }, [persistAppSettings, quickPresetNavItems, recordUndo]);
 
   const swapSettingsListItems = useCallback((indexA: number, indexB: number) => {
     if (indexA === indexB) {
@@ -10288,38 +10248,60 @@ export default function App() {
     swapSettingsListItems(fromIndex, toIndex);
   }, [swapSettingsListItems]);
 
-  const removeSettingsNavbarItem = useCallback((index: number) => {
-    const currentItem = listMenuTreeRef.current[index];
-    if (!currentItem || currentItem.showInNavbar === false) {
+  const handleSettingsNavbarSwap = useCallback((
+    fromIndex: number,
+    toIndex: number,
+  ) => {
+    swapSettingsNavbarItems(fromIndex, toIndex);
+  }, [swapSettingsNavbarItems]);
+
+  const removeSettingsNavbarItem = useCallback((settingsIndex: number) => {
+    const navItem = quickPresetNavItems[settingsIndex] ?? null;
+    if (!navItem) {
       return;
     }
 
-    const removedSlotNumber = quickPresetNavItemByNavIndex.get(index)?.slotNumber ?? null;
+    const removedSlotNumber = navItem.slotNumber;
+    const nextPresetIds = quickPresetNavItems.map((item) => item.presetId ?? item.preset?.id ?? null);
+    const nextIconNames = quickPresetNavItems.map((item) => (
+      quickPresetNavIconNamesRef.current[item.navIndex] ?? item.iconName
+    ));
+    nextPresetIds.splice(settingsIndex, 1);
+    nextIconNames.splice(settingsIndex, 1);
+    const normalizedPresetIds = cloneQuickPresetNavPresetIds(
+      nextPresetIds.length > 0 ? nextPresetIds : [null],
+    );
+    const normalizedIconNames = nextIconNames.length > 0
+      ? cloneQuickPresetNavIconNames(nextIconNames, normalizedPresetIds.length)
+      : [];
 
     recordUndo('Remove navbar item');
     setSettingsListReorderCancelNonce((current) => current + 1);
-    setSettingsPresetIconPickerIndex((current) => (current === index ? null : current));
+    setSettingsPresetIconPickerIndex((current) => (
+      current === null || current === settingsIndex
+        ? null
+        : current > settingsIndex ? current - 1 : current
+    ));
     setOpenQuickPresetNavSlotNumber((current) => (
-      current === removedSlotNumber ? null : current
+      current === null || current === removedSlotNumber
+        ? null
+        : current > removedSlotNumber ? current - 1 : current
     ));
     setHeldQuickPresetNavSlotNumber((current) => (
-      current === removedSlotNumber ? null : current
+      current === null || current === removedSlotNumber
+        ? null
+        : current > removedSlotNumber ? current - 1 : current
     ));
-    setListMenuTree((current) => {
-      const next = current.map((item, itemIndex) => {
-        if (itemIndex !== index) {
-          return item;
-        }
-
-        return { ...item, showInNavbar: false };
-      });
-
-      listMenuTreeRef.current = next;
-      persistListMenuTree(next);
-      return next;
+    quickPresetNavPresetIdsRef.current = normalizedPresetIds;
+    quickPresetNavIconNamesRef.current = normalizedIconNames;
+    setQuickPresetNavPresetIds(normalizedPresetIds);
+    setQuickPresetNavIconNames(normalizedIconNames);
+    void persistAppSettings({
+      quickPresetNavIconNames: normalizedIconNames,
+      quickPresetNavPresetIds: normalizedPresetIds,
     });
     triggerSubtleHaptic();
-  }, [persistListMenuTree, quickPresetNavItemByNavIndex, recordUndo]);
+  }, [persistAppSettings, quickPresetNavItems, recordUndo]);
 
   const removeSettingsListNow = useCallback((index: number) => {
     if (!listMenuTreeRef.current[index]) {
@@ -14759,7 +14741,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Navbar</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {settingsNavbarPinnedListCount} in navbar · {listMenuTree.length} lists
+                      {quickPresetNavItems.length} in navbar
                     </Text>
                   </View>
                   <Pressable
@@ -14787,7 +14769,7 @@ export default function App() {
                 {settingsPresetsExpanded ? (
                   <View style={styles.settingsCard}>
                     <Text style={[styles.settingsListReorderHint, styles.settingsListReorderHintFirst]}>
-                      {listMenuTree.length > 1
+                      {quickPresetNavItems.length > 1
                         ? 'Tap handles to swap navbar order. Swipe left to remove from navbar.'
                         : 'Swipe left to remove from navbar.'}
                     </Text>
@@ -14804,8 +14786,7 @@ export default function App() {
                       }}
                       reorderCancelNonce={settingsListReorderCancelNonce}
                       onMainPress={openSettingsNavbarNamePrompt}
-                      onPinPress={toggleSettingsListNavbarPinned}
-                      onSwap={handleSettingsListSwap}
+                      onSwap={handleSettingsNavbarSwap}
                       onSetIcon={setSettingsNavbarIcon}
                     />
                   </View>

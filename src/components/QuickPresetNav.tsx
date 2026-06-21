@@ -45,8 +45,7 @@ const toMaterialCommunityIconName = (iconName: string): MaterialCommunityIconNam
   iconName as MaterialCommunityIconName
 );
 
-// The quick nav is list-first: each visible Settings list appears as a saved list,
-// and explicit saved-list assignments can override a slot.
+// The quick nav renders saved preset slots. Lists have their own Settings surface.
 export function QuickPresetNav({
   accentColor,
   activePresetId,

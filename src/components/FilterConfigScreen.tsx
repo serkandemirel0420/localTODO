@@ -77,12 +77,13 @@ export type FilterConfigListItem = {
   parentLabel?: string;
 };
 
-type FilterKey = 'list' | 'date' | 'priority';
+type FilterKey = 'list' | 'tag' | 'date' | 'priority';
 
 type FilterConfigScreenProps = {
   visible: boolean;
   filters: TodoFilters;
   avoidedFilters: TodoFilters;
+  availableTags: string[];
   filterColors: FilterColorSettings;
   listMenuItems: FilterConfigListItem[];
   sortMode: TodoSortMode;
@@ -105,7 +106,7 @@ type FilterConfigScreenProps = {
   onToggleMetaTag: (key: MetaTagKey) => void;
   onClearFilters: () => void;
   onClearSection: (
-    section: 'lists' | 'priority' | 'date' | 'sort' | 'group' | 'metaTags',
+    section: 'lists' | 'tags' | 'priority' | 'date' | 'sort' | 'group' | 'metaTags',
   ) => void;
   onToggleDateLabelDisplayMode: () => void;
   uiState: FilterConfigUiState;
@@ -190,6 +191,7 @@ export const FilterConfigScreen = ({
   visible,
   filters,
   avoidedFilters,
+  availableTags,
   filterColors,
   listMenuItems,
   sortMode,
@@ -235,6 +237,10 @@ export const FilterConfigScreen = ({
   const activePriorityFilterLabels = [
     ...filters.priority,
     ...avoidedFilters.priority.map((value) => `Avoid ${value}`),
+  ];
+  const activeTagFilterLabels = [
+    ...filters.tag,
+    ...avoidedFilters.tag.map((value) => `Avoid ${value}`),
   ];
   const activeDateFilterLabels = [
     ...filters.date.map((value) => formatActiveDateLabel(value)),
@@ -471,6 +477,24 @@ export const FilterConfigScreen = ({
                 </View>
               );
             })}
+          </AccordionSection>
+
+          <AccordionSection
+            canClear={activeTagFilterLabels.length > 0}
+            expanded={expandedSections.tags}
+            onClear={() => onClearSection('tags')}
+            onToggle={() => toggleSection('tags')}
+            subtitle={formatSelectionSummary(activeTagFilterLabels, 'All tags')}
+            title="Tags"
+          >
+            {availableTags.length === 0 ? (
+              <Text style={styles.emptySectionText}>No tags</Text>
+            ) : availableTags.map((label) => renderOptionRow(
+              `tag-${label}`,
+              label,
+              filters.tag.includes(label),
+              () => onToggleFilter('tag', label),
+            ))}
           </AccordionSection>
 
           <AccordionSection
@@ -841,6 +865,15 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 20,
     marginLeft: 12,
+  },
+  emptySectionText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
   subsectionMarker: {
     color: '#B4AAA0',

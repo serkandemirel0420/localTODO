@@ -116,6 +116,7 @@ export const DEFAULT_QUICK_PRESET_NAV_PRESET_IDS: QuickPresetNavPresetIds =
 
 export type FilterConfigExpandedSections = {
   lists: boolean;
+  tags: boolean;
   priority: boolean;
   date: boolean;
   sort: boolean;
@@ -153,6 +154,7 @@ export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
 export const DEFAULT_FILTER_CONFIG_UI_STATE: FilterConfigUiState = {
   expandedSections: {
     lists: true,
+    tags: false,
     priority: false,
     date: true,
     sort: false,
@@ -436,6 +438,7 @@ export const normalizeFilterConfigUiState = (value: unknown): FilterConfigUiStat
   return {
     expandedSections: {
       lists: normalizeBooleanRecordValue(expandedSections, 'lists'),
+      tags: normalizeBooleanRecordValue(expandedSections, 'tags'),
       priority: normalizeBooleanRecordValue(expandedSections, 'priority'),
       date: normalizeBooleanRecordValue(expandedSections, 'date'),
       sort: normalizeBooleanRecordValue(expandedSections, 'sort'),

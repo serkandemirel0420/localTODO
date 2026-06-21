@@ -641,6 +641,7 @@ export const createDevTestTodos = (
         list: spec.list,
         priority: spec.priority,
         reminder: spec.reminder,
+        tag: [],
       },
       spec.content,
       createdAt,
@@ -683,6 +684,7 @@ export const createDevTestTodos = (
         list: listFilters,
         priority: priorityFilters,
         reminder,
+        tag: [],
       },
       [
         `Dev test note ${index + 1}.`,

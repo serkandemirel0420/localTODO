@@ -334,8 +334,8 @@ const isListMenuItemSelected = (
   _listMenuTree: ListMenuNode[],
 ) => listFilters.includes(item.label);
 
-type FilterKey = 'list' | 'date' | 'priority';
-const FILTER_KEYS: FilterKey[] = ['list', 'date', 'priority'];
+type FilterKey = 'list' | 'tag' | 'date' | 'priority';
+const FILTER_KEYS: FilterKey[] = ['list', 'tag', 'date', 'priority'];
 
 type MenuMode =
   | 'date'
@@ -348,7 +348,8 @@ type MenuMode =
   | 'presets'
   | 'presetsQuickApply'
   | 'priority'
-  | 'sort';
+  | 'sort'
+  | 'tags';
 
 type SelectedFilters = TodoFilters;
 
@@ -464,6 +465,7 @@ const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
   lists: 'list',
   presetLists: 'list',
   priority: 'priority',
+  tags: 'tag',
 };
 
 const REPEAT_STATUS_FILTER_ITEMS = [
@@ -978,6 +980,7 @@ const SETTINGS_LIST_ROW_HEIGHT = 54;
 const SETTINGS_LIST_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
   list: 'List',
+  tag: 'Tag',
   date: 'Date',
   priority: 'Priority',
 };
@@ -1255,6 +1258,7 @@ const mergeCreateSectionFilters = (...filters: TodoFilters[]): TodoFilters => ({
   list: uniqueCreateFilterValues(filters.flatMap((filter) => filter.list)),
   priority: uniqueCreateFilterValues(filters.flatMap((filter) => filter.priority)),
   reminder: uniqueCreateFilterValues(filters.flatMap((filter) => filter.reminder)),
+  tag: uniqueCreateFilterValues(filters.flatMap((filter) => filter.tag)),
 });
 
 const getOverdueCreateDateLabel = () => {
@@ -1370,6 +1374,7 @@ const getDefaultCreateDraftFilters = (
   list: listMenuTree[0]?.label ? [listMenuTree[0].label] : ['Inbox'],
   priority: [],
   reminder: [],
+  tag: [],
 });
 
 const getCreateTodoFilters = (
@@ -1394,6 +1399,7 @@ const getCreateTodoFilters = (
     list: listLabel ? [listLabel] : hasUnknownListLabel ? fallback.list : [],
     priority: priorityLabel ? [priorityLabel] : [],
     reminder: reminderValues,
+    tag: [],
   };
 };
 
@@ -1407,6 +1413,7 @@ const hasRememberedCreateDraftFilters = (
 
   return (
     normalized.date.length > 0 ||
+    normalized.tag.length > 0 ||
     reminderValues.length > 0 ||
     normalized.priority.some((label) => (
       label !== 'None' && PRIORITY_MENU_ITEMS.includes(label)
@@ -1479,6 +1486,7 @@ const EMPTY_SELECTED_FILTERS: SelectedFilters = {
   list: [],
   priority: [],
   reminder: [],
+  tag: [],
 };
 const LEGACY_INITIAL_TODO_COUNT = 50;
 
@@ -1486,7 +1494,8 @@ const isEmptyTodoFilters = (filters: TodoFilters) =>
   filters.date.length === 0 &&
   filters.list.length === 0 &&
   filters.priority.length === 0 &&
-  filters.reminder.length === 0;
+  filters.reminder.length === 0 &&
+  filters.tag.length === 0;
 
 const isInitialSeedTodo = (todo: Todo) => {
   const match = /^seed-(\d+)$/.exec(todo.id);
@@ -1785,6 +1794,7 @@ const sortListMenuTree = (nodes: ListMenuNode[]): ListMenuNode[] =>
 const countFilters = (filters: SelectedFilters, includeReminderRows = false) =>
   countDateMenuSelections(filters, includeReminderRows) +
   filters.list.length +
+  filters.tag.length +
   filters.priority.length;
 
 const normalizeFilterValues = (filters: TodoFilters) => ({
@@ -1792,6 +1802,7 @@ const normalizeFilterValues = (filters: TodoFilters) => ({
   list: [...filters.list].sort(),
   priority: [...filters.priority].sort(),
   reminder: [...filters.reminder].sort(),
+  tag: [...filters.tag].sort(),
 });
 
 const filterValueListsEqual = (first: string[], second: string[]) => {
@@ -1833,7 +1844,8 @@ const hasAnyFilterValues = (filters: TodoFilters): boolean =>
   filters.date.length > 0 ||
   filters.list.length > 0 ||
   filters.priority.length > 0 ||
-  filters.reminder.length > 0;
+  filters.reminder.length > 0 ||
+  filters.tag.length > 0;
 
 const hasAnyRequiredFilters = hasAnyFilterValues;
 
@@ -1929,6 +1941,22 @@ const removeSelectedValuesFromAvoidedFilters = (
   list: filters.list.filter((value) => !selectedFilters.list.includes(value)),
   priority: filters.priority.filter((value) => !selectedFilters.priority.includes(value)),
   reminder: filters.reminder.filter((value) => !selectedFilters.reminder.includes(value)),
+  tag: filters.tag.filter((value) => !selectedFilters.tag.includes(value)),
+});
+
+const todoHasTagFilter = (todo: Todo, value: string) => {
+  const tagKey = formatTagLabel(value).toLocaleLowerCase();
+
+  if (!tagKey) {
+    return false;
+  }
+
+  return normalizeTodoTags(todo.tags).some((tag) => tag.toLocaleLowerCase() === tagKey);
+};
+
+const getTodoEditableFilters = (todo: Todo): TodoFilters => ({
+  ...cloneTodoFilters(todo.filters),
+  tag: normalizeTodoTags(todo.tags),
 });
 
 const getSharedTodoFilters = (items: Todo[]): TodoFilters => {
@@ -1941,12 +1969,16 @@ const getSharedTodoFilters = (items: Todo[]): TodoFilters => {
     firstItem.filters[filterKey].filter((value) =>
       remainingItems.every((item) => item.filters[filterKey].includes(value)),
     );
+  const firstTags = normalizeTodoTags(firstItem.tags);
 
   return {
     date: getSharedValues('date'),
     list: getSharedValues('list'),
     priority: getSharedValues('priority'),
     reminder: getSharedValues('reminder'),
+    tag: firstTags.filter((value) =>
+      remainingItems.every((item) => todoHasTagFilter(item, value)),
+    ),
   };
 };
 
@@ -1955,7 +1987,11 @@ const getMergedTodoFilters = (items: Todo[]): TodoFilters => {
 
   items.forEach((item) => {
     FILTER_KEYS.forEach((filterKey) => {
-      item.filters[filterKey].forEach((value) => {
+      const values = filterKey === 'tag'
+        ? normalizeTodoTags(item.tags)
+        : item.filters[filterKey];
+
+      values.forEach((value) => {
         if (!merged[filterKey].includes(value)) {
           merged[filterKey].push(value);
         }
@@ -2039,6 +2075,7 @@ const formatPresetSummary = (
   const avoidedFilterCount = countFilters(avoidedFilters);
   const parts = [
     filters.list.length > 0 ? formatPresetCount(filters.list.length, 'list') : null,
+    filters.tag.length > 0 ? formatPresetCount(filters.tag.length, 'tag') : null,
     filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
     filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
     hasRepeatingItemsFilter(filters.reminder) ? REPEATING_ITEMS_FILTER_LABEL : null,
@@ -2068,16 +2105,20 @@ const formatPresetSectionLabel = (
   const dateLabels = activeFilterItems
     .filter((item) => item.filterKey === 'date')
     .map((item) => item.displayLabel);
+  const tagLabels = activeFilterItems
+    .filter((item) => item.filterKey === 'tag')
+    .map((item) => item.displayLabel);
   const priorityLabels = activeFilterItems
     .filter((item) => item.filterKey === 'priority')
     .map((item) => item.displayLabel);
   const labels = [
     ...listLabels.slice(0, 1),
+    ...tagLabels.slice(0, 1),
     ...dateLabels.slice(0, 2),
     ...priorityLabels.slice(0, 1),
   ];
   const hiddenCount =
-    listLabels.length + dateLabels.length + priorityLabels.length - labels.length;
+    listLabels.length + tagLabels.length + dateLabels.length + priorityLabels.length - labels.length;
 
   if (labels.length === 0) {
     return 'All items';
@@ -2208,6 +2249,7 @@ const getOptionalSelectedFilters = (
   reminder: filters.reminder.filter((value) => (
     !requiredFilters.reminder.includes(value)
   )),
+  tag: filters.tag.filter((value) => !isFilterValueRequired(requiredFilters, 'tag', value)),
 });
 
 const todoMatchesRequiredFilters = (
@@ -2234,6 +2276,7 @@ const todoMatchesRequiredFilters = (
       todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
     )) &&
     requiredFilters.priority.every((value) => todo.filters.priority.includes(value)) &&
+    requiredFilters.tag.every((value) => todoHasTagFilter(todo, value)) &&
     requiredReminderValues.every((value) => todo.filters.reminder.includes(value)) &&
     (
       !hasRepeatingItemsFilter(requiredFilters.reminder) ||
@@ -2266,6 +2309,7 @@ const todoMatchesAvoidedFilters = (
       todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
     )) ||
     avoidedFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
+    avoidedFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
     avoidedReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
     (
       hasRepeatingItemsFilter(avoidedFilters.reminder) &&
@@ -2298,6 +2342,7 @@ const todoMatchesAnyOptionalFilter = (
       todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
     )) ||
     optionalFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
+    optionalFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
     optionalReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
     (
       hasRepeatingItemsFilter(optionalFilters.reminder) &&
@@ -2333,6 +2378,9 @@ const getFiltersAfterCreateReveal = (
   const priorityMatches =
     filters.priority.length === 0 ||
     filters.priority.some((value) => todo.filters.priority.includes(value));
+  const tagMatches =
+    filters.tag.length === 0 ||
+    filters.tag.some((value) => todoHasTagFilter(todo, value));
 
   return {
     date: dateGroupMatches ? [...filters.date] : [],
@@ -2343,6 +2391,7 @@ const getFiltersAfterCreateReveal = (
     reminder: !dateGroupMatches && hasRepeatStatusFilter(filters.reminder)
       ? removeRepeatStatusFilters(filters.reminder)
       : [...filters.reminder],
+    tag: tagMatches ? [...filters.tag] : [],
   };
 };
 
@@ -4769,11 +4818,12 @@ export default function App() {
 
   const resetCreateDrawerState = useCallback((filters = lastCreateTodoFilters) => {
     const nextFilters = getRememberedCreateDraftFilters(listMenuTree, filters);
+    const nextTags = normalizeTodoFilters(filters).tag;
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
     setCreateDraftText('');
     setCreateDraftPinned(false);
-    setCreateDraftTags([]);
+    setCreateDraftTags(nextTags);
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -5161,7 +5211,7 @@ export default function App() {
       ),
     );
     setCreateDraftPinned(false);
-    setCreateDraftTags([]);
+    setCreateDraftTags(normalizeTodoFilters(sectionFilters).tag);
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -5277,13 +5327,14 @@ export default function App() {
       todoFilters,
     );
     const createdAt = Date.now();
+    const todoTags = normalizeTodoTags([...createDraftTags, ...selectedFilters.tag]);
     const todo = makeTodo(
       text,
       todoFilters,
       content,
       createdAt,
       createDraftPinned,
-      createDraftTags,
+      todoTags,
     );
     const nextSelectedFilters = getFiltersAfterCreateReveal(
       todo,
@@ -5760,15 +5811,24 @@ export default function App() {
         return;
       }
 
-      const rawNextFilters = updater(cloneTodoFilters(todo.filters));
-      const dateChanged = !filterValueListsEqual(rawNextFilters.date, todo.filters.date);
+      const currentEditableFilters = getTodoEditableFilters(todo);
+      const rawNextFilters = updater(currentEditableFilters);
+      const nextTags = normalizeTodoTags(rawNextFilters.tag);
+      const rawNextTodoFilters = {
+        ...rawNextFilters,
+        tag: [],
+      };
+      const dateChanged = !filterValueListsEqual(rawNextTodoFilters.date, todo.filters.date);
       const nextFilters = normalizeTodoFilters(
-        rawNextFilters,
+        rawNextTodoFilters,
         dateChanged ? Date.now() : undefined,
       );
 
-      if (!filtersEqual(todo.filters, nextFilters)) {
-        updatedById.set(todo.id, { ...todo, filters: nextFilters });
+      if (
+        !filtersEqual(todo.filters, nextFilters) ||
+        !filterValueListsEqual(normalizeTodoTags(todo.tags), nextTags)
+      ) {
+        updatedById.set(todo.id, { ...todo, filters: nextFilters, tags: nextTags });
       }
     });
 
@@ -6881,14 +6941,16 @@ export default function App() {
   );
   const activeTodoMenuFilters = useMemo(() => {
     if (activeTodoMenuId) {
-      return todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null;
+      const todo = todos.find((item) => item.id === activeTodoMenuId);
+      return todo ? getTodoEditableFilters(todo) : null;
     }
 
     return bulkTodoMenuFilters;
   }, [activeTodoMenuId, bulkTodoMenuFilters, todos]);
   const activeTodoMenuSelectionFilters = useMemo(() => {
     if (activeTodoMenuId) {
-      return todos.find((todo) => todo.id === activeTodoMenuId)?.filters ?? null;
+      const todo = todos.find((item) => item.id === activeTodoMenuId);
+      return todo ? getTodoEditableFilters(todo) : null;
     }
 
     return bulkTodoSharedFilters;
@@ -7317,6 +7379,15 @@ export default function App() {
       }));
     }
 
+    if (menuMode === 'tags') {
+      return availableTodoTags.map((label) => ({
+        filterKey: 'tag',
+        id: `tag-${label}`,
+        label,
+        type: 'value' as const,
+      }));
+    }
+
     if (menuMode === 'date') {
       const dateMenuItems = includeActiveTodoReminderRows
         ? getDateMenuItemsForDateLabels(
@@ -7489,6 +7560,13 @@ export default function App() {
           type: 'menu',
         },
         {
+          count: menuFilters.tag.length || undefined,
+          id: 'main-tags',
+          label: 'Tags',
+          menuMode: 'tags',
+          type: 'menu',
+        },
+        {
           count: menuFilters.priority.length || undefined,
           id: 'main-priority',
           label: 'Priority',
@@ -7526,6 +7604,17 @@ export default function App() {
           menuFilters.list.length + menuAvoidedFilters.list.length
             ? undefined
             : formatPresetCount(filterConfigListItems.length, 'list'),
+      },
+      {
+        count: (menuFilters.tag.length + menuAvoidedFilters.tag.length) || undefined,
+        id: 'main-tags',
+        label: 'Tags',
+        menuMode: 'tags',
+        type: 'menu',
+        valueLabel:
+          menuFilters.tag.length + menuAvoidedFilters.tag.length
+            ? undefined
+            : formatPresetCount(availableTodoTags.length, 'tag'),
       },
       {
         count: (menuFilters.priority.length + menuAvoidedFilters.priority.length) || undefined,
@@ -7596,6 +7685,7 @@ export default function App() {
     activeFilterCount,
     activeFilterRows,
     activeMenuPreset,
+    availableTodoTags,
     currentPresetSummary,
     filterConfigListItems,
     hasTodoEditTargets,
@@ -12450,7 +12540,9 @@ export default function App() {
                             }
 
                             if (item.type === 'filter') {
-                              const colorTheme = getFilterColorTheme(filterColors, item.filterKey, item.label);
+                              const colorTheme = item.filterKey === 'tag'
+                                ? null
+                                : getFilterColorTheme(filterColors, item.filterKey, item.label);
                               const displayLabel = isRepeatStatusFilterValue(item.label)
                                 ? getRepeatStatusFilterDisplayLabel(item.label)
                                 : item.filterKey === 'date'
@@ -12819,7 +12911,7 @@ export default function App() {
                             const colorLookupValue = isDateValue && !isReminderValue
                               ? getDateMenuColorLookupValue(item.label, menuFilters.date)
                               : item.label;
-                            const colorTheme = isReminderValue
+                            const colorTheme = isReminderValue || item.filterKey === 'tag'
                               ? null
                               : getFilterColorTheme(
                                 filterColors,
@@ -13767,6 +13859,7 @@ export default function App() {
 
         <FilterConfigScreen
           avoidedFilters={avoidedFilters}
+          availableTags={availableTodoTags}
           dateLabelDisplayMode={dateLabelDisplayMode}
           filterColors={filterColors}
           filters={selectedFilters}

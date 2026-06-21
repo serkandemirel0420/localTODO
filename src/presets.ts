@@ -49,6 +49,7 @@ export const createQuickListPreset = (
       list: [list.label],
       priority: [],
       reminder: [],
+      tag: [],
     },
     requiredFilters: cloneTodoFilters(),
     avoidedFilters: cloneTodoFilters(),

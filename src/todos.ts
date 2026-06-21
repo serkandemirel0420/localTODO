@@ -10,6 +10,7 @@ export type TodoFilters = {
   list: string[];
   priority: string[];
   reminder: string[];
+  tag: string[];
 };
 
 export type Todo = {
@@ -32,16 +33,18 @@ export const EMPTY_TODO_FILTERS: TodoFilters = {
   list: [],
   priority: [],
   reminder: [],
+  tag: [],
 };
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
 
 export const cloneTodoFilters = (filters: TodoFilters = EMPTY_TODO_FILTERS): TodoFilters => ({
-  date: [...filters.date],
-  list: [...filters.list],
-  priority: [...filters.priority],
-  reminder: [...filters.reminder],
+  date: [...(filters.date ?? [])],
+  list: [...(filters.list ?? [])],
+  priority: [...(filters.priority ?? [])],
+  reminder: [...(filters.reminder ?? [])],
+  tag: [...(filters.tag ?? [])],
 });
 
 const normalizeDateFilterValues = (
@@ -77,6 +80,7 @@ export const normalizeTodoFilters = (
     reminder: isStringArray(filters.reminder)
       ? normalizeReminderFilterValues(filters.reminder)
       : [],
+    tag: isStringArray(filters.tag) ? normalizeTodoTags(filters.tag) : [],
   };
 };
 
@@ -97,6 +101,7 @@ export const pruneTodoFilters = (
     list: keepSelectedFilterValues(normalizedFilters.list, normalizedSelectedFilters.list),
     priority: keepSelectedFilterValues(normalizedFilters.priority, normalizedSelectedFilters.priority),
     reminder: keepSelectedFilterValues(normalizedFilters.reminder, normalizedSelectedFilters.reminder),
+    tag: keepSelectedFilterValues(normalizedFilters.tag, normalizedSelectedFilters.tag),
   };
 };
 

@@ -184,6 +184,7 @@ import {
 } from './src/storage/appSettingsStore';
 import {
   buildQuickPresetNavItems,
+  createQuickListPreset,
   getQuickListPresetId,
   isListScopedPreset,
   normalizeQuickListPresetLabel,
@@ -262,6 +263,7 @@ type MenuPresetSection = StoredMenuPresetSection;
 
 type SearchKeywordEditTarget =
   | { kind: 'list'; listIndex: number }
+  | { kind: 'navbar'; navIndex: number }
   | { kind: 'preset'; presetId: string };
 
 type UndoSnapshot = {
@@ -2636,6 +2638,7 @@ type SettingsListSwipeRowProps = {
   onMainPress?: () => void;
   onPinPress?: () => void;
   mainPressDisabled?: boolean;
+  mainPressHint?: string;
   showInNavbar?: boolean;
 };
 
@@ -2650,6 +2653,7 @@ function SettingsListSwipeRow({
   onMainPress,
   onPinPress,
   mainPressDisabled,
+  mainPressHint,
   showInNavbar,
 }: SettingsListSwipeRowProps) {
   const renderedIconName = resolveMaterialCommunityIconName(listIconName, 'paw');
@@ -2710,7 +2714,7 @@ function SettingsListSwipeRow({
               accessibilityHint={
                 mainPressLocked
                   ? 'Edit this list name from the List section.'
-                  : 'Tap to edit list name and search keywords.'
+                  : mainPressHint ?? 'Tap to edit list name and search keywords.'
               }
               accessibilityLabel={label}
               accessibilityState={{ disabled: mainPressLocked }}
@@ -2773,6 +2777,7 @@ type SettingsListReorderRowProps = {
   onMainPress?: () => void;
   onPinPress?: () => void;
   mainPressDisabled?: boolean;
+  mainPressHint?: string;
   onReorderHandlePress: (index: number) => void;
   onSetIcon: (index: number, iconName: string | null) => void;
 };
@@ -2790,6 +2795,7 @@ function SettingsListReorderRow({
   onMainPress,
   onPinPress,
   mainPressDisabled,
+  mainPressHint,
   onReorderHandlePress,
   onSetIcon,
 }: SettingsListReorderRowProps) {
@@ -2839,6 +2845,7 @@ function SettingsListReorderRow({
                 triggerSubtleHaptic();
               }}
               mainPressDisabled={mainPressDisabled}
+              mainPressHint={mainPressHint}
               onMainPress={onMainPress}
               onPinPress={onPinPress}
               showInNavbar={showInNavbar}
@@ -2941,6 +2948,7 @@ type SettingsListEditorProps = {
   onMainPress?: (index: number) => void;
   onPinPress?: (index: number) => void;
   mainPressDisabled?: boolean;
+  mainPressHint?: string;
   onSetIcon: (index: number, iconName: string | null) => void;
   onSwap?: (fromIndex: number, toIndex: number) => void;
   reorderCancelNonce: number;
@@ -2958,6 +2966,7 @@ function SettingsListEditor({
   onMainPress,
   onPinPress,
   mainPressDisabled = false,
+  mainPressHint,
   onSetIcon,
   onSwap,
   reorderCancelNonce,
@@ -3055,6 +3064,7 @@ function SettingsListEditor({
           }
           item={item}
           mainPressDisabled={mainPressDisabled}
+          mainPressHint={mainPressHint}
           onDelete={onDelete ? () => onDelete(index) : undefined}
           onIconPickerChange={onIconPickerChange}
           onMainPress={onMainPress ? () => onMainPress(index) : undefined}
@@ -6813,14 +6823,26 @@ export default function App() {
     [menuPresets],
   );
   const searchKeywordEditTitle = useMemo(() => {
-    if (!searchKeywordEditTarget || searchKeywordEditTarget.kind === 'list') {
+    if (
+      !searchKeywordEditTarget ||
+      searchKeywordEditTarget.kind === 'list' ||
+      searchKeywordEditTarget.kind === 'navbar'
+    ) {
       return '';
     }
 
     return menuPresetById.get(searchKeywordEditTarget.presetId)?.label ?? 'List';
   }, [menuPresetById, searchKeywordEditTarget]);
   const searchKeywordModalSaveDisabled = useMemo(() => {
-    if (!searchKeywordEditTarget || searchKeywordEditTarget.kind !== 'list') {
+    if (!searchKeywordEditTarget) {
+      return false;
+    }
+
+    if (searchKeywordEditTarget.kind === 'navbar') {
+      return !normalizeTodoText(searchKeywordTitleDraft);
+    }
+
+    if (searchKeywordEditTarget.kind !== 'list') {
       return false;
     }
 
@@ -8954,7 +8976,10 @@ export default function App() {
 
   const scheduleSearchKeywordModalInputFocus = useCallback(() => {
     const attemptFocus = () => {
-      if (searchKeywordEditTarget?.kind === 'list') {
+      if (
+        searchKeywordEditTarget?.kind === 'list' ||
+        searchKeywordEditTarget?.kind === 'navbar'
+      ) {
         listSearchKeywordTitleInputRef.current?.focus();
         return;
       }
@@ -8993,6 +9018,21 @@ export default function App() {
     setSearchKeywordTitleDraft(listItem.label);
     setSearchKeywordDraft(listItem.searchKeywords ?? '');
   }, [listMenuTree]);
+
+  const openSettingsNavbarNamePrompt = useCallback((navIndex: number) => {
+    const listItem = listMenuTree[navIndex];
+    if (!listItem) {
+      return;
+    }
+
+    const navItem = quickPresetNavItemByNavIndex.get(navIndex);
+
+    triggerSubtleHaptic();
+    Keyboard.dismiss();
+    setSearchKeywordEditTarget({ kind: 'navbar', navIndex });
+    setSearchKeywordTitleDraft(navItem?.displayLabel || listItem.label);
+    setSearchKeywordDraft('');
+  }, [listMenuTree, quickPresetNavItemByNavIndex]);
 
   const applyListLabelRename = useCallback((
     oldLabel: string,
@@ -9130,6 +9170,86 @@ export default function App() {
     })
   ), []);
 
+  const commitSettingsNavbarName = useCallback((navIndex: number, rawName: string) => {
+    const label = normalizeTodoText(rawName);
+    if (!label) {
+      return false;
+    }
+
+    const listItem = listMenuTreeRef.current[navIndex];
+    if (!listItem) {
+      return false;
+    }
+
+    const currentPresetId = quickPresetNavPresetIdsRef.current[navIndex] ?? null;
+    const existingPreset = currentPresetId
+      ? menuPresetsRef.current.find((preset) => preset.id === currentPresetId) ?? null
+      : null;
+
+    if (existingPreset?.label === label) {
+      return false;
+    }
+
+    recordUndo('Edit navbar name');
+
+    if (existingPreset) {
+      const nextMenuPresets = menuPresetsRef.current.map((preset) => (
+        preset.id === existingPreset.id ? { ...preset, label } : preset
+      ));
+
+      menuPresetsRef.current = nextMenuPresets;
+      setMenuPresets(nextMenuPresets);
+      void persistAppSettings({ menuPresets: cloneMenuPresets(nextMenuPresets) });
+      return true;
+    }
+
+    const navItemPreset = quickPresetNavItemByNavIndex.get(navIndex)?.preset;
+    const sourcePreset = navItemPreset ?? createQuickListPreset(listItem, listOrderModeRef.current);
+    const createdAt = Date.now();
+    const presetId = `preset-${createdAt}-${Math.random().toString(36).slice(2)}`;
+    const [savedPreset] = cloneMenuPresets([{
+      ...sourcePreset,
+      id: presetId,
+      label,
+      createdAt,
+    }]);
+
+    if (!savedPreset) {
+      return false;
+    }
+
+    const nextMenuPresets = [...menuPresetsRef.current, savedPreset];
+    const nextPresetIdLength = Math.max(
+      quickPresetNavPresetIdsRef.current.length,
+      quickPresetNavIconNamesRef.current.length,
+      listMenuTreeRef.current.length,
+      navIndex + 1,
+    );
+    const nextQuickPresetNavPresetIds = Array.from(
+      { length: nextPresetIdLength },
+      (_, index) => quickPresetNavPresetIdsRef.current[index] ?? null,
+    );
+    nextQuickPresetNavPresetIds[navIndex] = presetId;
+    const normalizedQuickPresetNavPresetIds = cloneQuickPresetNavPresetIds(
+      nextQuickPresetNavPresetIds,
+    );
+
+    menuPresetsRef.current = nextMenuPresets;
+    quickPresetNavPresetIdsRef.current = normalizedQuickPresetNavPresetIds;
+    setMenuPresets(nextMenuPresets);
+    setQuickPresetNavPresetIds(normalizedQuickPresetNavPresetIds);
+    setOpenMenuPresetId((current) => (current === sourcePreset.id ? presetId : current));
+    void persistAppSettings({
+      menuPresets: cloneMenuPresets(nextMenuPresets),
+      quickPresetNavPresetIds: normalizedQuickPresetNavPresetIds,
+    });
+    return true;
+  }, [
+    persistAppSettings,
+    quickPresetNavItemByNavIndex,
+    recordUndo,
+  ]);
+
   const commitSearchKeywords = useCallback((rawKeywords: string) => {
     if (!searchKeywordEditTarget) {
       return;
@@ -9137,7 +9257,12 @@ export default function App() {
 
     const searchKeywords = normalizePresetSearchKeywords(rawKeywords);
 
-    if (searchKeywordEditTarget.kind === 'preset') {
+    if (searchKeywordEditTarget.kind === 'navbar') {
+      commitSettingsNavbarName(
+        searchKeywordEditTarget.navIndex,
+        searchKeywordTitleDraft,
+      );
+    } else if (searchKeywordEditTarget.kind === 'preset') {
       const { presetId } = searchKeywordEditTarget;
       const currentPreset = menuPresets.find((preset) => preset.id === presetId);
       if ((currentPreset?.searchKeywords ?? '') === searchKeywords) {
@@ -9204,6 +9329,7 @@ export default function App() {
   }, [
     applyListLabelRename,
     closeSearchKeywordModal,
+    commitSettingsNavbarName,
     menuPresets,
     persistListMenuTree,
     recordUndo,
@@ -9251,7 +9377,10 @@ export default function App() {
 
       keyboardHideFocusTimer = setTimeout(
         () => {
-          if (searchKeywordEditTarget?.kind === 'list') {
+          if (
+            searchKeywordEditTarget?.kind === 'list' ||
+            searchKeywordEditTarget?.kind === 'navbar'
+          ) {
             listSearchKeywordTitleInputRef.current?.focus();
             return;
           }
@@ -14592,12 +14721,13 @@ export default function App() {
                       allowDelete={false}
                       iconPickerIndex={settingsPresetIconPickerIndex}
                       items={settingsNavbarItems}
-                      mainPressDisabled
+                      mainPressHint="Tap to edit the navbar name shown at the top."
                       onIconPickerChange={(index) => {
                         setSettingsPresetIconPickerIndex(index);
                         setSettingsListIconPickerIndex(null);
                       }}
                       reorderCancelNonce={settingsListReorderCancelNonce}
+                      onMainPress={openSettingsNavbarNamePrompt}
                       onPinPress={toggleSettingsListNavbarPinned}
                       onSwap={handleSettingsListSwap}
                       onSetIcon={setSettingsNavbarIcon}
@@ -15166,9 +15296,12 @@ export default function App() {
                 <Text numberOfLines={2} style={styles.presetSaveModalTitle}>
                   {searchKeywordEditTarget?.kind === 'list'
                     ? 'Edit list'
-                    : searchKeywordEditTitle}
+                    : searchKeywordEditTarget?.kind === 'navbar'
+                      ? 'Edit navbar'
+                      : searchKeywordEditTitle}
                 </Text>
-                {searchKeywordEditTarget?.kind === 'list' ? (
+                {searchKeywordEditTarget?.kind === 'list' ||
+                searchKeywordEditTarget?.kind === 'navbar' ? (
                   <TextInput
                     ref={listSearchKeywordTitleInputRef}
                     autoCapitalize="words"
@@ -15179,11 +15312,22 @@ export default function App() {
                       listSearchKeywordTitleInputRef.current?.focus();
                     }}
                     onSubmitEditing={() => {
+                      if (searchKeywordEditTarget?.kind === 'navbar') {
+                        commitSearchKeywords(searchKeywordDraft);
+                        return;
+                      }
+
                       presetSearchKeywordInputRef.current?.focus();
                     }}
-                    placeholder="List name"
+                    placeholder={
+                      searchKeywordEditTarget?.kind === 'navbar'
+                        ? 'Navbar name'
+                        : 'List name'
+                    }
                     placeholderTextColor="#A69D94"
-                    returnKeyType="next"
+                    returnKeyType={
+                      searchKeywordEditTarget?.kind === 'navbar' ? 'done' : 'next'
+                    }
                     selectTextOnFocus
                     showSoftInputOnFocus
                     style={styles.presetSaveModalInput}
@@ -15191,46 +15335,48 @@ export default function App() {
                     value={searchKeywordTitleDraft}
                   />
                 ) : null}
-                <Text
-                  style={[
-                    styles.presetSaveModalMessage,
-                    searchKeywordEditTarget?.kind === 'list' && styles.presetSaveModalFieldMessage,
-                  ]}
-                >
-                  {searchKeywordEditTarget?.kind === 'list'
-                    ? 'Hidden words for matching this list from Search.'
-                    : 'Hidden words for matching this list from Search.'}
-                </Text>
-                <TextInput
-                  ref={presetSearchKeywordInputRef}
-                  autoCapitalize="sentences"
-                  autoCorrect
-                  autoFocus={searchKeywordEditTarget?.kind !== 'list'}
-                  blurOnSubmit
-                  multiline
-                  numberOfLines={2}
-                  onChangeText={setSearchKeywordDraft}
-                  onPressIn={() => {
-                    presetSearchKeywordInputRef.current?.focus();
-                  }}
-                  onSubmitEditing={(event) => {
-                    commitSearchKeywords(
-                      event.nativeEvent.text || searchKeywordDraft,
-                    );
-                  }}
-                  placeholder="priority daily meditation"
-                  placeholderTextColor="#A69D94"
-                  returnKeyType="done"
-                  showSoftInputOnFocus
-                  style={[
-                    styles.presetSaveModalInput,
-                    styles.presetSearchKeywordModalInput,
-                    searchKeywordEditTarget?.kind === 'list' && styles.presetSaveModalInputFollowUp,
-                  ]}
-                  submitBehavior="submit"
-                  textAlignVertical="top"
-                  value={searchKeywordDraft}
-                />
+                {searchKeywordEditTarget?.kind === 'navbar' ? null : (
+                  <>
+                    <Text
+                      style={[
+                        styles.presetSaveModalMessage,
+                        searchKeywordEditTarget?.kind === 'list' && styles.presetSaveModalFieldMessage,
+                      ]}
+                    >
+                      Hidden words for matching this list from Search.
+                    </Text>
+                    <TextInput
+                      ref={presetSearchKeywordInputRef}
+                      autoCapitalize="sentences"
+                      autoCorrect
+                      autoFocus={searchKeywordEditTarget?.kind !== 'list'}
+                      blurOnSubmit
+                      multiline
+                      numberOfLines={2}
+                      onChangeText={setSearchKeywordDraft}
+                      onPressIn={() => {
+                        presetSearchKeywordInputRef.current?.focus();
+                      }}
+                      onSubmitEditing={(event) => {
+                        commitSearchKeywords(
+                          event.nativeEvent.text || searchKeywordDraft,
+                        );
+                      }}
+                      placeholder="priority daily meditation"
+                      placeholderTextColor="#A69D94"
+                      returnKeyType="done"
+                      showSoftInputOnFocus
+                      style={[
+                        styles.presetSaveModalInput,
+                        styles.presetSearchKeywordModalInput,
+                        searchKeywordEditTarget?.kind === 'list' && styles.presetSaveModalInputFollowUp,
+                      ]}
+                      submitBehavior="submit"
+                      textAlignVertical="top"
+                      value={searchKeywordDraft}
+                    />
+                  </>
+                )}
                 <View style={styles.presetSaveModalActions}>
                   <Pressable
                     accessibilityRole="button"

@@ -90,10 +90,12 @@ import {
   cloneDeletedTodos,
   cloneTodo,
   cloneTodoFilters,
+  formatTagLabel,
   getTodoTextMaxLength,
   makeTodo,
   normalizeTodoContent,
   normalizeTodoFilters,
+  normalizeTodoTags,
   pruneTodoFilters,
   formatListLabel,
   normalizeTodoText,
@@ -165,6 +167,7 @@ import {
   DEFAULT_FILTER_CONFIG_UI_STATE,
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
+  normalizeCustomTags,
   QUICK_PRESET_DEFAULTS_VERSION,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
@@ -210,11 +213,13 @@ import {
   decodeTodoReminder,
   encodeTodoReminder,
   getDatePickerMenuDisplayLabel,
+  getRepeatPresetForMenuLabel,
   hasRepeatingItemsFilter,
   hasTodoReminderTime,
   hasTodoRepeat,
   isDatePickerMenuItemSelected,
   isReminderPickerMenuLabel,
+  isRepeatShortcutMenuLabel,
   REMINDER_PICKER_LABEL,
   REPEATING_ITEMS_FILTER_LABEL,
   REPEATING_ITEMS_FILTER_VALUE,
@@ -259,6 +264,7 @@ type SearchKeywordEditTarget =
   | { kind: 'preset'; presetId: string };
 
 type UndoSnapshot = {
+  customTags: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
   filterColors: FilterColorSettings;
@@ -325,22 +331,8 @@ const buildVisibleListMenuItems = (
 const isListMenuItemSelected = (
   item: VisibleListMenuItem,
   listFilters: string[],
-  listMenuTree: ListMenuNode[],
-) => {
-  if (item.isSubsection) {
-    return listFilters.includes(item.label);
-  }
-
-  const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
-    child.label
-  )) ?? [];
-
-  if (childLabels.some((label) => listFilters.includes(label))) {
-    return false;
-  }
-
-  return listFilters.includes(item.label);
-};
+  _listMenuTree: ListMenuNode[],
+) => listFilters.includes(item.label);
 
 type FilterKey = 'list' | 'date' | 'priority';
 const FILTER_KEYS: FilterKey[] = ['list', 'date', 'priority'];
@@ -1239,7 +1231,7 @@ const buildActiveFilterItems = (
 
 type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
 
-type CreateDrawerPicker = 'date' | 'list' | 'priority';
+type CreateDrawerPicker = 'date' | 'list' | 'priority' | 'tags';
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
 
@@ -2469,17 +2461,21 @@ function MenuPresetSwipeRow({
 const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
 
 type SettingsListSwipeRowProps = {
+  allowDelete: boolean;
+  allowIconEdit: boolean;
   isIconPickerOpen: boolean;
   label: string;
   listIconName?: string;
-  onDelete: () => void;
+  onDelete?: () => void;
   onIconPress: () => void;
   onMainPress: () => void;
-  onPinPress: () => void;
-  showInNavbar: boolean;
+  onPinPress?: () => void;
+  showInNavbar?: boolean;
 };
 
 function SettingsListSwipeRow({
+  allowDelete,
+  allowIconEdit,
   isIconPickerOpen,
   label,
   listIconName,
@@ -2491,7 +2487,7 @@ function SettingsListSwipeRow({
 }: SettingsListSwipeRowProps) {
   const renderedIconName = resolveMaterialCommunityIconName(listIconName, 'paw');
   const renderRightActions = useCallback(
-    () => (
+    () => (allowDelete && onDelete ? (
       <View style={styles.settingsListSwipeActions}>
         <GHTouchableOpacity
           accessibilityRole="button"
@@ -2503,9 +2499,10 @@ function SettingsListSwipeRow({
           <Ionicons color="#FFFFFF" name="trash-outline" size={22} />
         </GHTouchableOpacity>
       </View>
-    ),
-    [label, onDelete],
+    ) : null),
+    [allowDelete, label, onDelete],
   );
+  const showPinControl = Boolean(onPinPress);
 
   return (
     <View style={styles.settingsListSwipeShell}>
@@ -2514,30 +2511,32 @@ function SettingsListSwipeRow({
         containerStyle={styles.settingsListSwipeContainer}
         friction={1.1}
         overshootRight={false}
-        renderRightActions={renderRightActions}
+        renderRightActions={allowDelete ? renderRightActions : undefined}
         rightThreshold={SETTINGS_LIST_SWIPE_DELETE_WIDTH}
       >
         <View
           style={styles.settingsListRow}
         >
           <View style={styles.settingsListRowContent}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ expanded: isIconPickerOpen }}
-              accessibilityLabel={`Choose icon for ${label}`}
-              onPress={onIconPress}
-              style={({ pressed }) => [
-                styles.settingsListIconButton,
-                isIconPickerOpen && styles.settingsListIconButtonActive,
-                pressed && styles.settingsOptionRowPressed,
-              ]}
-            >
-              <MaterialCommunityIcons
-                color={listIconName ? THEME_ACCENT : THEME_TEXT}
-                name={toMaterialCommunityIconName(renderedIconName)}
-                size={17}
-              />
-            </Pressable>
+            {allowIconEdit ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: isIconPickerOpen }}
+                accessibilityLabel={`Choose icon for ${label}`}
+                onPress={onIconPress}
+                style={({ pressed }) => [
+                  styles.settingsListIconButton,
+                  isIconPickerOpen && styles.settingsListIconButtonActive,
+                  pressed && styles.settingsOptionRowPressed,
+                ]}
+              >
+                <MaterialCommunityIcons
+                  color={listIconName ? THEME_ACCENT : THEME_TEXT}
+                  name={toMaterialCommunityIconName(renderedIconName)}
+                  size={17}
+                />
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               accessibilityHint="Tap to edit list name and search keywords."
@@ -2556,27 +2555,29 @@ function SettingsListSwipeRow({
               </Text>
             </Pressable>
           </View>
-          <Pressable
-            accessibilityRole="switch"
-            accessibilityState={{ checked: showInNavbar }}
-            accessibilityLabel={
-              showInNavbar
-                ? `Unpin ${label} from navbar`
-                : `Pin ${label} to navbar`
-            }
-            onPress={onPinPress}
-            style={({ pressed }) => [
-              styles.settingsListPinButton,
-              showInNavbar && styles.settingsListPinButtonActive,
-              pressed && styles.settingsOptionRowPressed,
-            ]}
-          >
-            <Ionicons
-              color={showInNavbar ? THEME_ACCENT : THEME_TEXT}
-              name={showInNavbar ? 'pin' : 'pin-outline'}
-              size={18}
-            />
-          </Pressable>
+          {showPinControl ? (
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: Boolean(showInNavbar) }}
+              accessibilityLabel={
+                showInNavbar
+                  ? `Unpin ${label} from navbar`
+                  : `Pin ${label} to navbar`
+              }
+              onPress={onPinPress}
+              style={({ pressed }) => [
+                styles.settingsListPinButton,
+                showInNavbar && styles.settingsListPinButtonActive,
+                pressed && styles.settingsOptionRowPressed,
+              ]}
+            >
+              <Ionicons
+                color={showInNavbar ? THEME_ACCENT : THEME_TEXT}
+                name={showInNavbar ? 'pin' : 'pin-outline'}
+                size={18}
+              />
+            </Pressable>
+          ) : null}
         </View>
       </Swipeable>
     </View>
@@ -2586,20 +2587,24 @@ function SettingsListSwipeRow({
 const MemoizedSettingsListSwipeRow = React.memo(SettingsListSwipeRow);
 
 type SettingsListReorderRowProps = {
+  allowDelete: boolean;
+  allowIconEdit: boolean;
   canReorder: boolean;
   iconPickerIndex: number | null;
   index: number;
   isReorderHighlighted: boolean;
   item: ListMenuNode;
-  onDelete: () => void;
+  onDelete?: () => void;
   onIconPickerChange: (index: number | null) => void;
   onMainPress: () => void;
-  onPinPress: () => void;
+  onPinPress?: () => void;
   onReorderHandlePress: (index: number) => void;
   onSetIcon: (index: number, iconName: string | null) => void;
 };
 
 function SettingsListReorderRow({
+  allowDelete,
+  allowIconEdit,
   canReorder,
   iconPickerIndex,
   index,
@@ -2614,7 +2619,7 @@ function SettingsListReorderRow({
 }: SettingsListReorderRowProps) {
   const listIconName = item.iconName;
   const showInNavbar = item.showInNavbar !== false;
-  const isIconPickerOpen = iconPickerIndex === index;
+  const isIconPickerOpen = allowIconEdit && iconPickerIndex === index;
 
   return (
     <View
@@ -2647,6 +2652,8 @@ function SettingsListReorderRow({
           ) : null}
           <View style={styles.settingsListSwipeWrap}>
             <MemoizedSettingsListSwipeRow
+              allowDelete={allowDelete}
+              allowIconEdit={allowIconEdit}
               isIconPickerOpen={isIconPickerOpen}
               label={item.label}
               listIconName={listIconName}
@@ -2747,18 +2754,25 @@ const MemoizedSettingsListReorderRow = React.memo(SettingsListReorderRow);
 const SETTINGS_LIST_SWAP_FLASH_MS = 320;
 
 type SettingsListEditorProps = {
+  allowDelete?: boolean;
+  allowIconEdit?: boolean;
+  allowReorder?: boolean;
   iconPickerIndex: number | null;
   items: ListMenuNode[];
-  onDelete: (index: number) => void;
+  onDelete?: (index: number) => void;
   onIconPickerChange: (index: number | null) => void;
   onMainPress: (index: number) => void;
-  onPinPress: (index: number) => void;
+  onPinPress?: (index: number) => void;
   onSetIcon: (index: number, iconName: string | null) => void;
-  onSwap: (fromIndex: number, toIndex: number) => void;
+  onSwap?: (fromIndex: number, toIndex: number) => void;
   reorderCancelNonce: number;
+  sortAscending?: boolean;
 };
 
 function SettingsListEditor({
+  allowDelete = true,
+  allowIconEdit = true,
+  allowReorder = true,
   iconPickerIndex,
   items,
   onDelete,
@@ -2768,10 +2782,24 @@ function SettingsListEditor({
   onSetIcon,
   onSwap,
   reorderCancelNonce,
+  sortAscending = false,
 }: SettingsListEditorProps) {
   const swapFlashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedReorderIndex, setSelectedReorderIndex] = useState<number | null>(null);
   const [swapFlashIndices, setSwapFlashIndices] = useState<number[]>([]);
+  const displayItems = useMemo(() => {
+    const indexedItems = items.map((item, index) => ({ index, item }));
+    if (!sortAscending) {
+      return indexedItems;
+    }
+
+    return [...indexedItems].sort((itemA, itemB) => (
+      itemA.item.label.localeCompare(itemB.item.label, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      })
+    ));
+  }, [items, sortAscending]);
 
   const clearSwapFlash = useCallback(() => {
     if (swapFlashTimeoutRef.current) {
@@ -2797,6 +2825,10 @@ function SettingsListEditor({
   }, []);
 
   const handleReorderHandlePress = useCallback((index: number) => {
+    if (!onSwap) {
+      return;
+    }
+
     onIconPickerChange(null);
 
     if (selectedReorderIndex === null) {
@@ -2826,12 +2858,14 @@ function SettingsListEditor({
     }, SETTINGS_LIST_SWAP_FLASH_MS);
   }, [onIconPickerChange, onSwap, resetReorderSelection, selectedReorderIndex]);
 
-  const canReorder = items.length > 1;
+  const canReorder = allowReorder && items.length > 1 && Boolean(onSwap);
 
   return (
     <View style={styles.settingsListEditor}>
-      {items.map((item, index) => (
+      {displayItems.map(({ item, index }) => (
         <MemoizedSettingsListReorderRow
+          allowDelete={allowDelete}
+          allowIconEdit={allowIconEdit}
           key={item.label}
           canReorder={canReorder}
           iconPickerIndex={iconPickerIndex}
@@ -2841,10 +2875,10 @@ function SettingsListEditor({
             || swapFlashIndices.includes(index)
           }
           item={item}
-          onDelete={() => onDelete(index)}
+          onDelete={onDelete ? () => onDelete(index) : undefined}
           onIconPickerChange={onIconPickerChange}
           onMainPress={() => onMainPress(index)}
-          onPinPress={() => onPinPress(index)}
+          onPinPress={onPinPress ? () => onPinPress(index) : undefined}
           onReorderHandlePress={handleReorderHandlePress}
           onSetIcon={onSetIcon}
         />
@@ -3020,6 +3054,7 @@ export default function App() {
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
+  const [createDraftTags, setCreateDraftTags] = useState<string[]>([]);
   const [createFromSettingsCueVisible, setCreateFromSettingsCueVisible] = useState(false);
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
@@ -3036,6 +3071,7 @@ export default function App() {
   const [dateStatusKey, setDateStatusKey] = useState(() => getDateStatusKey());
   const datePickerApplyRef = useRef<'create' | 'filters'>('filters');
   const datePickerDateLabelsRef = useRef<string[]>([]);
+  const datePickerRepeatRef = useRef<RepeatPreset | null>(null);
   const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
   const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
   const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
@@ -3059,6 +3095,7 @@ export default function App() {
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
+  const [activeTodoDetailDraftTags, setActiveTodoDetailDraftTags] = useState<string[]>([]);
   const [activeTodoDetailContentSelection, setActiveTodoDetailContentSelection] = useState({
     end: 0,
     start: 0,
@@ -3088,6 +3125,8 @@ export default function App() {
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
   const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
+  const [settingsPresetsExpanded, setSettingsPresetsExpanded] = useState(false);
+  const [settingsTagsExpanded, setSettingsTagsExpanded] = useState(false);
   const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
@@ -3120,9 +3159,11 @@ export default function App() {
   const lastCreateTodoFiltersRef = useRef<TodoFilters>(lastCreateTodoFilters);
   const listOrderModeRef = useRef<ListOrderMode>(listOrderMode);
   const listMenuTreeRef = useRef<ListMenuNode[]>([]);
+  const customTagsRef = useRef<string[]>([]);
   const [listMenuTree, setListMenuTree] = useState<ListMenuNode[]>(
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
   );
+  const [customTags, setCustomTags] = useState<string[]>([]);
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
   const [quickPresetNavIconNames, setQuickPresetNavIconNames] = useState<string[]>([]);
   const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
@@ -3158,10 +3199,15 @@ export default function App() {
     () => cloneMetaTagVisibility(),
   );
   const [newListName, setNewListName] = useState('');
+  const [newTagName, setNewTagName] = useState('');
+  const [editingTagName, setEditingTagName] = useState<string | null>(null);
   const [settingsListReorderCancelNonce, setSettingsListReorderCancelNonce] = useState(0);
   const [settingsListIconPickerIndex, setSettingsListIconPickerIndex] = useState<number | null>(
     null,
   );
+  const [settingsPresetIconPickerIndex, setSettingsPresetIconPickerIndex] = useState<
+    number | null
+  >(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(
     EMPTY_SELECTED_FILTERS,
@@ -3225,6 +3271,7 @@ export default function App() {
   hideDoneTodosRef.current = hideDoneTodos;
   lastCreateTodoFiltersRef.current = lastCreateTodoFilters;
   listMenuTreeRef.current = listMenuTree;
+  customTagsRef.current = customTags;
   listOrderModeRef.current = listOrderMode;
   menuPresetsRef.current = menuPresets;
   metaTagVisibilityRef.current = metaTagVisibility;
@@ -3272,7 +3319,7 @@ export default function App() {
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
   const listMenuBackAccessibilityLabel =
-    menuMode === 'presetLists' || menuMode === 'presetsQuickApply'
+    menuMode === 'presetsQuickApply'
       ? 'Back to presets menu'
       : 'Back to main filter menu';
   const todoSelectMode = selectedTodoIds.size > 0;
@@ -3487,6 +3534,7 @@ export default function App() {
         setDateLabelDisplayMode(settings.dateLabelDisplayMode);
         setShowOverdueMetaTags(settings.showOverdueMetaTags);
         setListMenuTree(cloneListMenuTree(settings.listMenuTree));
+        setCustomTags(normalizeCustomTags(settings.customTags));
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
         setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
@@ -3521,6 +3569,7 @@ export default function App() {
     overrides: Partial<AppSettings> = {},
   ): AppSettings => ({
     collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+    customTags,
     deletedTodos,
     filterConfigUiState,
     filterColors,
@@ -3548,6 +3597,7 @@ export default function App() {
     ),
   }), [
     collapsedTodoGroupIds,
+    customTags,
     dateLabelDisplayMode,
     deletedTodos,
     filterConfigUiState,
@@ -3583,6 +3633,10 @@ export default function App() {
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {
     persistAppSettings({ listMenuTree: cloneListMenuTree(tree) });
+  }, [persistAppSettings]);
+
+  const persistCustomTags = useCallback((tags: string[]) => {
+    persistAppSettings({ customTags: normalizeCustomTags(tags) });
   }, [persistAppSettings]);
 
   useEffect(() => {
@@ -3800,6 +3854,7 @@ export default function App() {
   }, [startEditedTodoHighlights]);
 
   const captureUndoSnapshot = useCallback((): UndoSnapshot => ({
+    customTags: normalizeCustomTags(customTagsRef.current),
     dateLabelDisplayMode: dateLabelDisplayModeRef.current,
     deletedTodos: cloneDeletedTodos(deletedTodosRef.current),
     filterColors: cloneFilterColors(filterColorsRef.current),
@@ -3938,6 +3993,7 @@ export default function App() {
   }, []);
 
   const restoreUndoSnapshot = useCallback((snapshot: UndoSnapshot) => {
+    const restoredCustomTags = normalizeCustomTags(snapshot.customTags);
     const restoredTodos = snapshot.todos.map(cloneTodo);
     const restoredDeletedTodos = cloneDeletedTodos(snapshot.deletedTodos);
     const restoredFilterColors = cloneFilterColors(snapshot.filterColors);
@@ -3961,6 +4017,7 @@ export default function App() {
     const restoredDeletedTodoIds = new Set(restoredDeletedTodos.map((todo) => todo.id));
     const restoredPresetIds = new Set(restoredMenuPresets.map((preset) => preset.id));
     const restoredSettings = createSettingsSnapshot({
+      customTags: restoredCustomTags,
       dateLabelDisplayMode: snapshot.dateLabelDisplayMode,
       deletedTodos: restoredDeletedTodos,
       filterColors: restoredFilterColors,
@@ -3984,6 +4041,7 @@ export default function App() {
     autoBackupFailedStateKeyRef.current = null;
     autoBackupStateKeyRef.current = null;
     todosRef.current = restoredTodos;
+    customTagsRef.current = restoredCustomTags;
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
     googleDriveBackupEnabledRef.current = snapshot.googleDriveBackupEnabled;
@@ -4006,6 +4064,7 @@ export default function App() {
     clearAllRepeatingTodoCompletionFeedback();
     setPendingDeleteIds(new Set());
     setTodos(restoredTodos);
+    setCustomTags(restoredCustomTags);
     setDeletedTodos(restoredDeletedTodos);
     setFilterColors(restoredFilterColors);
     setGoogleDriveBackupEnabled(snapshot.googleDriveBackupEnabled);
@@ -4358,6 +4417,7 @@ export default function App() {
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailDraftTags([]);
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     setSelectedTodoIds(new Set([id]));
@@ -4383,6 +4443,7 @@ export default function App() {
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailDraftTags([]);
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     triggerSubtleHaptic();
@@ -4415,6 +4476,7 @@ export default function App() {
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo?.content ?? ''));
     setActiveTodoDetailDraftText(todo?.text ?? '');
+    setActiveTodoDetailDraftTags(normalizeTodoTags(todo?.tags));
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
     triggerSubtleHaptic();
@@ -4455,7 +4517,7 @@ export default function App() {
   const goBackFromMenuDismissGesture = useCallback(() => {
     const currentMenuMode = menuModeRef.current;
 
-    if (currentMenuMode === 'presetsQuickApply' || currentMenuMode === 'presetLists') {
+    if (currentMenuMode === 'presetsQuickApply') {
       setMenuMode('presets');
     } else if (currentMenuMode && currentMenuMode !== 'main') {
       setMenuMode('main');
@@ -4711,6 +4773,7 @@ export default function App() {
     setCreateDraftContent('');
     setCreateDraftText('');
     setCreateDraftPinned(false);
+    setCreateDraftTags([]);
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -4756,6 +4819,7 @@ export default function App() {
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
     setActiveTodoDetailDraftText(todo.text);
+    setActiveTodoDetailDraftTags(normalizeTodoTags(todo.tags));
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
   }, [closeListMenuState, resetCreateDrawerState]);
@@ -4854,7 +4918,7 @@ export default function App() {
       return true;
     }
 
-    if (menuMode === 'presetsQuickApply' || menuMode === 'presetLists') {
+    if (menuMode === 'presetsQuickApply') {
       setMenuMode('presets');
       triggerSubtleHaptic();
       return true;
@@ -4988,13 +5052,16 @@ export default function App() {
         : [];
     }
 
-    const matchedTodos = searchQuery && searchMode === 'item'
-      ? [...(searchMatchedTodoIds ?? new Set<string>())]
+    if (searchQuery && searchMode === 'item') {
+      return [...(searchMatchedTodoIds ?? new Set<string>())]
         .map((id) => todosById.get(id))
         .filter((todo): todo is Todo => Boolean(todo))
-      : navTab === 'search' && searchMode === 'item'
-        ? []
-        : todos;
+        .filter((todo) => !pendingDeleteIds.has(todo.id));
+    }
+
+    const matchedTodos = navTab === 'search' && searchMode === 'item'
+      ? []
+      : todos;
     const now = dateStatusNow;
 
     return matchedTodos
@@ -5094,6 +5161,7 @@ export default function App() {
       ),
     );
     setCreateDraftPinned(false);
+    setCreateDraftTags([]);
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -5126,6 +5194,7 @@ export default function App() {
     setCreateDraftContent('');
     setCreateDraftText('');
     setCreateDraftPinned(sourceTodo.pinned);
+    setCreateDraftTags(normalizeTodoTags(sourceTodo.tags));
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -5208,7 +5277,14 @@ export default function App() {
       todoFilters,
     );
     const createdAt = Date.now();
-    const todo = makeTodo(text, todoFilters, content, createdAt, createDraftPinned);
+    const todo = makeTodo(
+      text,
+      todoFilters,
+      content,
+      createdAt,
+      createDraftPinned,
+      createDraftTags,
+    );
     const nextSelectedFilters = getFiltersAfterCreateReveal(
       todo,
       selectedFilters,
@@ -5243,6 +5319,7 @@ export default function App() {
     createDraftContent,
     createDraftFilters,
     createDraftPinned,
+    createDraftTags,
     createDraftText,
     clearNotificationTodoReveal,
     highlightNewlyCreatedTodo,
@@ -5302,6 +5379,15 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
+  const availableTodoTags = useMemo(
+    () => normalizeCustomTags([
+      ...customTags,
+      ...todos.flatMap((todo) => todo.tags),
+      ...deletedTodos.flatMap((todo) => todo.tags),
+    ]),
+    [customTags, deletedTodos, todos],
+  );
+
   const createDrawerPickerItems = useMemo(() => {
     if (createDrawerPicker === 'list') {
       const tree =
@@ -5310,15 +5396,30 @@ export default function App() {
     }
 
     if (createDrawerPicker === 'date') {
-      return getDateMenuItemsForDateLabels(DATE_PICKER_MENU_ITEMS, createDraftFilters.date);
+      return getDateMenuItemsForDateLabels(
+        DATE_PICKER_MENU_ITEMS,
+        createDraftFilters.date,
+        new Date(),
+        { sortSelectedCustomDate: true },
+      );
     }
 
     if (createDrawerPicker === 'priority') {
       return PRIORITY_MENU_ITEMS;
     }
 
+    if (createDrawerPicker === 'tags') {
+      return availableTodoTags;
+    }
+
     return [];
-  }, [createDrawerPicker, createDraftFilters.date, listMenuTree, listOrderMode]);
+  }, [
+    availableTodoTags,
+    createDrawerPicker,
+    createDraftFilters.date,
+    listMenuTree,
+    listOrderMode,
+  ]);
 
   const createDrawerDateLabel = useMemo(
     () => formatCreateDrawerDateLabel(createDraftFilters.date, dateLabelDisplayMode),
@@ -5341,6 +5442,10 @@ export default function App() {
     || hasTodoRepeat(createDraftFilters.reminder);
   const createDrawerListActive = createDraftFilters.list.length > 0;
   const createDrawerPriorityActive = createDraftFilters.priority.length > 0;
+  const createDrawerTagsActive = createDraftTags.length > 0;
+  const createDrawerTagsAccessibilityLabel = createDrawerTagsActive
+    ? `Tags: ${createDraftTags.join(', ')}`
+    : 'Tags';
 
   const toggleCreateDraftPinned = useCallback(() => {
     setCreateDraftPinned((current) => !current);
@@ -5400,9 +5505,10 @@ export default function App() {
 
     const restoredTodo: Todo = {
       id: deletedTodo.id,
-      content: deletedTodo.content,
-      text: deletedTodo.text,
-      pinned: deletedTodo.pinned,
+        content: deletedTodo.content,
+        text: deletedTodo.text,
+        tags: normalizeTodoTags(deletedTodo.tags),
+        pinned: deletedTodo.pinned,
       done: deletedTodo.done,
       createdAt: deletedTodo.createdAt,
       filters: cloneTodoFilters(deletedTodo.filters),
@@ -5783,14 +5889,17 @@ export default function App() {
   ]);
 
   const closeDatePicker = useCallback(() => {
+    datePickerRepeatRef.current = null;
     setDatePickerVisible(false);
   }, []);
 
   const applyPickedDate = useCallback((date: Date) => {
     const isoDate = toISODateString(date);
     const source = datePickerApplyRef.current;
+    const repeat = datePickerRepeatRef.current;
 
     if (
+      !repeat &&
       source === 'filters' &&
       dateFilterValuesIncludeExactDay(datePickerDateLabelsRef.current, date)
     ) {
@@ -5802,10 +5911,22 @@ export default function App() {
       return;
     }
 
-    const applyDate = (current: SelectedFilters) => ({
-      ...current,
-      date: source === 'create' ? [isoDate] : [...current.date, isoDate],
-    });
+    const applyDate = (current: SelectedFilters) => {
+      const nextFilters: SelectedFilters = {
+        ...current,
+        date: source === 'create' || repeat ? [isoDate] : [...current.date, isoDate],
+      };
+
+      if (repeat) {
+        const currentReminder = decodeTodoReminder(current.reminder);
+        nextFilters.reminder = encodeTodoReminder({
+          time: currentReminder.time,
+          repeat,
+        });
+      }
+
+      return nextFilters;
+    };
 
     if (source === 'create') {
       setCreateDraftFilters(applyDate);
@@ -5818,10 +5939,23 @@ export default function App() {
   }, [closeDatePicker, updateCurrentTodoTargetFilters]);
 
   const clearPickedDate = useCallback(() => {
-    const clearDate = (current: SelectedFilters) => ({
-      ...current,
-      date: [],
-    });
+    const repeat = datePickerRepeatRef.current;
+    const clearDate = (current: SelectedFilters) => {
+      const nextFilters: SelectedFilters = {
+        ...current,
+        date: [],
+      };
+
+      if (repeat) {
+        const currentReminder = decodeTodoReminder(current.reminder);
+        nextFilters.reminder = encodeTodoReminder({
+          time: currentReminder.time,
+          repeat: 'none',
+        });
+      }
+
+      return nextFilters;
+    };
 
     if (datePickerApplyRef.current === 'create') {
       setCreateDraftFilters(clearDate);
@@ -5873,6 +6007,35 @@ export default function App() {
     }));
     triggerSubtleHaptic();
   }, []);
+
+  const toggleTagSelection = useCallback((
+    currentTags: string[],
+    label: string,
+  ) => {
+    const normalizedLabel = formatTagLabel(label);
+    if (!normalizedLabel) {
+      return normalizeTodoTags(currentTags);
+    }
+
+    const normalizedTags = normalizeTodoTags(currentTags);
+    const existing = normalizedTags.find(
+      (tag) => tag.toLocaleLowerCase() === normalizedLabel.toLocaleLowerCase(),
+    );
+
+    return existing
+      ? normalizedTags.filter((tag) => tag !== existing)
+      : normalizeTodoTags([...normalizedTags, normalizedLabel]);
+  }, []);
+
+  const toggleCreateDraftTag = useCallback((label: string) => {
+    setCreateDraftTags((current) => toggleTagSelection(current, label));
+    triggerSubtleHaptic();
+  }, [toggleTagSelection]);
+
+  const toggleActiveTodoDetailDraftTag = useCallback((label: string) => {
+    setActiveTodoDetailDraftTags((current) => toggleTagSelection(current, label));
+    triggerSubtleHaptic();
+  }, [toggleTagSelection]);
 
   const handleCreateDrawerCalendarPress = useCallback(() => {
     if (createDrawerPicker === 'date') {
@@ -5937,12 +6100,40 @@ export default function App() {
     openCreateDrawerPicker,
   ]);
 
+  const clearCreateDraftTags = useCallback(() => {
+    setCreateDraftTags([]);
+    triggerSubtleHaptic();
+  }, []);
+
+  const handleCreateDrawerTagsPress = useCallback(() => {
+    if (createDrawerPicker === 'tags') {
+      if (createDrawerTagsActive) {
+        clearCreateDraftTags();
+        return;
+      }
+
+      backToCreateDrawerInput();
+      triggerSubtleHaptic();
+      return;
+    }
+
+    openCreateDrawerPicker('tags');
+  }, [
+    backToCreateDrawerInput,
+    clearCreateDraftTags,
+    createDrawerPicker,
+    createDrawerTagsActive,
+    openCreateDrawerPicker,
+  ]);
+
   const openDatePicker = useCallback((
     source: 'create' | 'filters',
     dateLabels: string[],
+    repeat: RepeatPreset | null = null,
   ) => {
     datePickerApplyRef.current = source;
     datePickerDateLabelsRef.current = [...dateLabels];
+    datePickerRepeatRef.current = repeat;
     setDatePickerValue(getInitialDatePickerValue(dateLabels));
     setDatePickerVisible(true);
   }, []);
@@ -6122,6 +6313,12 @@ export default function App() {
   const handleCreateDrawerDatePress = useCallback((label: string) => {
     if (label === REMINDER_PICKER_LABEL) {
       openCreateReminderModal();
+      return;
+    }
+
+    const repeatShortcut = getRepeatPresetForMenuLabel(label);
+    if (repeatShortcut) {
+      openDatePicker('create', createDraftFilters.date, repeatShortcut);
       return;
     }
 
@@ -6316,7 +6513,7 @@ export default function App() {
     [listMenuTree, listOrderMode],
   );
   const filterConfigListItems = useMemo(
-    () => buildVisibleListMenuItems(orderedListMenuTree, true),
+    () => buildVisibleListMenuItems(orderedListMenuTree, false),
     [orderedListMenuTree],
   );
   const todoListOrderedListMenuTree = useMemo(
@@ -6731,6 +6928,7 @@ export default function App() {
       }
       setActiveTodoDetailDraftContent('');
       setActiveTodoDetailDraftText('');
+      setActiveTodoDetailDraftTags([]);
       setActiveTodoDetailContentSelection({ end: 0, start: 0 });
       todoDetailDraftTodoIdRef.current = null;
       return;
@@ -6744,6 +6942,7 @@ export default function App() {
       formatTodoDetailDraftContentForEditing(activeTodoDetail.content),
     );
     setActiveTodoDetailDraftText(activeTodoDetail.text);
+    setActiveTodoDetailDraftTags(normalizeTodoTags(activeTodoDetail.tags));
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
   }, [activeTodoDetail, activeTodoDetailId]);
@@ -6758,12 +6957,17 @@ export default function App() {
     () => normalizeTodoContent(activeTodoDetailDraftContent),
     [activeTodoDetailDraftContent],
   );
+  const activeTodoDetailDraftTagsForSave = useMemo(
+    () => normalizeTodoTags(activeTodoDetailDraftTags),
+    [activeTodoDetailDraftTags],
+  );
   const activeTodoDetailHasChanges = Boolean(
     activeTodoDetail &&
       activeTodoDetailCanEdit &&
       (
         activeTodoDetail.text !== activeTodoDetailDraftTextForSave ||
-        activeTodoDetail.content !== activeTodoDetailDraftContentForSave
+        activeTodoDetail.content !== activeTodoDetailDraftContentForSave ||
+        !filterValueListsEqual(activeTodoDetail.tags, activeTodoDetailDraftTagsForSave)
       ),
   );
   const activeTodoDetailCanSave = Boolean(
@@ -6781,13 +6985,19 @@ export default function App() {
     const updatedTodo: Todo = {
       ...activeTodoDetail,
       content: activeTodoDetailDraftContentForSave,
+      tags: activeTodoDetailDraftTagsForSave,
       text: activeTodoDetailDraftTextForSave,
     };
     recordUndo('Edit todo');
     setTodos((current) =>
       current.map((todo) => (
         todo.id === todoId
-          ? { ...todo, content: updatedTodo.content, text: updatedTodo.text }
+          ? {
+              ...todo,
+              content: updatedTodo.content,
+              tags: updatedTodo.tags,
+              text: updatedTodo.text,
+            }
           : todo
       )),
     );
@@ -6799,6 +7009,7 @@ export default function App() {
     setActiveTodoDetailId(null);
     setActiveTodoDetailDraftContent('');
     setActiveTodoDetailDraftText('');
+    setActiveTodoDetailDraftTags([]);
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = null;
     triggerSubtleHaptic();
@@ -6807,6 +7018,7 @@ export default function App() {
     activeTodoDetailCanEdit,
     activeTodoDetailCanSave,
     activeTodoDetailDraftContentForSave,
+    activeTodoDetailDraftTagsForSave,
     activeTodoDetailDraftTextForSave,
     highlightEditedTodos,
     recordUndo,
@@ -7107,7 +7319,12 @@ export default function App() {
 
     if (menuMode === 'date') {
       const dateMenuItems = includeActiveTodoReminderRows
-        ? getDateMenuItemsForDateLabels(DATE_PICKER_MENU_ITEMS, menuFilters.date)
+        ? getDateMenuItemsForDateLabels(
+          DATE_PICKER_MENU_ITEMS,
+          menuFilters.date,
+          new Date(),
+          { sortSelectedCustomDate: true },
+        )
         : DATE_MENU_ITEMS;
 
       return [
@@ -7351,13 +7568,7 @@ export default function App() {
       },
     ];
 
-    if (activeFilterRows.length === 1) {
-      const [activeFilterRow] = activeFilterRows;
-      rows.push({
-        ...activeFilterRow,
-        id: `main-${activeFilterRow.id}`,
-      });
-    } else if (activeFilterRows.length > 1) {
+    if (activeFilterRows.length > 0) {
       rows.push({
         count: activeFilterRows.length,
         id: 'main-filters',
@@ -7582,6 +7793,17 @@ export default function App() {
       return;
     }
 
+    const repeatShortcut = getRepeatPresetForMenuLabel(label);
+    if (repeatShortcut) {
+      const targetIds = getCurrentTodoEditTargetIds();
+      if (targetIds.length === 0) {
+        return;
+      }
+
+      openDatePicker('filters', menuFilters.date, repeatShortcut);
+      return;
+    }
+
     if (label === REPEAT_PICKER_LABEL) {
       openActiveTodoRepeatModal();
       return;
@@ -7594,6 +7816,7 @@ export default function App() {
 
     toggleFilterValue('date', label);
   }, [
+    getCurrentTodoEditTargetIds,
     menuFilters.date,
     openActiveTodoReminderModal,
     openActiveTodoRepeatModal,
@@ -7753,6 +7976,34 @@ export default function App() {
   }, [clearNotificationTodoReveal, hasTodoEditTargets, listMenuTree, recordFilterConfigUndo]);
 
   const toggleListMenuItem = useCallback((item: VisibleListMenuItem) => {
+    if (!hasTodoEditTargets && menuMode === 'presetLists') {
+      const currentList = selectedFiltersRef.current.list;
+      const nextList = currentList.includes(item.label)
+        ? currentList.filter((label) => label !== item.label)
+        : [...currentList, item.label];
+      const nextFilters: SelectedFilters = {
+        ...cloneTodoFilters(),
+        list: nextList,
+      };
+      const emptyFilters = cloneTodoFilters();
+
+      if (
+        filtersEqual(selectedFiltersRef.current, nextFilters) &&
+        filtersEqual(requiredFiltersRef.current, emptyFilters) &&
+        filtersEqual(avoidedFiltersRef.current, emptyFilters)
+      ) {
+        return;
+      }
+
+      clearNotificationTodoReveal();
+      recordFilterConfigUndo('Change filters');
+      setSelectedFilters(nextFilters);
+      setRequiredFilters(emptyFilters);
+      setAvoidedFilters(emptyFilters);
+      triggerSubtleHaptic();
+      return;
+    }
+
     const toggleValue = (current: SelectedFilters): SelectedFilters => {
       const list = current.list;
 
@@ -7760,61 +8011,41 @@ export default function App() {
         return { ...current, list: [item.label] };
       }
 
-      if (item.isSubsection && item.parentLabel) {
-        const parentNode = findListMenuNode(listMenuTree, item.parentLabel);
-        const siblingLabels = parentNode?.children?.map((child) => child.label) ?? [];
-        const hasSubsection = list.includes(item.label);
-        const withoutFamily = list.filter(
-          (label) => label !== item.parentLabel && !siblingLabels.includes(label),
-        );
-
-        if (hasSubsection) {
-          return { ...current, list: withoutFamily };
-        }
-
-        return { ...current, list: [...withoutFamily, item.label] };
-      }
-
-      const parentNode = findListMenuNode(listMenuTree, item.label);
-      const childLabels = parentNode?.children?.map((child) => child.label) ?? [];
-      const hasParentOnly = list.includes(item.label)
-        && !childLabels.some((label) => list.includes(label));
-
-      if (hasParentOnly) {
+      if (list.includes(item.label)) {
         return {
           ...current,
-          list: list.filter((label) => label !== item.label && !childLabels.includes(label)),
+          list: list.filter((label) => label !== item.label),
         };
       }
 
-      const withoutFamily = list.filter(
-        (label) => label !== item.label && !childLabels.includes(label),
-      );
-
-      return { ...current, list: [...withoutFamily, item.label] };
+      return { ...current, list: [...list, item.label] };
     };
 
     updateCurrentTodoTargetFilters(toggleValue);
 
     triggerSubtleHaptic();
-  }, [hasTodoEditTargets, listMenuTree, updateCurrentTodoTargetFilters]);
+  }, [
+    clearNotificationTodoReveal,
+    hasTodoEditTargets,
+    menuMode,
+    recordFilterConfigUndo,
+    updateCurrentTodoTargetFilters,
+  ]);
 
   const removeListMenuItem = useCallback((item: VisibleListMenuItem) => {
     const removeValue = (current: SelectedFilters) => {
-      if (item.isSubsection) {
+      const nextList = current.list.filter((label) => label !== item.label);
+
+      if (!hasTodoEditTargets && menuMode === 'presetLists') {
         return {
-          ...current,
-          list: current.list.filter((label) => label !== item.label),
+          ...cloneTodoFilters(),
+          list: nextList,
         };
       }
 
-      const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
-        child.label
-      )) ?? [];
-
       return {
         ...current,
-        list: current.list.filter((label) => label !== item.label && !childLabels.includes(label)),
+        list: nextList,
       };
     };
 
@@ -7827,12 +8058,16 @@ export default function App() {
 
     clearNotificationTodoReveal();
     const nextFilters = removeValue(cloneTodoFilters(selectedFiltersRef.current));
-    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
-    const nextAvoidedFilters = removeFilterValueFromAvoidedFilters(
-      avoidedFiltersRef.current,
-      'list',
-      item.label,
-    );
+    const nextRequiredFilters = menuMode === 'presetLists'
+      ? cloneTodoFilters()
+      : pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = menuMode === 'presetLists'
+      ? cloneTodoFilters()
+      : removeFilterValueFromAvoidedFilters(
+        avoidedFiltersRef.current,
+        'list',
+        item.label,
+      );
 
     if (
       filtersEqual(selectedFiltersRef.current, nextFilters) &&
@@ -7850,7 +8085,8 @@ export default function App() {
   }, [
     clearNotificationTodoReveal,
     getCurrentTodoEditTargetIds,
-    listMenuTree,
+    hasTodoEditTargets,
+    menuMode,
     recordFilterConfigUndo,
     updateTodoFiltersForIds,
   ]);
@@ -8871,6 +9107,10 @@ export default function App() {
       return;
     }
 
+    if (openMenuPreset) {
+      return;
+    }
+
     const matchedQuickPreset = quickPresetNavItems.find((item) => (
       item.preset &&
       menuPresetMatchesState(
@@ -8884,7 +9124,7 @@ export default function App() {
         metaTagVisibility,
       )
     ))?.preset ?? null;
-    const preset = openMenuPreset ?? activeMenuPreset ?? matchedQuickPreset;
+    const preset = activeMenuPreset ?? matchedQuickPreset;
 
     if (!preset) {
       return;
@@ -8902,10 +9142,8 @@ export default function App() {
     )?.slotNumber ?? null;
 
     clearNotificationTodoReveal();
-    if (!openMenuPreset) {
-      setOpenMenuPresetId(preset.id);
-      setOpenQuickPresetNavSlotNumber(matchedQuickPresetSlotNumber);
-    }
+    setOpenMenuPresetId(preset.id);
+    setOpenQuickPresetNavSlotNumber(matchedQuickPresetSlotNumber);
     setSelectedFilters(nextFilters);
     if (!filtersEqual(requiredFilters, nextRequiredFilters)) {
       setRequiredFilters(nextRequiredFilters);
@@ -9240,8 +9478,17 @@ export default function App() {
     : openMenuPreset
       ? `Save list ${openMenuPreset.label}`
       : 'Save list';
+  const canSaveCurrentMenuPreset = Boolean(
+    !hasTodoEditTargets &&
+      !editingMenuPreset &&
+      !openMenuPreset &&
+      !activeMenuPreset &&
+      activeFilterCount > 0,
+  );
   const canSaveListMenuPreset = Boolean(
-    editingMenuPreset || (openMenuPresetHasChanges && openMenuPreset),
+    editingMenuPreset ||
+      (openMenuPresetHasChanges && openMenuPreset) ||
+      canSaveCurrentMenuPreset,
   );
   const saveListMenuPreset = useCallback(() => {
     if (editingMenuPreset) {
@@ -9251,11 +9498,18 @@ export default function App() {
 
     if (openMenuPresetHasChanges && openMenuPreset) {
       saveOpenMenuPreset(openMenuPreset.id);
+      return;
+    }
+
+    if (canSaveCurrentMenuPreset) {
+      openSavePresetPrompt();
     }
   }, [
+    canSaveCurrentMenuPreset,
     editingMenuPreset,
     openMenuPreset,
     openMenuPresetHasChanges,
+    openSavePresetPrompt,
     saveOpenMenuPreset,
     updateEditingMenuPreset,
   ]);
@@ -9291,8 +9545,7 @@ export default function App() {
     setOpenQuickPresetNavSlotNumber(slotNumber);
 
     if (isDoubleTap) {
-      setNavTab('menu');
-      setMenuMode('presets');
+      setToggleAllTodoSectionsRequest((current) => current + 1);
     }
 
     requestAnimationFrame(() => {
@@ -9375,6 +9628,125 @@ export default function App() {
     requiredFilters,
     selectedFilters,
   ]);
+
+  const applyTagUpdateToTodos = useCallback((updater: (tags: string[]) => string[]) => {
+    setCreateDraftTags((current) => normalizeTodoTags(updater(current)));
+    setActiveTodoDetailDraftTags((current) => normalizeTodoTags(updater(current)));
+    setTodos((current) => {
+      const updatedTodos: Todo[] = [];
+      const next = current.map((todo) => {
+        const tags = normalizeTodoTags(updater(todo.tags));
+        if (filterValueListsEqual(tags, todo.tags)) {
+          return todo;
+        }
+
+        const updatedTodo = { ...todo, tags };
+        if (!pendingDeleteIds.has(todo.id)) {
+          updatedTodos.push(updatedTodo);
+        }
+        return updatedTodo;
+      });
+
+      if (updatedTodos.length > 0) {
+        localTodoStore.upsertMany(updatedTodos).catch(() => undefined);
+        highlightEditedTodos(updatedTodos.map((todo) => todo.id));
+      }
+
+      return next;
+    });
+    setDeletedTodos((current) => current.map((todo) => {
+      const tags = normalizeTodoTags(updater(todo.tags));
+      return filterValueListsEqual(tags, todo.tags) ? todo : { ...todo, tags };
+    }));
+  }, [highlightEditedTodos, pendingDeleteIds]);
+
+  const commitSettingsTag = useCallback(() => {
+    const label = formatTagLabel(newTagName);
+    const editingLabel = editingTagName ? formatTagLabel(editingTagName) : '';
+
+    if (!label) {
+      return;
+    }
+
+    const labelKey = label.toLocaleLowerCase();
+    const editingKey = editingLabel.toLocaleLowerCase();
+    const duplicate = customTagsRef.current.some((tag) => (
+      tag.toLocaleLowerCase() === labelKey &&
+      (!editingLabel || tag.toLocaleLowerCase() !== editingKey)
+    ));
+    if (duplicate) {
+      return;
+    }
+
+    const nextTags = normalizeCustomTags([
+      ...customTagsRef.current.filter((tag) => tag.toLocaleLowerCase() !== editingKey),
+      label,
+    ]);
+    const labelChanged = Boolean(editingLabel && editingLabel !== label);
+
+    if (
+      !labelChanged &&
+      editingLabel &&
+      filterValueListsEqual(nextTags, customTagsRef.current)
+    ) {
+      setEditingTagName(null);
+      setNewTagName('');
+      return;
+    }
+
+    recordUndo(editingLabel ? 'Edit tag' : 'Add tag');
+    customTagsRef.current = nextTags;
+    setCustomTags(nextTags);
+    persistCustomTags(nextTags);
+    if (labelChanged) {
+      applyTagUpdateToTodos((tags) => (
+        tags.map((tag) => (
+          tag.toLocaleLowerCase() === editingKey ? label : tag
+        ))
+      ));
+    }
+    setEditingTagName(null);
+    setNewTagName('');
+    triggerSubtleHaptic();
+  }, [
+    applyTagUpdateToTodos,
+    editingTagName,
+    newTagName,
+    persistCustomTags,
+    recordUndo,
+  ]);
+
+  const editSettingsTag = useCallback((label: string) => {
+    setEditingTagName(label);
+    setNewTagName(label);
+    triggerSubtleHaptic();
+  }, []);
+
+  const removeSettingsTag = useCallback((label: string) => {
+    const formattedLabel = formatTagLabel(label);
+    const labelKey = formattedLabel.toLocaleLowerCase();
+    if (!formattedLabel || !customTagsRef.current.some((tag) => (
+      tag.toLocaleLowerCase() === labelKey
+    ))) {
+      return;
+    }
+
+    recordUndo('Delete tag');
+    const nextTags = normalizeCustomTags(
+      customTagsRef.current.filter((tag) => tag.toLocaleLowerCase() !== labelKey),
+    );
+    customTagsRef.current = nextTags;
+    setCustomTags(nextTags);
+    persistCustomTags(nextTags);
+    applyTagUpdateToTodos((tags) => (
+      tags.filter((tag) => tag.toLocaleLowerCase() !== labelKey)
+    ));
+    if (editingTagName && editingTagName.toLocaleLowerCase() === labelKey) {
+      setEditingTagName(null);
+      setNewTagName('');
+    }
+    triggerSubtleHaptic();
+  }, [applyTagUpdateToTodos, editingTagName, persistCustomTags, recordUndo]);
 
   const addSettingsList = useCallback(() => {
     const label = formatListLabel(newListName);
@@ -9493,6 +9865,9 @@ export default function App() {
     setSettingsListIconPickerIndex((current) => (
       current === null || current === index ? null : current > index ? current - 1 : current
     ));
+    setSettingsPresetIconPickerIndex((current) => (
+      current === null || current === index ? null : current > index ? current - 1 : current
+    ));
     setListMenuTree((current) => {
       const node = current[index];
       if (!node) {
@@ -9586,8 +9961,10 @@ export default function App() {
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
     setSettingsListsExpanded(false);
+    setSettingsPresetsExpanded(false);
     setSettingsListReorderCancelNonce((current) => current + 1);
     setSettingsListIconPickerIndex(null);
+    setSettingsPresetIconPickerIndex(null);
     setSettingsModalVisible(true);
     triggerSubtleHaptic();
   }, [closeListMenuState, exitTodoSelectMode, flushFilterConfigUndoBatch]);
@@ -10160,10 +10537,11 @@ export default function App() {
       `Creating ${formatDriveBackupScopeLabel(backupScope)} snapshot...`,
     );
 
-    const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
-    const payload = createBackupPayload(backupTodos, {
-      collapsedTodoGroupIds: [...collapsedTodoGroupIds],
-      dateLabelDisplayMode,
+      const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
+      const payload = createBackupPayload(backupTodos, {
+        collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+        customTags,
+        dateLabelDisplayMode,
       deletedTodos,
       filterConfigUiState,
       filterColors,
@@ -10200,6 +10578,7 @@ export default function App() {
     }
   }, [
     collapsedTodoGroupIds,
+    customTags,
     dateLabelDisplayMode,
     deletedTodos,
     filterConfigUiState,
@@ -12185,10 +12564,10 @@ export default function App() {
                               );
                             }
 
-  	                          if (item.type === 'groupOption') {
-  	                            const isSelected = effectiveGroupMode === item.groupMode;
+                              if (item.type === 'groupOption') {
+                                const isSelected = effectiveGroupMode === item.groupMode;
 
-  	                            return (
+                                return (
                                 <Pressable
                                   accessibilityRole="button"
                                   accessibilityState={{ selected: isSelected }}
@@ -12204,8 +12583,8 @@ export default function App() {
                                   </View>
                                   {isSelected ? <Text style={styles.listMenuCheck}>✓</Text> : null}
                                 </Pressable>
-  	                            );
-  	                          }
+                                );
+                              }
 
                             if (item.type === 'metaTagOption') {
                               const isSelected = metaTagVisibility[item.metaTagKey];
@@ -12229,26 +12608,26 @@ export default function App() {
                               );
                             }
 
-  	                          if (item.type === 'savePreset') {
-  	                            return (
-  	                              <Pressable
-  	                                accessibilityRole="button"
+                              if (item.type === 'savePreset') {
+                                return (
+                                  <Pressable
+                                    accessibilityRole="button"
                                     onPress={() => openSavePresetPrompt()}
-  	                                style={({ pressed }) => [
-  	                                  styles.listMenuRow,
-  	                                  pressed && styles.listMenuRowPressed,
-  	                                ]}
-  	                              >
-  	                                <View style={styles.listMenuRowTextStack}>
-  	                                  <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-  	                                  <Text numberOfLines={1} style={styles.listMenuRowSummary}>
-  	                                    {item.summary}
-  	                                  </Text>
-  	                                </View>
-  	                                <Text style={styles.listMenuApplyText}>+</Text>
-  	                              </Pressable>
-  	                            );
-  	                          }
+                                    style={({ pressed }) => [
+                                      styles.listMenuRow,
+                                      pressed && styles.listMenuRowPressed,
+                                    ]}
+                                  >
+                                    <View style={styles.listMenuRowTextStack}>
+                                      <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                      <Text numberOfLines={1} style={styles.listMenuRowSummary}>
+                                        {item.summary}
+                                      </Text>
+                                    </View>
+                                    <Text style={styles.listMenuApplyText}>+</Text>
+                                  </Pressable>
+                                );
+                              }
 
                             if (item.type === 'quickApplyPreset') {
                               return (
@@ -12336,73 +12715,73 @@ export default function App() {
                               );
                             }
 
-  	                          if (item.type === 'menu') {
-  	                            const canClearSection = menuSectionCanClear(
-  	                              item.menuMode,
-  	                              menuFilters,
+                              if (item.type === 'menu') {
+                                const canClearSection = menuSectionCanClear(
+                                  item.menuMode,
+                                  menuFilters,
                                   menuAvoidedFilters,
-  	                              activeFilterCount,
-  	                              effectiveSortMode,
-  	                              effectiveGroupMode,
-  	                              metaTagVisibility,
-  	                              listMenuTree,
-  	                              activeListDisplay,
+                                  activeFilterCount,
+                                  effectiveSortMode,
+                                  effectiveGroupMode,
+                                  metaTagVisibility,
+                                  listMenuTree,
+                                  activeListDisplay,
                               includeActiveTodoReminderRows,
-  	                              activeMenuPreset,
-  	                            );
+                                  activeMenuPreset,
+                                );
 
-  	                            return (
-  	                              <View style={styles.listMenuRow}>
-  	                                <Pressable
-  	                                  accessibilityRole="button"
-  	                                  onPress={() => setMenuMode(item.menuMode)}
-  	                                  style={({ pressed }) => [
-  	                                    styles.listMenuRowMainPress,
-  	                                    pressed && styles.listMenuRowPressed,
-  	                                  ]}
-  	                                >
-  	                                  <View style={styles.listMenuRowTextWrap}>
-  	                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
-  	                                  </View>
-  	                                </Pressable>
-  	                                <View style={styles.listMenuSubmenuZone}>
-  	                                  {item.valueLabel ? (
-  	                                    <Text numberOfLines={1} style={styles.listMenuValueText}>
-  	                                      {item.valueLabel}
-  	                                    </Text>
-  	                                  ) : item.count ? (
-  	                                    <Text style={styles.listMenuChildCount}>{item.count}</Text>
-  	                                  ) : null}
-  	                                  {canClearSection ? (
-  	                                    <Pressable
-  	                                      accessibilityRole="button"
-  	                                      accessibilityLabel={`Clear ${item.label}`}
-  	                                      hitSlop={LIST_MENU_ICON_HIT_SLOP}
-  	                                      onPress={() => clearMenuSection(item.menuMode)}
-  	                                      style={({ pressed }) => [
-  	                                        styles.listMenuClearButton,
-  	                                        pressed && styles.listMenuClearButtonPressed,
-  	                                      ]}
-  	                                    >
-  	                                      <Text style={styles.listMenuClearButtonText}>×</Text>
-  	                                    </Pressable>
-  	                                  ) : null}
-  	                                  <Pressable
-  	                                    accessibilityRole="button"
-  	                                    accessibilityLabel={`Open ${item.label}`}
-  	                                    hitSlop={LIST_MENU_ICON_HIT_SLOP}
-  	                                    onPress={() => setMenuMode(item.menuMode)}
-  	                                    style={({ pressed }) => [
-  	                                      styles.listMenuArrowButton,
-  	                                      pressed && styles.listMenuArrowButtonPressed,
-  	                                    ]}
-  	                                  >
-  	                                    <Text style={styles.listMenuArrow}>›</Text>
-  	                                  </Pressable>
-  	                                </View>
-  	                              </View>
-  	                            );
-  	                          }
+                                return (
+                                  <View style={styles.listMenuRow}>
+                                    <Pressable
+                                      accessibilityRole="button"
+                                      onPress={() => setMenuMode(item.menuMode)}
+                                      style={({ pressed }) => [
+                                        styles.listMenuRowMainPress,
+                                        pressed && styles.listMenuRowPressed,
+                                      ]}
+                                    >
+                                      <View style={styles.listMenuRowTextWrap}>
+                                        <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                      </View>
+                                    </Pressable>
+                                    <View style={styles.listMenuSubmenuZone}>
+                                      {item.valueLabel ? (
+                                        <Text numberOfLines={1} style={styles.listMenuValueText}>
+                                          {item.valueLabel}
+                                        </Text>
+                                      ) : item.count ? (
+                                        <Text style={styles.listMenuChildCount}>{item.count}</Text>
+                                      ) : null}
+                                      {canClearSection ? (
+                                        <Pressable
+                                          accessibilityRole="button"
+                                          accessibilityLabel={`Clear ${item.label}`}
+                                          hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                                          onPress={() => clearMenuSection(item.menuMode)}
+                                          style={({ pressed }) => [
+                                            styles.listMenuClearButton,
+                                            pressed && styles.listMenuClearButtonPressed,
+                                          ]}
+                                        >
+                                          <Text style={styles.listMenuClearButtonText}>×</Text>
+                                        </Pressable>
+                                      ) : null}
+                                      <Pressable
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`Open ${item.label}`}
+                                        hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                                        onPress={() => setMenuMode(item.menuMode)}
+                                        style={({ pressed }) => [
+                                          styles.listMenuArrowButton,
+                                          pressed && styles.listMenuArrowButtonPressed,
+                                        ]}
+                                      >
+                                        <Text style={styles.listMenuArrow}>›</Text>
+                                      </Pressable>
+                                    </View>
+                                  </View>
+                                );
+                              }
 
                             if (item.type !== 'value') {
                               return null;
@@ -12411,6 +12790,8 @@ export default function App() {
                             const isDateValue = item.filterKey === 'date';
                             const isRepeatStatusValue =
                               isDateValue && isRepeatStatusFilterValue(item.label);
+                            const isRepeatShortcutValue =
+                              isDateValue && isRepeatShortcutMenuLabel(item.label);
                             const isReminderValue =
                               isDateValue && (
                                 isReminderPickerMenuLabel(item.label) || isRepeatStatusValue
@@ -12450,7 +12831,7 @@ export default function App() {
                               : item.label;
                             const clearAccessibilityLabel = item.label === REMINDER_PICKER_LABEL
                               ? 'Clear reminder time'
-                              : item.label === REPEAT_PICKER_LABEL
+                              : item.label === REPEAT_PICKER_LABEL || isRepeatShortcutValue
                                 ? 'Clear repeating'
                                 : isRepeatStatusValue
                                   ? `Clear ${displayLabel}`
@@ -12538,7 +12919,7 @@ export default function App() {
                                       return;
                                     }
 
-                                    if (item.label === REPEAT_PICKER_LABEL) {
+                                    if (item.label === REPEAT_PICKER_LABEL || isRepeatShortcutValue) {
                                       clearActiveTodoRepeat();
                                       return;
                                     }
@@ -12845,16 +13226,54 @@ export default function App() {
                   selection={activeTodoDetailContentSelection}
                   selectionColor={TODO_DETAIL_SELECTION_COLOR}
                   scrollEnabled
-                  style={[
-                    styles.todoDetailContentInput,
-                    { maxHeight: todoDetailContentInputMaxHeight },
-                  ]}
-                  textAlignVertical="top"
-                  value={activeTodoDetailDraftContent}
-                />
+                    style={[
+                      styles.todoDetailContentInput,
+                      { maxHeight: todoDetailContentInputMaxHeight },
+                    ]}
+                    textAlignVertical="top"
+                    value={activeTodoDetailDraftContent}
+                  />
+                </View>
+                {availableTodoTags.length > 0 || activeTodoDetailDraftTags.length > 0 ? (
+                  <View style={styles.todoDetailTagPicker}>
+                    {availableTodoTags.map((label) => {
+                      const selected = activeTodoDetailDraftTags.some(
+                        (tag) => tag.toLocaleLowerCase() === label.toLocaleLowerCase(),
+                      );
+
+                      return (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityState={{ disabled: !activeTodoDetailCanEdit, selected }}
+                          disabled={!activeTodoDetailCanEdit}
+                          key={`todo-detail-tag-${label}`}
+                          onPress={() => toggleActiveTodoDetailDraftTag(label)}
+                          style={({ pressed }) => [
+                            styles.todoDetailTagChip,
+                            selected && styles.todoDetailTagChipSelected,
+                            !activeTodoDetailCanEdit && styles.todoDetailTagChipDisabled,
+                            pressed && styles.settingsOptionRowPressed,
+                          ]}
+                        >
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.todoDetailTagChipText,
+                              selected && styles.todoDetailTagChipTextSelected,
+                            ]}
+                          >
+                            {label}
+                          </Text>
+                          {selected ? (
+                            <Ionicons color={THEME_ACCENT} name="checkmark" size={14} />
+                          ) : null}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : null}
               </View>
-            </View>
-            </View>
+              </View>
           </View>
         ) : null}
 
@@ -12995,26 +13414,40 @@ export default function App() {
                       createDrawerListPickerHalfSheet && styles.createDrawerListPickerScroll,
                     ]}
                   >
+                    {createDrawerPicker === 'tags' && createDrawerPickerItems.length === 0 ? (
+                      <Text style={styles.createDrawerPickerEmptyText}>
+                        No tags
+                      </Text>
+                    ) : null}
                     {createDrawerPickerItems.map((label) => {
                       const isNoListPickerItem = createDrawerPicker === 'list'
                         && label === CREATE_DRAWER_NO_LIST_PICKER_VALUE;
-                      const selected =
-                        createDrawerPicker === 'priority'
-                          ? (
-                            label === 'None'
+                        const selected = (() => {
+                          if (createDrawerPicker === 'tags') {
+                            return createDraftTags.some(
+                              (tag) => tag.toLocaleLowerCase() === label.toLocaleLowerCase(),
+                            );
+                          }
+
+                          if (createDrawerPicker === 'priority') {
+                            return label === 'None'
                               ? createDraftFilters.priority.length === 0
-                              : createDraftFilters.priority[0] === label
-                          )
-                          : createDrawerPicker === 'date'
-                            ? isDatePickerMenuItemSelected(
+                              : createDraftFilters.priority[0] === label;
+                          }
+
+                          if (createDrawerPicker === 'date') {
+                            return isDatePickerMenuItemSelected(
                               label,
                               createDraftFilters.date,
                               createDraftFilters.reminder,
                               isDateMenuItemSelected,
-                            )
-                            : isNoListPickerItem
-                              ? createDraftFilters.list.length === 0
-                              : createDraftFilters[createDrawerPicker][0] === label;
+                            );
+                          }
+
+                          return isNoListPickerItem
+                            ? createDraftFilters.list.length === 0
+                            : createDraftFilters.list[0] === label;
+                        })();
                       const displayLabel = isNoListPickerItem
                         ? CREATE_DRAWER_NO_LIST_LABEL
                         : createDrawerPicker === 'date'
@@ -13034,8 +13467,9 @@ export default function App() {
                         hasTodoReminderTime(createDraftFilters.reminder)
                       );
                       const showRepeatClear = (
-                        label === REPEAT_PICKER_LABEL &&
-                        hasTodoRepeat(createDraftFilters.reminder)
+                        label === REPEAT_PICKER_LABEL
+                          ? selected && hasTodoRepeat(createDraftFilters.reminder)
+                          : isRepeatShortcutMenuLabel(label) && selected
                       );
                       const showRowClear = showCustomDateClear || showReminderClear || showRepeatClear;
                       const useSplitDatePickerRow = (
@@ -13117,12 +13551,20 @@ export default function App() {
                               return;
                             }
 
+                            if (createDrawerPicker === 'tags') {
+                              toggleCreateDraftTag(label);
+                              return;
+                            }
+
                             if (isNoListPickerItem) {
                               clearCreateDraftList(true);
                               return;
                             }
 
-                            setCreateDraftFilterValue(createDrawerPicker, label);
+                              setCreateDraftFilterValue(
+                                createDrawerPicker === 'priority' ? 'priority' : 'list',
+                                label,
+                              );
                           }}
                           style={({ pressed }) => [
                             styles.createDrawerPickerRow,
@@ -13231,6 +13673,23 @@ export default function App() {
                           : '#8C847C'
                       }
                       name="pricetag-outline"
+                      size={22}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={createDrawerTagsAccessibilityLabel}
+                    accessibilityState={{ selected: createDrawerTagsActive }}
+                    onPress={handleCreateDrawerTagsPress}
+                    style={({ pressed }) => [
+                      styles.createDrawerToolbarButton,
+                      pressed && styles.createDrawerToolbarButtonPressed,
+                      createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
+                    ]}
+                  >
+                    <Ionicons
+                      color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
+                      name="pricetags-outline"
                       size={22}
                     />
                   </Pressable>
@@ -13477,10 +13936,9 @@ export default function App() {
                     </Pressable>
                   </View>
                 ) : null}
-              </View>
-
-              <View style={styles.settingsSection}>
-                <View style={styles.settingsSectionHeader}>
+                </View>
+                <View style={styles.settingsSection}>
+                  <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Backup</Text>
                     <Text style={styles.settingsSectionSubtitle}>
@@ -13623,11 +14081,11 @@ export default function App() {
                     <Text style={styles.settingsBackupStatus}>{googleDriveBackupStatus}</Text>
                   </View>
                 ) : null}
-              </View>
+                </View>
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
+                    <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Done items</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       {hideDoneTodos ? 'Hidden from lists' : 'Visible in lists'}
@@ -13778,13 +14236,69 @@ export default function App() {
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Lists</Text>
+                    <Text style={styles.settingsSectionTitle}>Presets</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {listMenuTree.length} lists · {settingsNavbarPinnedListCount} in navbar
+                      {settingsNavbarPinnedListCount} in navbar · {listMenuTree.length} lists
                     </Text>
                   </View>
                   <Pressable
-                    accessibilityLabel={`${settingsListsExpanded ? 'Collapse' : 'Expand'} Lists section`}
+                    accessibilityLabel={`${settingsPresetsExpanded ? 'Collapse' : 'Expand'} Presets section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsPresetsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsPresetsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsPresetsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsPresetsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Text style={[styles.settingsListReorderHint, styles.settingsListReorderHintFirst]}>
+                      {listMenuTree.length > 1
+                        ? 'Tap the handle on one preset, then another to swap navbar order. Pin to show in navbar.'
+                        : 'Pin to show in navbar.'}
+                    </Text>
+
+                    <MemoizedSettingsListEditor
+                      allowDelete={false}
+                      iconPickerIndex={settingsPresetIconPickerIndex}
+                      items={listMenuTree}
+                      onIconPickerChange={(index) => {
+                        setSettingsPresetIconPickerIndex(index);
+                        setSettingsListIconPickerIndex(null);
+                      }}
+                      reorderCancelNonce={settingsListReorderCancelNonce}
+                      onMainPress={openSettingsListKeywordPrompt}
+                      onPinPress={toggleSettingsListNavbarPinned}
+                      onSwap={handleSettingsListSwap}
+                      onSetIcon={setSettingsListIcon}
+                    />
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>List</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {listMenuTree.length} {listMenuTree.length === 1 ? 'list' : 'lists'} · Item categories
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsListsExpanded ? 'Collapse' : 'Expand'} List section`}
                     accessibilityRole="button"
                     accessibilityState={{ expanded: settingsListsExpanded }}
                     hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
@@ -13834,20 +14348,24 @@ export default function App() {
 
                     <Text style={styles.settingsListReorderHint}>
                       {listMenuTree.length > 1
-                        ? 'Tap the handle on one list, then another to swap. Swipe left to delete. Pin to show in navbar.'
-                        : 'Swipe left to delete. Pin to show in navbar.'}
+                        ? 'Sorted A-Z. Swipe left to delete.'
+                        : 'Swipe left to delete.'}
                     </Text>
 
                     <MemoizedSettingsListEditor
+                      allowIconEdit={false}
+                      allowReorder={false}
                       iconPickerIndex={settingsListIconPickerIndex}
                       items={listMenuTree}
                       onDelete={removeSettingsList}
-                      onIconPickerChange={setSettingsListIconPickerIndex}
+                      onIconPickerChange={(index) => {
+                        setSettingsListIconPickerIndex(index);
+                        setSettingsPresetIconPickerIndex(null);
+                      }}
                       reorderCancelNonce={settingsListReorderCancelNonce}
                       onMainPress={openSettingsListKeywordPrompt}
-                      onPinPress={toggleSettingsListNavbarPinned}
-                      onSwap={handleSettingsListSwap}
                       onSetIcon={setSettingsListIcon}
+                      sortAscending
                     />
 
                     <View style={styles.settingsListMenuOrderSection}>
@@ -13894,6 +14412,124 @@ export default function App() {
                         })}
                       </View>
                     </View>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Tags</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {customTags.length} {customTags.length === 1 ? 'tag' : 'tags'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsTagsExpanded ? 'Collapse' : 'Expand'} Tags section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsTagsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsTagsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsTagsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsTagsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <View style={styles.settingsAddListRow}>
+                      <TextInput
+                        autoCapitalize="words"
+                        onChangeText={setNewTagName}
+                        onSubmitEditing={commitSettingsTag}
+                        placeholder={editingTagName ? 'Tag name' : 'New tag'}
+                        placeholderTextColor="#A69D94"
+                        returnKeyType="done"
+                        style={styles.settingsAddListInput}
+                        value={newTagName}
+                      />
+                      {editingTagName ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Cancel tag edit"
+                          hitSlop={8}
+                          onPress={() => {
+                            setEditingTagName(null);
+                            setNewTagName('');
+                            triggerSubtleHaptic();
+                          }}
+                          style={({ pressed }) => [
+                            styles.settingsTagCancelButton,
+                            pressed && styles.settingsOptionRowPressed,
+                          ]}
+                        >
+                          <Ionicons color="#8F877F" name="close" size={18} />
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={!newTagName.trim()}
+                        onPress={commitSettingsTag}
+                        style={({ pressed }) => [
+                          styles.settingsAddListButton,
+                          !newTagName.trim() && styles.settingsButtonDisabled,
+                          pressed && styles.settingsPrimaryButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsAddListButtonText}>
+                          {editingTagName ? 'Save' : 'Add'}
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {customTags.length === 0 ? (
+                      <Text style={styles.settingsEmptyText}>No tags</Text>
+                    ) : (
+                      <View style={styles.settingsTagList}>
+                        {customTags.map((label) => (
+                          <View key={`settings-tag-${label}`} style={styles.settingsTagRow}>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Edit tag ${label}`}
+                              onPress={() => editSettingsTag(label)}
+                              style={({ pressed }) => [
+                                styles.settingsTagMain,
+                                editingTagName === label && styles.settingsTagMainEditing,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <Ionicons color={THEME_ACCENT} name="pricetag-outline" size={16} />
+                              <Text numberOfLines={1} style={styles.settingsTagText}>
+                                {label}
+                              </Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Delete tag ${label}`}
+                              hitSlop={8}
+                              onPress={() => removeSettingsTag(label)}
+                              style={({ pressed }) => [
+                                styles.settingsTagDeleteButton,
+                                pressed && styles.settingsOptionRowPressed,
+                              ]}
+                            >
+                              <Ionicons color={THEME_DANGER} name="trash-outline" size={17} />
+                            </Pressable>
+                          </View>
+                        ))}
+                      </View>
+                    )}
                   </View>
                 ) : null}
               </View>
@@ -14487,6 +15123,46 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
+  todoDetailTagPicker: {
+    borderTopColor: '#F0E9E1',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 16,
+  },
+  todoDetailTagChip: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4DED6',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 32,
+    maxWidth: '100%',
+    paddingHorizontal: 10,
+  },
+  todoDetailTagChipSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#C9DED6',
+  },
+  todoDetailTagChipDisabled: {
+    opacity: 0.56,
+  },
+  todoDetailTagChipText: {
+    color: THEME_TEXT_SECONDARY,
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  todoDetailTagChipTextSelected: {
+    color: THEME_ACCENT,
+  },
   deletedTodoDetailHeader: {
     alignItems: 'flex-start',
     borderBottomColor: '#F0E9E1',
@@ -15060,6 +15736,59 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
   },
+  settingsTagCancelButton: {
+    alignItems: 'center',
+    backgroundColor: '#F7F2EC',
+    borderColor: '#E4DED6',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  settingsTagList: {
+    gap: 8,
+    marginTop: 12,
+  },
+  settingsTagRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  settingsTagMain: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4DED6',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 42,
+    minWidth: 0,
+    paddingHorizontal: 12,
+  },
+  settingsTagMainEditing: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#C9DED6',
+  },
+  settingsTagText: {
+    color: THEME_TEXT,
+    flexShrink: 1,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0,
+    lineHeight: 19,
+    minWidth: 0,
+  },
+  settingsTagDeleteButton: {
+    alignItems: 'center',
+    backgroundColor: '#F8EDEA',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
   settingsListReorderHint: {
     color: THEME_TEXT_SECONDARY,
     fontSize: 13,
@@ -15067,6 +15796,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     lineHeight: 18,
     marginTop: 12,
+  },
+  settingsListReorderHintFirst: {
+    marginTop: 0,
   },
   settingsListMenuOrderSection: {
     borderTopColor: '#F2EBE3',
@@ -16021,6 +16753,15 @@ const styles = StyleSheet.create({
   },
   createDrawerPicker: {
     marginTop: 4,
+  },
+  createDrawerPickerEmptyText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 19,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
   },
   createDrawerListPickerScroll: {
     flex: 1,

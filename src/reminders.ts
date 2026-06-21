@@ -16,6 +16,8 @@ export type TodoReminder = {
   repeat: RepeatPreset;
 };
 
+export const REPEAT_SHORTCUT_MENU_ITEMS = ['Weekly', 'Monthly'] as const;
+
 export const REPEAT_PRESETS: Array<{ id: RepeatPreset; label: string }> = [
   { id: 'none', label: 'None' },
   { id: 'daily', label: 'Daily' },
@@ -29,9 +31,23 @@ const REPEAT_STATUS_FILTER_VALUES = [
   REPEATING_ITEMS_FILTER_VALUE,
   LEGACY_NOT_REPEATING_ITEMS_FILTER_VALUE,
 ];
+const REPEAT_SHORTCUT_MENU_PRESETS = new Set<RepeatPreset>(['weekly', 'monthly']);
+const REPEAT_SHORTCUT_MENU_LABELS: Record<string, RepeatPreset> = {
+  weekly: 'weekly',
+  monthly: 'monthly',
+};
 
 const isRepeatPreset = (value: string): value is RepeatPreset =>
   REPEAT_PRESETS.some((preset) => preset.id === value);
+
+export const getRepeatPresetForMenuLabel = (label: string): RepeatPreset | null =>
+  REPEAT_SHORTCUT_MENU_LABELS[label.trim().toLocaleLowerCase()] ?? null;
+
+export const isRepeatShortcutMenuLabel = (label: string): boolean =>
+  getRepeatPresetForMenuLabel(label) !== null;
+
+export const isRepeatShortcutPreset = (repeat: RepeatPreset): boolean =>
+  REPEAT_SHORTCUT_MENU_PRESETS.has(repeat);
 
 export const DEFAULT_REMINDER_TIME: ReminderTime = {
   hours: 9,
@@ -236,8 +252,14 @@ export const isDatePickerMenuItemSelected = (
     return hasTodoReminderTime(reminderLabels);
   }
 
+  const repeatShortcut = getRepeatPresetForMenuLabel(menuLabel);
+  if (repeatShortcut) {
+    return decodeTodoReminder(reminderLabels).repeat === repeatShortcut;
+  }
+
   if (menuLabel === REPEAT_PICKER_LABEL) {
-    return hasTodoRepeat(reminderLabels);
+    const { repeat } = decodeTodoReminder(reminderLabels);
+    return repeat !== 'none' && !isRepeatShortcutPreset(repeat);
   }
 
   return isDateSelected(menuLabel, dateLabels);
@@ -253,7 +275,17 @@ export const getDatePickerMenuDisplayLabel = (
     return formatReminderTimeMenuLabel(reminderLabels);
   }
 
+  const repeatShortcut = getRepeatPresetForMenuLabel(menuLabel);
+  if (repeatShortcut) {
+    return formatRepeatLabel(repeatShortcut);
+  }
+
   if (menuLabel === REPEAT_PICKER_LABEL) {
+    const { repeat } = decodeTodoReminder(reminderLabels);
+    if (isRepeatShortcutPreset(repeat)) {
+      return REPEAT_PICKER_LABEL;
+    }
+
     return formatRepeatMenuLabel(reminderLabels);
   }
 
@@ -261,4 +293,4 @@ export const getDatePickerMenuDisplayLabel = (
 };
 
 export const isReminderPickerMenuLabel = (label: string): boolean =>
-  label === REMINDER_PICKER_LABEL || label === REPEAT_PICKER_LABEL;
+  label === REMINDER_PICKER_LABEL || label === REPEAT_PICKER_LABEL || isRepeatShortcutMenuLabel(label);

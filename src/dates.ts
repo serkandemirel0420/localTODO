@@ -400,6 +400,19 @@ export const isDateFilterOverdue = (
   return resolvedDate.getTime() < startOfDay(now).getTime();
 };
 
+export const isDateFilterDueToday = (
+  label: string,
+  now = new Date(),
+  anchor?: DateLabelAnchor,
+): boolean => {
+  const resolvedDate = resolveDateFilterValueDate(label, now, anchor);
+  if (!resolvedDate) {
+    return false;
+  }
+
+  return resolvedDate.getTime() === startOfDay(now).getTime();
+};
+
 export const getInitialDatePickerValue = (dateLabels: string[]): Date => {
   const custom = getSelectedCustomDateLabel(dateLabels);
   if (!custom) {
@@ -606,6 +619,7 @@ export const getDateMenuItemsForDateLabels = (
   menuLabels: string[],
   dateLabels: string[],
   now = new Date(),
+  options: { sortSelectedCustomDate?: boolean } = {},
 ): string[] => {
   const customDate = getSelectedCustomDateLabel(dateLabels);
   if (!customDate) {
@@ -620,9 +634,51 @@ export const getDateMenuItemsForDateLabels = (
     );
   });
 
-  return matchingShortcut
+  const visibleMenuLabels = matchingShortcut
     ? menuLabels.filter((label) => formatDateFilterValue(label) !== CUSTOM_DATE_LABEL)
     : menuLabels;
+
+  if (!options.sortSelectedCustomDate || !visibleMenuLabels.includes(CUSTOM_DATE_LABEL)) {
+    return visibleMenuLabels;
+  }
+
+  const getSortableDateRank = (label: string): number | null => {
+    const formattedLabel = formatDateFilterValue(label);
+
+    if (formattedLabel === CUSTOM_DATE_LABEL) {
+      return getDateFilterSortRank(customDate, now);
+    }
+
+    if (formattedLabel === LATER_DATE_LABEL) {
+      return DATE_SORT_LATER_RANK;
+    }
+
+    const resolvedDate = resolveDateFilterValueDate(formattedLabel, now);
+    return resolvedDate ? resolvedDate.getTime() : null;
+  };
+
+  return visibleMenuLabels
+    .map((label, index) => ({
+      index,
+      label,
+      rank: getSortableDateRank(label),
+    }))
+    .sort((first, second) => {
+      if (first.rank === null && second.rank === null) {
+        return first.index - second.index;
+      }
+
+      if (first.rank === null) {
+        return 1;
+      }
+
+      if (second.rank === null) {
+        return -1;
+      }
+
+      return first.rank - second.rank || first.index - second.index;
+    })
+    .map((item) => item.label);
 };
 
 const addCalendarDays = (date: Date, days: number): Date => {

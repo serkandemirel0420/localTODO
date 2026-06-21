@@ -16,6 +16,7 @@ export type Todo = {
   id: string;
   content: string;
   text: string;
+  tags: string[];
   pinned: boolean;
   done: boolean;
   createdAt: number;
@@ -182,6 +183,42 @@ export const normalizeTodoContent = (value: string) =>
     .replace(/\r\n?/g, '\n')
     .trim();
 
+export const formatTagLabel = (value: string) => {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.replace(/\s+/g, ' ');
+};
+
+export const normalizeTodoTags = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seenTags = new Set<string>();
+  const tags: string[] = [];
+
+  value.forEach((item) => {
+    if (typeof item !== 'string') {
+      return;
+    }
+
+    const label = formatTagLabel(item);
+    const key = label.toLocaleLowerCase();
+    if (!label || seenTags.has(key)) {
+      return;
+    }
+
+    seenTags.add(key);
+    tags.push(label);
+  });
+
+  return tags;
+};
+
 export const formatListLabel = (value: string) => {
   const trimmed = value.trim();
 
@@ -203,10 +240,12 @@ export const makeTodo = (
   content = '',
   createdAt = Date.now(),
   pinned = false,
+  tags: string[] = [],
 ): Todo => ({
   id: `${createdAt}-${Math.random().toString(36).slice(2)}`,
   content: normalizeTodoContent(content),
   text,
+  tags: normalizeTodoTags(tags),
   pinned,
   done: false,
   createdAt,
@@ -223,6 +262,7 @@ export const isTodo = (value: unknown): value is Todo => {
     typeof todo.id === 'string' &&
     (typeof todo.content === 'undefined' || typeof todo.content === 'string') &&
     typeof todo.text === 'string' &&
+    (typeof todo.tags === 'undefined' || isStringArray(todo.tags)) &&
     (typeof todo.pinned === 'undefined' || typeof todo.pinned === 'boolean') &&
     typeof todo.done === 'boolean' &&
     typeof todo.createdAt === 'number' &&
@@ -250,6 +290,7 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     id: todo.id,
     content: typeof todo.content === 'string' ? normalizeTodoContent(todo.content) : '',
     text: todo.text,
+    tags: normalizeTodoTags(todo.tags),
     pinned: todo.pinned === true,
     done: todo.done,
     createdAt: todo.createdAt,
@@ -259,6 +300,7 @@ export const normalizeTodo = (value: unknown): Todo | null => {
 
 export const cloneTodo = (todo: Todo): Todo => ({
   ...todo,
+  tags: normalizeTodoTags(todo.tags),
   filters: cloneTodoFilters(todo.filters),
 });
 

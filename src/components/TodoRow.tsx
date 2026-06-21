@@ -1287,15 +1287,16 @@ function TodoRowComponent({
                 filterColors={filterColors}
                 listLabel={listStatusLabel || undefined}
                 pinned={item.pinned}
-                priorityLabel={
-                  priorityStatusLabel && priorityStatusLabel !== 'None'
-                    ? priorityStatusLabel
-                    : undefined
-                }
-                reminderValues={item.filters.reminder}
-                showOverdueMetaTags={showOverdueMetaTags}
-                visibility={effectiveMetaTagVisibility}
-              />
+                  priorityLabel={
+                    priorityStatusLabel && priorityStatusLabel !== 'None'
+                      ? priorityStatusLabel
+                      : undefined
+                  }
+                  reminderValues={item.filters.reminder}
+                  showOverdueMetaTags={showOverdueMetaTags}
+                  tagLabels={item.tags}
+                  visibility={effectiveMetaTagVisibility}
+                />
             )}
           </View>
         </GestureTouchableOpacity>

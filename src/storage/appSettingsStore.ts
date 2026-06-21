@@ -21,6 +21,7 @@ import {
   cloneDeletedTodos,
   cloneTodoFilters,
   formatListLabel,
+  normalizeTodoTags,
   normalizeDeletedTodos,
   normalizeTodoFilters,
   pruneTodoFilters,
@@ -165,6 +166,7 @@ export type { DateLabelDisplayMode };
 
 export type AppSettings = {
   collapsedTodoGroupIds: string[];
+  customTags: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
   filterConfigUiState: FilterConfigUiState;
@@ -245,6 +247,9 @@ export const cloneMenuPresets = (presets: StoredMenuPreset[]): StoredMenuPreset[
       ...(sections.length > 0 ? { sections } : {}),
     };
   });
+
+export const normalizeCustomTags = (value: unknown): string[] =>
+  normalizeTodoTags(value).sort((first, second) => first.localeCompare(second));
 
 export const normalizeQuickPresetNavPresetIds = (value: unknown): QuickPresetNavPresetIds => {
   if (!Array.isArray(value) || value.length === 0) {
@@ -350,6 +355,7 @@ export const ensureQuickPresetDefaults = (
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   collapsedTodoGroupIds: [],
+  customTags: [],
   dateLabelDisplayMode: 'exact',
   deletedTodos: [],
   filterConfigUiState: DEFAULT_FILTER_CONFIG_UI_STATE,
@@ -845,6 +851,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
   if (!isRecord(value)) {
     return {
       ...DEFAULT_APP_SETTINGS,
+      customTags: [],
       deletedTodos: [],
       filterConfigUiState: cloneFilterConfigUiState(),
       filterColors: cloneFilterColors(),
@@ -882,6 +889,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
+    customTags: normalizeCustomTags(value.customTags),
     dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
     filterConfigUiState: normalizeFilterConfigUiState(value.filterConfigUiState),

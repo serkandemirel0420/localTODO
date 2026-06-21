@@ -1,5 +1,15 @@
-import { DATE_FILTER_PRESETS, DATED_DATE_LABEL, OVERDUE_DATE_LABEL } from './dates';
-import { REMINDER_PICKER_LABEL, REPEAT_PICKER_LABEL } from './reminders';
+import {
+  CUSTOM_DATE_LABEL,
+  DATE_FILTER_PRESETS,
+  DATED_DATE_LABEL,
+  LATER_DATE_LABEL,
+  OVERDUE_DATE_LABEL,
+} from './dates';
+import {
+  REMINDER_PICKER_LABEL,
+  REPEAT_PICKER_LABEL,
+  REPEAT_SHORTCUT_MENU_ITEMS,
+} from './reminders';
 import {
   type TodoGroupMode,
   type TodoSortMode,
@@ -12,9 +22,14 @@ export const DATE_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS,
 ];
 
-/** Date drawer list: presets + custom date + Reminder + Repeating. */
+/** Date drawer list: date choices + repeat shortcuts + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
-  ...DATE_FILTER_PRESETS,
+  ...DATE_FILTER_PRESETS.filter((label) => (
+    label !== LATER_DATE_LABEL && label !== CUSTOM_DATE_LABEL
+  )),
+  LATER_DATE_LABEL,
+  CUSTOM_DATE_LABEL,
+  ...REPEAT_SHORTCUT_MENU_ITEMS,
   REMINDER_PICKER_LABEL,
   REPEAT_PICKER_LABEL,
 ];

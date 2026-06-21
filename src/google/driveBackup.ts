@@ -5,6 +5,7 @@ import {
   normalizeDeletedTodos,
   normalizeTodo,
   normalizeTodoFilters,
+  normalizeTodoTags,
   pruneTodoFilters,
   type DeletedTodo,
   type Todo,
@@ -98,6 +99,7 @@ export type BackupMenuPresetSection = {
 
 export type BackupSettings = {
   collapsedTodoGroupIds: string[];
+  customTags: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
   filterConfigUiState: FilterConfigUiState;
@@ -618,6 +620,7 @@ export const createBackupPayload = (
     schemaVersion: 1,
     settings: {
       collapsedTodoGroupIds: [...settings.collapsedTodoGroupIds],
+      customTags: normalizeTodoTags(settings.customTags),
       dateLabelDisplayMode: settings.dateLabelDisplayMode,
       deletedTodos: cloneDeletedTodos(settings.deletedTodos),
       filterConfigUiState: cloneFilterConfigUiState(settings.filterConfigUiState),
@@ -674,6 +677,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
     schemaVersion: 1,
     settings: {
       collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
+      customTags: normalizeTodoTags(settings.customTags),
       dateLabelDisplayMode: settings.dateLabelDisplayMode === 'remaining' ? 'remaining' : 'exact',
       deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
       filterConfigUiState: normalizeFilterConfigUiState(settings.filterConfigUiState),

@@ -170,6 +170,7 @@ import {
   findListMenuNode,
   normalizeCustomTags,
   QUICK_PRESET_DEFAULTS_VERSION,
+  QUICK_PRESET_NAV_MAX_SLOT_COUNT,
   resolveListDisplaySettings,
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
@@ -3389,6 +3390,7 @@ export default function App() {
   const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
     () => cloneMetaTagVisibility(),
   );
+  const [newNavbarName, setNewNavbarName] = useState('');
   const [newListName, setNewListName] = useState('');
   const [newTagName, setNewTagName] = useState('');
   const [editingTagName, setEditingTagName] = useState<string | null>(null);
@@ -6893,6 +6895,8 @@ export default function App() {
     })),
     [quickPresetNavItems],
   );
+  const settingsNavbarAddDisabled =
+    !newNavbarName.trim() || quickPresetNavItems.length >= QUICK_PRESET_NAV_MAX_SLOT_COUNT;
   const heldQuickPresetNavItem = heldQuickPresetNavSlotNumber
     ? quickPresetNavItems.find((item) => item.slotNumber === heldQuickPresetNavSlotNumber) ?? null
     : null;
@@ -10087,6 +10091,90 @@ export default function App() {
     }
     triggerSubtleHaptic();
   }, [applyTagUpdateToTodos, editingTagName, persistCustomTags, recordUndo]);
+
+  const addSettingsNavbarItem = useCallback(() => {
+    const label = formatListLabel(newNavbarName);
+
+    if (!label) {
+      return;
+    }
+
+    const labelKey = label.toLocaleLowerCase();
+    const existingNavbarItem = quickPresetNavItems.some((item) => (
+      (item.displayLabel || item.preset?.label || '').toLocaleLowerCase() === labelKey
+    ));
+    if (existingNavbarItem || quickPresetNavItems.length >= QUICK_PRESET_NAV_MAX_SLOT_COUNT) {
+      return;
+    }
+
+    const currentListMenuTree = listMenuTreeRef.current;
+    const existingListLabel = collectListNodeLabels(currentListMenuTree).find(
+      (itemLabel) => itemLabel.toLocaleLowerCase() === labelKey,
+    );
+    const listLabel = existingListLabel ?? label;
+    const nextListMenuTree = existingListLabel
+      ? currentListMenuTree
+      : [{ label: listLabel }, ...currentListMenuTree];
+    const createdAt = Date.now();
+    const presetId = `preset-${createdAt}-${Math.random().toString(36).slice(2)}`;
+    const preset: MenuPreset = {
+      id: presetId,
+      label: listLabel,
+      filters: { ...cloneTodoFilters(), list: [listLabel] },
+      requiredFilters: cloneTodoFilters(),
+      avoidedFilters: cloneTodoFilters(),
+      listOrderMode: listOrderModeRef.current,
+      metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
+      todoGroupMode: todoGroupModeRef.current,
+      todoSortMode: todoSortModeRef.current,
+      createdAt,
+    };
+    const nextMenuPresets = [...menuPresetsRef.current, preset];
+    const nextPresetIds = quickPresetNavItems.map((item) => (
+      item.presetId ?? item.preset?.id ?? null
+    ));
+    const nextIconNames = quickPresetNavItems.map((item) => (
+      quickPresetNavIconNamesRef.current[item.navIndex] ?? item.iconName
+    ));
+    const iconIndex = nextIconNames.length;
+    nextPresetIds.push(presetId);
+    nextIconNames.push(
+      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+        iconIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+      ] ?? 'star-four-points',
+    );
+    const normalizedPresetIds = cloneQuickPresetNavPresetIds(nextPresetIds);
+    const normalizedIconNames = cloneQuickPresetNavIconNames(
+      nextIconNames,
+      normalizedPresetIds.length,
+    );
+
+    recordUndo('Add navbar item');
+    listMenuTreeRef.current = nextListMenuTree;
+    menuPresetsRef.current = nextMenuPresets;
+    quickPresetNavPresetIdsRef.current = normalizedPresetIds;
+    quickPresetNavIconNamesRef.current = normalizedIconNames;
+    setListMenuTree(nextListMenuTree);
+    setMenuPresets(nextMenuPresets);
+    setQuickPresetNavPresetIds(normalizedPresetIds);
+    setQuickPresetNavIconNames(normalizedIconNames);
+    setSettingsListReorderCancelNonce((current) => current + 1);
+    setSettingsPresetIconPickerIndex(null);
+    setSettingsListIconPickerIndex(null);
+    setNewNavbarName('');
+    void persistAppSettings({
+      listMenuTree: cloneListMenuTree(nextListMenuTree),
+      menuPresets: cloneMenuPresets(nextMenuPresets),
+      quickPresetNavIconNames: normalizedIconNames,
+      quickPresetNavPresetIds: normalizedPresetIds,
+    });
+    triggerSubtleHaptic();
+  }, [
+    newNavbarName,
+    persistAppSettings,
+    quickPresetNavItems,
+    recordUndo,
+  ]);
 
   const addSettingsList = useCallback(() => {
     const label = formatListLabel(newListName);
@@ -14768,7 +14856,32 @@ export default function App() {
 
                 {settingsPresetsExpanded ? (
                   <View style={styles.settingsCard}>
-                    <Text style={[styles.settingsListReorderHint, styles.settingsListReorderHintFirst]}>
+                    <View style={styles.settingsAddListRow}>
+                      <TextInput
+                        autoCapitalize="words"
+                        onChangeText={setNewNavbarName}
+                        onSubmitEditing={addSettingsNavbarItem}
+                        placeholder="New navbar item"
+                        placeholderTextColor="#A69D94"
+                        returnKeyType="done"
+                        style={styles.settingsAddListInput}
+                        value={newNavbarName}
+                      />
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={settingsNavbarAddDisabled}
+                        onPress={addSettingsNavbarItem}
+                        style={({ pressed }) => [
+                          styles.settingsAddListButton,
+                          settingsNavbarAddDisabled && styles.settingsButtonDisabled,
+                          pressed && styles.settingsPrimaryButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsAddListButtonText}>Add</Text>
+                      </Pressable>
+                    </View>
+
+                    <Text style={styles.settingsListReorderHint}>
                       {quickPresetNavItems.length > 1
                         ? 'Tap handles to swap navbar order. Swipe left to remove from navbar.'
                         : 'Swipe left to remove from navbar.'}
@@ -16316,9 +16429,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     lineHeight: 18,
     marginTop: 12,
-  },
-  settingsListReorderHintFirst: {
-    marginTop: 0,
   },
   settingsListMenuOrderSection: {
     borderTopColor: '#F2EBE3',

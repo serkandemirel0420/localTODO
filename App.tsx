@@ -6910,11 +6910,17 @@ export default function App() {
       return EMPTY_LIST_GROUP_LABELS;
     }
 
+    const knownListLabelKeys = new Set(
+      todoListOrderedListLabels.map((label) => label.toLocaleLowerCase()),
+    );
     const scopedListLabels = activeListPreset?.filters.list.length
       ? activeListPreset.filters.list
       : selectedFilters.list;
+    const knownScopedListLabels = scopedListLabels.filter((label) => (
+      knownListLabelKeys.has(label.toLocaleLowerCase())
+    ));
 
-    return scopedListLabels.length > 0 ? scopedListLabels : todoListOrderedListLabels;
+    return knownScopedListLabels.length > 0 ? knownScopedListLabels : todoListOrderedListLabels;
   }, [activeListPreset, selectedFilters.list, todoListGroupMode, todoListOrderedListLabels]);
   const sortedTodos = useMemo(
     () => [...filteredTodos].sort(createTodoSortComparator(todoListSortMode, dateStatusNow)),

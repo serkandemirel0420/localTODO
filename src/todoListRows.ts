@@ -189,8 +189,12 @@ const collectListGroupsForLabels = (
   labels.forEach((label) => {
     const node = findListMenuNode(listMenuTree, label);
 
-    if (!node?.children?.length) {
-      addGroup(getTodoListGroupForLabel(label, orderedListLabels, listMenuTree));
+    if (!node) {
+      return;
+    }
+
+    if (!node.children?.length) {
+      addGroup(getTodoListGroupForLabel(node.label, orderedListLabels, listMenuTree));
       return;
     }
 
@@ -471,7 +475,12 @@ const getTodoListGroupLabels = (
   const seenKeys = new Set<string>();
 
   todo.filters.list.forEach((label) => {
-    const group = getTodoListGroupForLabel(label, orderedListLabels, listMenuTree);
+    const node = findListMenuNode(listMenuTree, label);
+    if (!node) {
+      return;
+    }
+
+    const group = getTodoListGroupForLabel(node.label, orderedListLabels, listMenuTree);
     if (seenKeys.has(group.key)) {
       return;
     }

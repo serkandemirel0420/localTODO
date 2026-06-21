@@ -1840,6 +1840,86 @@ const dateFilterValuesIncludeExactDay = (
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
 
+const renameListLabelInValues = (values: string[], oldLabel: string, newLabel: string) => {
+  let changed = false;
+  const nextValues = values.map((value) => {
+    if (value !== oldLabel) {
+      return value;
+    }
+
+    changed = true;
+    return newLabel;
+  });
+
+  return changed ? nextValues : values;
+};
+
+const renameListLabelInFilters = <T extends TodoFilters>(
+  filters: T,
+  oldLabel: string,
+  newLabel: string,
+): T => {
+  const nextList = renameListLabelInValues(filters.list, oldLabel, newLabel);
+  return nextList === filters.list ? filters : { ...filters, list: nextList };
+};
+
+const renameListLabelInPresetSection = (
+  section: MenuPresetSection,
+  oldLabel: string,
+  newLabel: string,
+): MenuPresetSection => ({
+  ...section,
+  filters: renameListLabelInFilters(section.filters, oldLabel, newLabel),
+  requiredFilters: renameListLabelInFilters(section.requiredFilters, oldLabel, newLabel),
+  avoidedFilters: renameListLabelInFilters(section.avoidedFilters, oldLabel, newLabel),
+});
+
+const renameListLabelInPreset = (
+  preset: MenuPreset,
+  oldLabel: string,
+  newLabel: string,
+): MenuPreset => ({
+  ...preset,
+  filters: renameListLabelInFilters(preset.filters, oldLabel, newLabel),
+  requiredFilters: renameListLabelInFilters(preset.requiredFilters, oldLabel, newLabel),
+  avoidedFilters: renameListLabelInFilters(preset.avoidedFilters, oldLabel, newLabel),
+  ...(preset.sections
+    ? {
+        sections: preset.sections.map((section) => (
+          renameListLabelInPresetSection(section, oldLabel, newLabel)
+        )),
+      }
+    : {}),
+});
+
+const renameListLabelInTodo = <T extends Todo>(
+  todo: T,
+  oldLabel: string,
+  newLabel: string,
+): T => {
+  const filters = renameListLabelInFilters(todo.filters, oldLabel, newLabel);
+  return filters === todo.filters ? todo : { ...todo, filters };
+};
+
+const renameListLabelInFilterColors = (
+  colors: FilterColorSettings,
+  oldLabel: string,
+  newLabel: string,
+): FilterColorSettings => {
+  if (!(oldLabel in colors.list)) {
+    return colors;
+  }
+
+  const nextList = { ...colors.list };
+  const existingColor = nextList[oldLabel];
+  delete nextList[oldLabel];
+  if (existingColor !== undefined) {
+    nextList[newLabel] = existingColor;
+  }
+
+  return { ...colors, list: nextList };
+};
+
 const hasAnyFilterValues = (filters: TodoFilters): boolean =>
   filters.date.length > 0 ||
   filters.list.length > 0 ||
@@ -8841,31 +8921,75 @@ export default function App() {
     setSearchKeywordDraft(listItem.searchKeywords ?? '');
   }, [listMenuTree]);
 
-  const applyListLabelRename = useCallback((oldLabel: string, newLabel: string) => {
+  const applyListLabelRename = useCallback((
+    oldLabel: string,
+    newLabel: string,
+    nextListMenuTree: ListMenuNode[],
+  ) => {
     if (oldLabel === newLabel) {
       return;
     }
 
-    const replaceLabel = (labels: string[]) => labels.map(
-      (label) => (label === oldLabel ? newLabel : label),
+    const nextSelectedFilters = renameListLabelInFilters(
+      selectedFiltersRef.current,
+      oldLabel,
+      newLabel,
     );
+    const nextRequiredFilters = renameListLabelInFilters(
+      requiredFiltersRef.current,
+      oldLabel,
+      newLabel,
+    );
+    const nextAvoidedFilters = renameListLabelInFilters(
+      avoidedFiltersRef.current,
+      oldLabel,
+      newLabel,
+    );
+    const nextLastCreateTodoFilters = renameListLabelInFilters(
+      lastCreateTodoFiltersRef.current,
+      oldLabel,
+      newLabel,
+    );
+    const nextFilterColors = renameListLabelInFilterColors(
+      filterColorsRef.current,
+      oldLabel,
+      newLabel,
+    );
+    const nextMenuPresets = menuPresetsRef.current.map((preset) => (
+      renameListLabelInPreset(preset, oldLabel, newLabel)
+    ));
+    const nextDeletedTodos = deletedTodosRef.current.map((todo) => (
+      renameListLabelInTodo(todo, oldLabel, newLabel)
+    ));
+    const currentTodos = todosRef.current;
+    const nextTodos = currentTodos.map((todo) => renameListLabelInTodo(todo, oldLabel, newLabel));
+    const changedTodos = nextTodos.filter((todo, index) => (
+      todo !== currentTodos[index] && !pendingDeleteIdsRef.current.has(todo.id)
+    ));
+    const prunedRequiredFilters = pruneTodoFilters(nextRequiredFilters, nextSelectedFilters);
 
-    setSelectedFilters((filters) => ({
-      ...filters,
-      list: replaceLabel(filters.list),
-    }));
-    setRequiredFilters((filters) => ({
-      ...filters,
-      list: replaceLabel(filters.list),
-    }));
-    setAvoidedFilters((filters) => ({
-      ...filters,
-      list: replaceLabel(filters.list),
-    }));
-    setLastCreateTodoFilters((filters) => ({
-      ...filters,
-      list: replaceLabel(filters.list),
-    }));
+    selectedFiltersRef.current = nextSelectedFilters;
+    requiredFiltersRef.current = prunedRequiredFilters;
+    avoidedFiltersRef.current = nextAvoidedFilters;
+    lastCreateTodoFiltersRef.current = nextLastCreateTodoFilters;
+    filterColorsRef.current = nextFilterColors;
+    menuPresetsRef.current = nextMenuPresets;
+    deletedTodosRef.current = nextDeletedTodos;
+    todosRef.current = nextTodos;
+    listMenuTreeRef.current = nextListMenuTree;
+
+    setSelectedFilters(nextSelectedFilters);
+    setRequiredFilters(prunedRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
+    setLastCreateTodoFilters(nextLastCreateTodoFilters);
+    setCreateDraftFilters((filters) => (
+      renameListLabelInFilters(filters, oldLabel, newLabel)
+    ));
+    setFilterColors(nextFilterColors);
+    setMenuPresets(nextMenuPresets);
+    setDeletedTodos(nextDeletedTodos);
+    setTodos(nextTodos);
+    setListMenuTree(nextListMenuTree);
     setCollapsedSearchListLabels((current) => {
       if (!current.has(oldLabel)) {
         return current;
@@ -8876,71 +9000,43 @@ export default function App() {
       next.add(newLabel);
       return next;
     });
-    setFilterColors((colors) => {
-      if (!(oldLabel in colors.list)) {
-        return colors;
+
+    if (changedTodos.length > 0) {
+      localTodoStore.upsertMany(changedTodos).catch(() => undefined);
+    }
+
+    void persistAppSettings({
+      deletedTodos: cloneDeletedTodos(nextDeletedTodos),
+      filterColors: cloneFilterColors(nextFilterColors),
+      lastCreateTodoFilters: cloneTodoFilters(nextLastCreateTodoFilters),
+      listMenuTree: cloneListMenuTree(nextListMenuTree),
+      menuPresets: cloneMenuPresets(nextMenuPresets),
+      avoidedFilters: cloneTodoFilters(nextAvoidedFilters),
+      requiredFilters: cloneTodoFilters(prunedRequiredFilters),
+      selectedFilters: cloneTodoFilters(nextSelectedFilters),
+    });
+  }, [persistAppSettings]);
+
+  const updateListMenuTreeSearchItem = useCallback((
+    listIndex: number,
+    newLabel: string,
+    searchKeywords: string,
+  ) => (
+    listMenuTreeRef.current.map((item, itemIndex) => {
+      if (itemIndex !== listIndex) {
+        return item;
       }
 
-      const nextList = { ...colors.list };
-      const existingColor = nextList[oldLabel];
-      delete nextList[oldLabel];
-      if (existingColor !== undefined) {
-        nextList[newLabel] = existingColor;
+      const updated = item.label === newLabel ? item : { ...item, label: newLabel };
+
+      if (!searchKeywords) {
+        const { searchKeywords: _removed, ...rest } = updated;
+        return rest;
       }
 
-      return { ...colors, list: nextList };
-    });
-    setMenuPresets((current) => current.map((preset) => ({
-      ...preset,
-      filters: {
-        ...preset.filters,
-        list: replaceLabel(preset.filters.list),
-      },
-      requiredFilters: {
-        ...preset.requiredFilters,
-        list: replaceLabel(preset.requiredFilters.list),
-      },
-      avoidedFilters: {
-        ...preset.avoidedFilters,
-        list: replaceLabel(preset.avoidedFilters.list),
-      },
-      sections: preset.sections?.map((section) => ({
-        ...section,
-        filters: {
-          ...section.filters,
-          list: replaceLabel(section.filters.list),
-        },
-        requiredFilters: {
-          ...section.requiredFilters,
-          list: replaceLabel(section.requiredFilters.list),
-        },
-        avoidedFilters: {
-          ...section.avoidedFilters,
-          list: replaceLabel(section.avoidedFilters.list),
-        },
-      })),
-    })));
-    setDeletedTodos((current) => current.map((todo) => ({
-      ...todo,
-      filters: {
-        ...todo.filters,
-        list: replaceLabel(todo.filters.list),
-      },
-    })));
-    setTodos((items) => {
-      const nextItems = items.map((todo) => ({
-        ...todo,
-        filters: {
-          ...todo.filters,
-          list: replaceLabel(todo.filters.list),
-        },
-      }));
-      localTodoStore
-        .upsertMany(nextItems.filter((todo) => !pendingDeleteIds.has(todo.id)))
-        .catch(() => undefined);
-      return nextItems;
-    });
-  }, [pendingDeleteIds]);
+      return { ...updated, searchKeywords };
+    })
+  ), []);
 
   const commitSearchKeywords = useCallback((rawKeywords: string) => {
     if (!searchKeywordEditTarget) {
@@ -8968,7 +9064,8 @@ export default function App() {
       )));
     } else {
       const { listIndex } = searchKeywordEditTarget;
-      const currentItem = listMenuTree[listIndex];
+      const currentListMenuTree = listMenuTreeRef.current;
+      const currentItem = currentListMenuTree[listIndex];
       if (!currentItem) {
         return;
       }
@@ -8986,8 +9083,14 @@ export default function App() {
         return;
       }
 
+      const nextListMenuTree = updateListMenuTreeSearchItem(
+        listIndex,
+        newLabel,
+        searchKeywords,
+      );
+
       if (labelChanged) {
-        const hasDuplicate = collectListNodeLabels(listMenuTree).some(
+        const hasDuplicate = collectListNodeLabels(currentListMenuTree).some(
           (label) => label.toLocaleLowerCase() === newLabel.toLocaleLowerCase(),
         );
         if (hasDuplicate) {
@@ -8995,29 +9098,13 @@ export default function App() {
         }
 
         recordUndo('Edit list');
-        applyListLabelRename(oldLabel, newLabel);
+        applyListLabelRename(oldLabel, newLabel, nextListMenuTree);
       } else {
         recordUndo('Edit list');
+        listMenuTreeRef.current = nextListMenuTree;
+        setListMenuTree(nextListMenuTree);
+        persistListMenuTree(nextListMenuTree);
       }
-
-      setListMenuTree((current) => {
-        const next = current.map((item, itemIndex) => {
-          if (itemIndex !== listIndex) {
-            return item;
-          }
-
-          let updated = labelChanged ? { ...item, label: newLabel } : item;
-
-          if (!searchKeywords) {
-            const { searchKeywords: _removed, ...rest } = updated;
-            return rest;
-          }
-
-          return { ...updated, searchKeywords };
-        });
-        persistListMenuTree(next);
-        return next;
-      });
     }
 
     closeSearchKeywordModal();
@@ -9025,12 +9112,12 @@ export default function App() {
   }, [
     applyListLabelRename,
     closeSearchKeywordModal,
-    listMenuTree,
     menuPresets,
     persistListMenuTree,
     recordUndo,
     searchKeywordEditTarget,
     searchKeywordTitleDraft,
+    updateListMenuTreeSearchItem,
   ]);
 
   const focusPresetSaveInput = useCallback(() => {
@@ -13712,95 +13799,104 @@ export default function App() {
                   </View>
                 )}
                 <View style={styles.createDrawerToolbar}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Date: ${createDrawerDateLabel}`}
-                    onPress={handleCreateDrawerCalendarPress}
-                    style={({ pressed }) => [
-                      styles.createDrawerToolbarButton,
-                      pressed && styles.createDrawerToolbarButtonPressed,
-                      createDrawerPicker === 'date' && styles.createDrawerToolbarButtonActive,
-                    ]}
+                  <ScrollView
+                    alwaysBounceHorizontal={false}
+                    bounces={false}
+                    contentContainerStyle={styles.createDrawerToolbarItems}
+                    horizontal
+                    keyboardShouldPersistTaps="handled"
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.createDrawerToolbarScroll}
                   >
-                    <Ionicons
-                      color={createDrawerDateActive ? '#2F6F62' : '#8C847C'}
-                      name="calendar-outline"
-                      size={22}
-                    />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={
-                      createDraftPinned ? 'Unpin new todo' : 'Pin new todo'
-                    }
-                    accessibilityState={{ selected: createDraftPinned }}
-                    onPress={toggleCreateDraftPinned}
-                    style={({ pressed }) => [
-                      styles.createDrawerToolbarButton,
-                      pressed && styles.createDrawerToolbarButtonPressed,
-                      createDraftPinned && styles.createDrawerToolbarButtonActive,
-                    ]}
-                  >
-                    <Ionicons
-                      color={createDraftPinned ? THEME_ACCENT : '#8C847C'}
-                      name={createDraftPinned ? 'pin' : 'pin-outline'}
-                      size={22}
-                    />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Set priority"
-                    onPress={handleCreateDrawerPriorityPress}
-                    style={({ pressed }) => [
-                      styles.createDrawerToolbarButton,
-                      pressed && styles.createDrawerToolbarButtonPressed,
-                      createDrawerPicker === 'priority' && styles.createDrawerToolbarButtonActive,
-                    ]}
-                  >
-                    <Ionicons
-                      color={
-                        createDraftPriorityFromPicker &&
-                        createDraftFilters.priority.length > 0
-                          ? '#2F6F62'
-                          : '#8C847C'
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Date: ${createDrawerDateLabel}`}
+                      onPress={handleCreateDrawerCalendarPress}
+                      style={({ pressed }) => [
+                        styles.createDrawerToolbarButton,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                        createDrawerPicker === 'date' && styles.createDrawerToolbarButtonActive,
+                      ]}
+                    >
+                      <Ionicons
+                        color={createDrawerDateActive ? '#2F6F62' : '#8C847C'}
+                        name="calendar-outline"
+                        size={22}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        createDraftPinned ? 'Unpin new todo' : 'Pin new todo'
                       }
-                      name="pricetag-outline"
-                      size={22}
-                    />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={createDrawerTagsAccessibilityLabel}
-                    accessibilityState={{ selected: createDrawerTagsActive }}
-                    onPress={handleCreateDrawerTagsPress}
-                    style={({ pressed }) => [
-                      styles.createDrawerToolbarButton,
-                      pressed && styles.createDrawerToolbarButtonPressed,
-                      createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
-                    ]}
-                  >
-                    <Ionicons
-                      color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
-                      name="pricetags-outline"
-                      size={22}
-                    />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={createDrawerListAccessibilityLabel}
-                    onPress={handleCreateDrawerListPress}
-                    style={({ pressed }) => [
-                      styles.createDrawerInboxChip,
-                      pressed && styles.createDrawerToolbarButtonPressed,
-                      createDrawerPicker === 'list' && styles.createDrawerInboxChipActive,
-                    ]}
-                  >
-                    <Ionicons color={THEME_ACCENT} name="file-tray-outline" size={18} />
-                    <Text numberOfLines={1} style={styles.createDrawerInboxChipText}>
-                      {createDrawerListLabel}
-                    </Text>
-                  </Pressable>
-                  <View style={styles.createDrawerToolbarSpacer} />
+                      accessibilityState={{ selected: createDraftPinned }}
+                      onPress={toggleCreateDraftPinned}
+                      style={({ pressed }) => [
+                        styles.createDrawerToolbarButton,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                        createDraftPinned && styles.createDrawerToolbarButtonActive,
+                      ]}
+                    >
+                      <Ionicons
+                        color={createDraftPinned ? THEME_ACCENT : '#8C847C'}
+                        name={createDraftPinned ? 'pin' : 'pin-outline'}
+                        size={22}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Set priority"
+                      onPress={handleCreateDrawerPriorityPress}
+                      style={({ pressed }) => [
+                        styles.createDrawerToolbarButton,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                        createDrawerPicker === 'priority' && styles.createDrawerToolbarButtonActive,
+                      ]}
+                    >
+                      <Ionicons
+                        color={
+                          createDraftPriorityFromPicker &&
+                          createDraftFilters.priority.length > 0
+                            ? '#2F6F62'
+                            : '#8C847C'
+                        }
+                        name="pricetag-outline"
+                        size={22}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={createDrawerTagsAccessibilityLabel}
+                      accessibilityState={{ selected: createDrawerTagsActive }}
+                      onPress={handleCreateDrawerTagsPress}
+                      style={({ pressed }) => [
+                        styles.createDrawerToolbarButton,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                        createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
+                      ]}
+                    >
+                      <Ionicons
+                        color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
+                        name="pricetags-outline"
+                        size={22}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={createDrawerListAccessibilityLabel}
+                      onPress={handleCreateDrawerListPress}
+                      style={({ pressed }) => [
+                        styles.createDrawerInboxChip,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                        createDrawerPicker === 'list' && styles.createDrawerInboxChipActive,
+                      ]}
+                    >
+                      <Ionicons color={THEME_ACCENT} name="file-tray-outline" size={18} />
+                      <Text numberOfLines={1} style={styles.createDrawerInboxChipText}>
+                        {createDrawerListLabel}
+                      </Text>
+                    </Pressable>
+                  </ScrollView>
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={
@@ -16605,8 +16701,8 @@ const styles = StyleSheet.create({
     elevation: 3,
     height: 36,
     justifyContent: 'center',
+    left: HORIZONTAL_PADDING,
     position: 'absolute',
-    right: HORIZONTAL_PADDING + 84,
     shadowColor: NAV_ACCENT,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.2,
@@ -16904,10 +17000,19 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#F0E9E1',
     flexDirection: 'row',
-    gap: 2,
+    gap: 6,
     marginTop: 10,
     minHeight: 48,
     paddingTop: 6,
+  },
+  createDrawerToolbarScroll: {
+    flex: 1,
+    minWidth: 0,
+  },
+  createDrawerToolbarItems: {
+    alignItems: 'center',
+    gap: 2,
+    paddingRight: 4,
   },
   createDrawerToolbarButton: {
     width: 40,
@@ -16940,9 +17045,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: FONT_MEDIUM,
     lineHeight: 18,
-  },
-  createDrawerToolbarSpacer: {
-    flex: 1,
   },
   edgeBackZone: {
     position: 'absolute',

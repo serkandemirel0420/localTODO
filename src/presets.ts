@@ -149,7 +149,7 @@ export const buildQuickPresetNavItems = ({
   for (let index = 0; index < slotCount; index += 1) {
     const list = listMenuTree[index];
     const explicitPresetId = usesAutomaticSlots ? null : quickPresetNavPresetIds[index] ?? null;
-    if (list?.showInNavbar === false) {
+    if (!explicitPresetId && list?.showInNavbar === false) {
       continue;
     }
 
@@ -159,19 +159,12 @@ export const buildQuickPresetNavItems = ({
 
     const explicitPreset = explicitPresetId ? menuPresetById.get(explicitPresetId) ?? null : null;
     const normalizedListLabel = list ? normalizeQuickListPresetLabel(list.label) : '';
-    const explicitPresetMatchesList = Boolean(
-      explicitPreset &&
-      normalizedListLabel &&
-      normalizeQuickListPresetLabel(explicitPreset.label) === normalizedListLabel,
-    );
     const listPreset = list
       ? menuPresetByListLabel.get(normalizedListLabel)
         ?? createQuickListPreset(list, listOrderMode)
       : null;
     const automaticPreset = usesAutomaticSlots && !listPreset ? menuPresets[index] ?? null : null;
-    const preset = listPreset
-      ? (explicitPresetMatchesList ? explicitPreset : listPreset)
-      : automaticPreset ?? explicitPreset;
+    const preset = explicitPreset ?? listPreset ?? automaticPreset;
 
     items.push({
       iconName: resolveQuickPresetNavSlotIconName(

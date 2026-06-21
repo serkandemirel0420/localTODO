@@ -1,0 +1,8 @@
+FrameLayout id=android:id/content bounds=[0,0][1080,2176]
+  FrameLayout id=id/container bounds=[0,0][1080,2176]
+    FrameLayout id=id/minute_maid bounds=[0,0][1080,2176]
+      FrameLayout id=id/suc_layout_status bounds=[0,0][1080,2176]
+        LinearLayout id=id/sud_layout_template_content bounds=[0,66][1080,2176]
+          FrameLayout id=id/sud_layout_content bounds=[0,66][1080,2176]
+            WebView flags=clickable,focusable bounds=[0,66][1080,2176]
+View id=android:id/navigationBarBackground bounds=[0,2176][1080,2220]

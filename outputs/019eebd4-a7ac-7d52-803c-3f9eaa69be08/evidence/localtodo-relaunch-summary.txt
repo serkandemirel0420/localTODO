@@ -1,0 +1,2 @@
+LinearLayout id=id/action_bar_root bounds=[0,0][1080,2220]
+  FrameLayout id=android:id/content bounds=[0,0][1080,2220]

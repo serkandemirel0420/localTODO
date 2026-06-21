@@ -1,0 +1,56 @@
+== presets/search/settings ==
+src/storage/appSettingsStore.ts:49:  searchKeywords?: string;
+src/storage/appSettingsStore.ts:67:  searchKeywords?: string;
+src/storage/appSettingsStore.ts:205:      ...(node.searchKeywords ? { searchKeywords: node.searchKeywords } : {}),
+src/storage/appSettingsStore.ts:239:      ...(preset.searchKeywords ? { searchKeywords: preset.searchKeywords } : {}),
+src/storage/appSettingsStore.ts:745:      const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
+src/storage/appSettingsStore.ts:751:        ...(searchKeywords ? { searchKeywords } : {}),
+src/storage/appSettingsStore.ts:829:      const searchKeywords = normalizeMenuPresetSearchKeywords(item.searchKeywords);
+src/storage/appSettingsStore.ts:836:        ...(searchKeywords ? { searchKeywords } : {}),
+App.tsx:1152:  searchKeywords: string | undefined,
+App.tsx:1164:    searchKeywords ?? '',
+App.tsx:1198:      preset.searchKeywords ?? '',
+App.tsx:1205:  getSearchTextScore('', node.searchKeywords, query);
+App.tsx:3323:  const [filterColors, setFilterColors] = useState<FilterColorSettings>(
+App.tsx:3722:        setFilterColors(settings.filterColors);
+App.tsx:4262:    setFilterColors(restoredFilterColors);
+App.tsx:5797:  const deleteDeletedTodoPermanently = useCallback((id: string) => {
+App.tsx:8480:  const setFilterColor = useCallback((
+App.tsx:8504:    setFilterColors((current) => {
+App.tsx:8596:  const toggleSearchPresetCollapsed = useCallback((presetId: string) => {
+App.tsx:8990:    setSearchKeywordDraft(preset.searchKeywords ?? '');
+App.tsx:9003:    setSearchKeywordDraft(listItem.searchKeywords ?? '');
+App.tsx:9083:    setFilterColors(nextFilterColors);
+App.tsx:9118:    searchKeywords: string,
+App.tsx:9127:      if (!searchKeywords) {
+App.tsx:9128:        const { searchKeywords: _removed, ...rest } = updated;
+App.tsx:9132:      return { ...updated, searchKeywords };
+App.tsx:9218:    const searchKeywords = normalizePresetSearchKeywords(rawKeywords);
+App.tsx:9228:      if ((currentPreset?.searchKeywords ?? '') === searchKeywords) {
+App.tsx:9238:              searchKeywords: searchKeywords || undefined,
+App.tsx:9257:      const currentKeywords = currentItem.searchKeywords ?? '';
+App.tsx:9258:      if (!labelChanged && currentKeywords === searchKeywords) {
+App.tsx:9266:        searchKeywords,
+App.tsx:9581:  const addPresetSection = useCallback((presetId: string) => {
+App.tsx:9651:  const removePresetSection = useCallback((presetId: string, sectionId: string) => {
+App.tsx:9672:  const openMenuPresetEditor = useCallback((preset: MenuPreset) => {
+App.tsx:9922:  const handleQuickPresetNavPress = useCallback((
+App.tsx:9944:  const removeMenuPreset = useCallback((id: string) => {
+App.tsx:10025:  const commitSettingsTag = useCallback(() => {
+App.tsx:10357:  const handleSettingsNavbarSwap = useCallback((
+App.tsx:10364:  const removeSettingsNavbarItem = useCallback((settingsIndex: number) => {
+App.tsx:10500:      setFilterColors((colors) => ({
+App.tsx:11265:    setFilterColors(backup.payload.settings.filterColors);
+App.tsx:12038:                  onPress={() => toggleSearchPresetCollapsed(item.preset.id)}
+App.tsx:12399:      toggleSearchPresetCollapsed,
+App.tsx:12785:              handleQuickPresetNavPress(item.preset, item.slotNumber, event, phase)
+App.tsx:13272:                                  onDelete={() => removeMenuPreset(item.preset.id)}
+App.tsx:13276:                                      : openMenuPresetEditor(item.preset)
+App.tsx:13281:                                      : () => addPresetSection(item.preset.id)
+App.tsx:13297:                                  onDelete={() => removePresetSection(
+App.tsx:13964:                    onPress={() => deleteDeletedTodoPermanently(activeDeletedTodoDetail.id)}
+App.tsx:14929:                      onDelete={removeSettingsNavbarItem}
+App.tsx:14936:                      onSwap={handleSettingsNavbarSwap}
+App.tsx:15106:                        onSubmitEditing={commitSettingsTag}
+App.tsx:15134:                        onPress={commitSettingsTag}
+App.tsx:15241:                              onSelectColor={setFilterColor}

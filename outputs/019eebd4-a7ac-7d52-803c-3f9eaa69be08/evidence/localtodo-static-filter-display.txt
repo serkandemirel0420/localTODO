@@ -1,0 +1,589 @@
+== filters/sort/group/meta/date display ==
+src/todoListRows.ts:110:  for (const parent of listMenuTree) {
+src/todoListRows.ts:111:    if (parent.label.toLocaleLowerCase() === normalizedLabel) {
+src/todoListRows.ts:112:      return parent.children?.length
+src/todoListRows.ts:114:          `${parent.label}::${NOT_SECTIONED_LABEL}`,
+src/todoListRows.ts:115:          parent.label,
+src/todoListRows.ts:117:          parent.label,
+src/todoListRows.ts:119:        : createListGroup(parent.label, parent.label, orderedListLabels);
+src/todoListRows.ts:122:    const child = parent.children?.find((item) => (
+src/todoListRows.ts:149:  for (const parent of listMenuTree) {
+src/todoListRows.ts:150:    if (!parent.children?.length) {
+src/todoListRows.ts:151:      addGroup(createListGroup(parent.label, parent.label, orderedListLabels));
+src/todoListRows.ts:155:    parent.children.forEach((child) => {
+src/todoListRows.ts:160:      `${parent.label}::${NOT_SECTIONED_LABEL}`,
+src/todoListRows.ts:161:      parent.label,
+src/todoListRows.ts:163:      parent.label,
+src/todoListRows.ts:196:    if (!node.children?.length) {
+src/todoListRows.ts:201:    node.children.forEach((child) => {
+src/todoListRows.ts:504:  dateLabelDisplayMode: DateLabelDisplayMode,
+src/todoListRows.ts:539:    dateLabelDisplayMode,
+src/todoListRows.ts:553:  parentLabel: string,
+src/todoListRows.ts:556:  if (todo.filters.list.includes(parentLabel)) {
+src/todoListRows.ts:569:  if (todo.filters.list.includes(context.parentLabel)) {
+src/todoListRows.ts:587:    todoBelongsToListParent(todo, context.parentLabel, context.subsectionLabels)
+src/todoListRows.ts:605:    const sectionId = `subsection-${context.parentLabel}-${label}`;
+src/todoListRows.ts:619:  dateLabelDisplayMode: DateLabelDisplayMode,
+src/todoListRows.ts:652:      dateLabelDisplayMode,
+src/todoListRows.ts:705:  dateLabelDisplayMode: DateLabelDisplayMode = 'exact',
+src/todoListRows.ts:731:    dateLabelDisplayMode,
+src/components/FilterConfigScreen.tsx:77:  parentLabel?: string;
+src/components/FilterConfigScreen.tsx:85:  avoidedFilters: TodoFilters;
+src/components/FilterConfigScreen.tsx:91:  metaTagVisibility: MetaTagVisibility;
+src/components/FilterConfigScreen.tsx:93:  dateLabelDisplayMode: DateLabelDisplayMode;
+src/components/FilterConfigScreen.tsx:140:  dateLabelDisplayMode: DateLabelDisplayMode,
+src/components/FilterConfigScreen.tsx:142:  dateLabelDisplayMode === 'exact'
+src/components/FilterConfigScreen.tsx:144:    : formatDateDisplayLabel(value, dateLabelDisplayMode)
+src/components/FilterConfigScreen.tsx:154:  children,
+src/components/FilterConfigScreen.tsx:162:  children: React.ReactNode;
+src/components/FilterConfigScreen.tsx:206:    {expanded ? <View style={styles.sectionCard}>{children}</View> : null}
+src/components/FilterConfigScreen.tsx:213:  avoidedFilters,
+src/components/FilterConfigScreen.tsx:219:  metaTagVisibility,
+src/components/FilterConfigScreen.tsx:221:  dateLabelDisplayMode,
+src/components/FilterConfigScreen.tsx:245:    formatDateFilterDisplayLabel(value, dateLabelDisplayMode)
+src/components/FilterConfigScreen.tsx:248:    getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
+src/components/FilterConfigScreen.tsx:250:  const repeatingItemsFilterAvoided = hasRepeatingItemsFilter(avoidedFilters.reminder);
+src/components/FilterConfigScreen.tsx:253:    ...avoidedFilters.list.map((value) => `Avoid ${value}`),
+src/components/FilterConfigScreen.tsx:257:    ...avoidedFilters.priority.map((value) => `Avoid ${value}`),
+src/components/FilterConfigScreen.tsx:261:    ...avoidedFilters.tag.map((value) => `Avoid ${value}`),
+src/components/FilterConfigScreen.tsx:266:    ...avoidedFilters.date.map((value) => `Avoid ${formatActiveDateLabel(value)}`),
+src/components/FilterConfigScreen.tsx:466:                item.isSubsection && item.parentLabel ? item.parentLabel : item.label,
+src/components/FilterConfigScreen.tsx:554:              accessibilityValue={{ text: DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode] }}
+src/components/FilterConfigScreen.tsx:564:                  {DATE_LABEL_DISPLAY_MODE_DESCRIPTIONS[dateLabelDisplayMode]}
+src/components/FilterConfigScreen.tsx:568:                {DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode]}
+src/components/FilterConfigScreen.tsx:654:            subtitle={formatMetaTagVisibilitySummary(metaTagVisibility)}
+src/components/FilterConfigScreen.tsx:660:              metaTagVisibility[key],
+src/components/FilterConfigScreen.tsx:908:    backgroundColor: 'transparent',
+src/storage/appSettingsStore.ts:50:  children?: StoredListMenuNode[];
+src/storage/appSettingsStore.ts:68:  metaTagVisibility?: MetaTagVisibility;
+src/storage/appSettingsStore.ts:70:  requiredFilters: TodoFilters;
+src/storage/appSettingsStore.ts:71:  avoidedFilters: TodoFilters;
+src/storage/appSettingsStore.ts:73:  todoGroupMode: TodoGroupMode;
+src/storage/appSettingsStore.ts:74:  todoSortMode: TodoSortMode;
+src/storage/appSettingsStore.ts:84:  metaTagVisibility?: MetaTagVisibility;
+src/storage/appSettingsStore.ts:86:  requiredFilters: TodoFilters;
+src/storage/appSettingsStore.ts:87:  avoidedFilters: TodoFilters;
+src/storage/appSettingsStore.ts:89:  todoGroupMode: TodoGroupMode;
+src/storage/appSettingsStore.ts:90:  todoSortMode: TodoSortMode;
+src/storage/appSettingsStore.ts:173:  dateLabelDisplayMode: DateLabelDisplayMode;
+src/storage/appSettingsStore.ts:175:  filterConfigUiState: FilterConfigUiState;
+src/storage/appSettingsStore.ts:185:  metaTagVisibility: MetaTagVisibility;
+src/storage/appSettingsStore.ts:189:  avoidedFilters: TodoFilters;
+src/storage/appSettingsStore.ts:190:  requiredFilters: TodoFilters;
+src/storage/appSettingsStore.ts:193:  todoGroupMode: TodoGroupMode;
+src/storage/appSettingsStore.ts:194:  todoSortMode: TodoSortMode;
+src/storage/appSettingsStore.ts:210:      children: node.children ? cloneListMenuTree(node.children) : undefined,
+src/storage/appSettingsStore.ts:220:    ...(section.metaTagVisibility
+src/storage/appSettingsStore.ts:221:      ? { metaTagVisibility: cloneMetaTagVisibility(section.metaTagVisibility) }
+src/storage/appSettingsStore.ts:224:    requiredFilters: pruneTodoFilters(section.requiredFilters, section.filters),
+src/storage/appSettingsStore.ts:225:    avoidedFilters: cloneTodoFilters(section.avoidedFilters),
+src/storage/appSettingsStore.ts:227:    todoGroupMode: section.todoGroupMode,
+src/storage/appSettingsStore.ts:228:    todoSortMode: section.todoSortMode,
+src/storage/appSettingsStore.ts:240:      ...(preset.metaTagVisibility
+src/storage/appSettingsStore.ts:241:        ? { metaTagVisibility: cloneMetaTagVisibility(preset.metaTagVisibility) }
+src/storage/appSettingsStore.ts:244:      requiredFilters: pruneTodoFilters(preset.requiredFilters, preset.filters),
+src/storage/appSettingsStore.ts:245:      avoidedFilters: cloneTodoFilters(preset.avoidedFilters),
+src/storage/appSettingsStore.ts:247:      todoGroupMode: preset.todoGroupMode,
+src/storage/appSettingsStore.ts:248:      todoSortMode: preset.todoSortMode,
+src/storage/appSettingsStore.ts:362:  dateLabelDisplayMode: 'exact',
+src/storage/appSettingsStore.ts:364:  filterConfigUiState: DEFAULT_FILTER_CONFIG_UI_STATE,
+src/storage/appSettingsStore.ts:374:  metaTagVisibility: cloneMetaTagVisibility(),
+src/storage/appSettingsStore.ts:378:  avoidedFilters: cloneTodoFilters(),
+src/storage/appSettingsStore.ts:379:  requiredFilters: cloneTodoFilters(),
+src/storage/appSettingsStore.ts:382:  todoGroupMode: 'none',
+src/storage/appSettingsStore.ts:383:  todoSortMode: 'newest',
+src/storage/appSettingsStore.ts:519:      if (item.children?.length) {
+src/storage/appSettingsStore.ts:520:        walk(item.children);
+src/storage/appSettingsStore.ts:540:    if (node.children?.length) {
+src/storage/appSettingsStore.ts:541:      const match = findListMenuNode(node.children, label);
+src/storage/appSettingsStore.ts:552:  parentLabel: string;
+src/storage/appSettingsStore.ts:627:    if (!node.children?.length) {
+src/storage/appSettingsStore.ts:631:    const children = updateListNodeDisplaySettings(node.children, label, isSubsectionView, update);
+src/storage/appSettingsStore.ts:632:    return children === node.children ? node : { ...node, children };
+src/storage/appSettingsStore.ts:667:    if (!node.children?.length) {
+src/storage/appSettingsStore.ts:671:    const children = clearListNodeDisplaySettings(node.children, label, isSubsectionView, field);
+src/storage/appSettingsStore.ts:672:    return children === node.children ? node : { ...node, children };
+src/storage/appSettingsStore.ts:685:  if (!node?.children?.length) {
+src/storage/appSettingsStore.ts:690:    parentLabel: node.label,
+src/storage/appSettingsStore.ts:691:    subsectionLabels: node.children.map((child) => child.label),
+src/storage/appSettingsStore.ts:710:    if (!node?.children?.length) {
+src/storage/appSettingsStore.ts:714:    const childLabels = new Set(node.children.map((child) => child.label));
+src/storage/appSettingsStore.ts:737:      const children = normalizeListMenuTreeNodes(item.children);
+src/storage/appSettingsStore.ts:756:        children: children.length > 0 ? children : undefined,
+src/storage/appSettingsStore.ts:801:          metaTagVisibility: normalizeMetaTagVisibility(section.metaTagVisibility),
+src/storage/appSettingsStore.ts:803:          requiredFilters: pruneTodoFilters(normalizeTodoFilters(section.requiredFilters), filters),
+src/storage/appSettingsStore.ts:804:          avoidedFilters: normalizeTodoFilters(section.avoidedFilters),
+src/storage/appSettingsStore.ts:806:          todoGroupMode: normalizeTodoGroupMode(section.todoGroupMode),
+src/storage/appSettingsStore.ts:807:          todoSortMode: normalizeTodoSortMode(section.todoSortMode),
+src/storage/appSettingsStore.ts:837:        metaTagVisibility: normalizeMetaTagVisibility(item.metaTagVisibility),
+src/storage/appSettingsStore.ts:839:        requiredFilters: pruneTodoFilters(normalizeTodoFilters(item.requiredFilters), filters),
+src/storage/appSettingsStore.ts:840:        avoidedFilters: normalizeTodoFilters(item.avoidedFilters),
+src/storage/appSettingsStore.ts:842:        todoGroupMode: normalizeTodoGroupMode(item.todoGroupMode),
+src/storage/appSettingsStore.ts:843:        todoSortMode: normalizeTodoSortMode(item.todoSortMode),
+src/storage/appSettingsStore.ts:857:      filterConfigUiState: cloneFilterConfigUiState(),
+src/storage/appSettingsStore.ts:868:      avoidedFilters: cloneTodoFilters(),
+src/storage/appSettingsStore.ts:869:      requiredFilters: cloneTodoFilters(),
+src/storage/appSettingsStore.ts:872:      todoGroupMode: 'none',
+src/storage/appSettingsStore.ts:873:      todoSortMode: 'newest',
+src/storage/appSettingsStore.ts:894:    dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
+src/storage/appSettingsStore.ts:896:    filterConfigUiState: normalizeFilterConfigUiState(value.filterConfigUiState),
+src/storage/appSettingsStore.ts:908:    metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
+src/storage/appSettingsStore.ts:912:    avoidedFilters: normalizeTodoFilters(value.avoidedFilters),
+src/storage/appSettingsStore.ts:913:    requiredFilters: pruneTodoFilters(normalizeTodoFilters(value.requiredFilters), selectedFilters),
+src/storage/appSettingsStore.ts:916:    todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
+src/storage/appSettingsStore.ts:917:    todoSortMode: normalizeTodoSortMode(value.todoSortMode),
+App.tsx:150:  metaTagVisibilityEqual,
+App.tsx:151:  metaTagVisibilityMatchesDefault,
+App.tsx:227:  toggleRepeatingItemsFilterValue,
+App.tsx:268:  dateLabelDisplayMode: DateLabelDisplayMode;
+App.tsx:277:  metaTagVisibility: MetaTagVisibility;
+App.tsx:280:  avoidedFilters: TodoFilters;
+App.tsx:281:  requiredFilters: TodoFilters;
+App.tsx:284:  todoGroupMode: TodoGroupMode;
+App.tsx:285:  todoSortMode: TodoSortMode;
+App.tsx:300:  parentLabel?: string;
+App.tsx:308:    const parentItem: VisibleListMenuItem = {
+App.tsx:315:    if (!showSubsections || !node.children?.length) {
+App.tsx:316:      return [parentItem];
+App.tsx:320:      parentItem,
+App.tsx:321:      ...node.children.map((child) => ({
+App.tsx:326:        parentLabel: node.label,
+App.tsx:481:  avoidedFilters: TodoFilters,
+App.tsx:503:    ...FILTER_KEYS.flatMap((filterKey) => avoidedFilters[filterKey].map((label) => ({
+App.tsx:510:      avoidedFilters.reminder.includes(item.value)
+App.tsx:550:  avoidedFilters: TodoFilters,
+App.tsx:554:  metaTagVisibility: MetaTagVisibility,
+App.tsx:568:        countDateMenuSelections(avoidedFilters, includeReminderRows)
+App.tsx:572:    return filters[filterKey].length + avoidedFilters[filterKey].length > 0;
+App.tsx:606:    return !metaTagVisibilityMatchesDefault(metaTagVisibility);
+App.tsx:1233:  dateLabelDisplayMode: DateLabelDisplayMode,
+App.tsx:1235:  dateLabelDisplayMode === 'exact'
+App.tsx:1237:    : formatDateDisplayLabel(value, dateLabelDisplayMode)
+App.tsx:1242:  dateLabelDisplayMode: DateLabelDisplayMode,
+App.tsx:1248:          ? formatDateFilterDisplayLabel(value, dateLabelDisplayMode)
+App.tsx:1353:      const parentLabel = key.slice(0, -notSectionedSuffix.length);
+App.tsx:1354:      return { ...base, list: [parentLabel] };
+App.tsx:1383:        const parentLabel = sectionId.slice(prefix.length, -suffix.length);
+App.tsx:1384:        return { ...base, list: [parentLabel] };
+App.tsx:1478:  dateLabelDisplayMode: DateLabelDisplayMode,
+App.tsx:1486:  if (dateLabelDisplayMode === 'both') {
+App.tsx:1490:  if (dateLabelDisplayMode === 'remaining') {
+App.tsx:1665:        childrenContainerStyle={styles.googleDrivePickerSwipeChildren}
+App.tsx:1827:      children: node.children ? sortListMenuTree(node.children) : undefined,
+App.tsx:1911:  requiredFilters: renameListLabelInFilters(section.requiredFilters, oldLabel, newLabel),
+App.tsx:1912:  avoidedFilters: renameListLabelInFilters(section.avoidedFilters, oldLabel, newLabel),
+App.tsx:1923:    requiredFilters: renameListLabelInFilters(preset.requiredFilters, oldLabel, newLabel),
+App.tsx:1924:    avoidedFilters: renameListLabelInFilters(preset.avoidedFilters, oldLabel, newLabel),
+App.tsx:2163:  requiredFilters: SelectedFilters,
+App.tsx:2164:  avoidedFilters: SelectedFilters,
+App.tsx:2168:  metaTagVisibility: MetaTagVisibility,
+App.tsx:2171:  filtersEqual(preset.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
+App.tsx:2172:  filtersEqual(preset.avoidedFilters, avoidedFilters) &&
+App.tsx:2173:  preset.todoSortMode === sortMode &&
+App.tsx:2174:  preset.todoGroupMode === groupMode &&
+App.tsx:2177:    preset.metaTagVisibility
+App.tsx:2178:      ? metaTagVisibilityEqual(preset.metaTagVisibility, metaTagVisibility)
+App.tsx:2187:  requiredFilters: SelectedFilters,
+App.tsx:2188:  avoidedFilters: SelectedFilters,
+App.tsx:2192:  metaTagVisibility?: MetaTagVisibility,
+App.tsx:2194:  const requiredFilterCount = countFilters(pruneTodoFilters(requiredFilters, filters));
+App.tsx:2195:  const avoidedFilterCount = countFilters(avoidedFilters);
+App.tsx:2207:    metaTagVisibility && !metaTagVisibilityMatchesDefault(metaTagVisibility)
+App.tsx:2208:      ? `Meta ${formatMetaTagVisibilitySummary(metaTagVisibility)}`
+App.tsx:2217:  dateLabelDisplayMode: DateLabelDisplayMode,
+App.tsx:2221:  const activeFilterItems = buildActiveFilterItems(filters, dateLabelDisplayMode);
+App.tsx:2279:  requiredFilters: SelectedFilters,
+App.tsx:2280:  avoidedFilters: SelectedFilters,
+App.tsx:2284:  metaTagVisibility: MetaTagVisibility,
+App.tsx:2287:  filtersEqual(section.requiredFilters, pruneTodoFilters(requiredFilters, filters)) &&
+App.tsx:2288:  filtersEqual(section.avoidedFilters, avoidedFilters) &&
+App.tsx:2289:  section.todoSortMode === sortMode &&
+App.tsx:2290:  section.todoGroupMode === groupMode &&
+App.tsx:2293:    section.metaTagVisibility
+App.tsx:2294:      ? metaTagVisibilityEqual(section.metaTagVisibility, metaTagVisibility)
+App.tsx:2300:  dateLabelDisplayMode: DateLabelDisplayMode,
+App.tsx:2302:  const activeFilterItems = buildActiveFilterItems(preset.filters, dateLabelDisplayMode);
+App.tsx:2303:  const requiredFilterItems = buildActiveFilterItems(preset.requiredFilters, dateLabelDisplayMode);
+App.tsx:2304:  const avoidedFilterItems = buildActiveFilterItems(preset.avoidedFilters, dateLabelDisplayMode);
+App.tsx:2319:    preset.todoGroupMode !== 'none' ? `Group (${TODO_GROUP_LABELS[preset.todoGroupMode]})` : null,
+App.tsx:2320:    `Sort (${TODO_SORT_LABELS[preset.todoSortMode]})`,
+App.tsx:2362:  requiredFilters: SelectedFilters,
+App.tsx:2364:  date: filters.date.filter((value) => !isFilterValueRequired(requiredFilters, 'date', value)),
+App.tsx:2365:  list: filters.list.filter((value) => !isFilterValueRequired(requiredFilters, 'list', value)),
+App.tsx:2367:    !isFilterValueRequired(requiredFilters, 'priority', value)
+App.tsx:2370:    !requiredFilters.reminder.includes(value)
+App.tsx:2372:  tag: filters.tag.filter((value) => !isFilterValueRequired(requiredFilters, 'tag', value)),
+App.tsx:2377:  requiredFilters: SelectedFilters,
+App.tsx:2381:  if (!hasAnyRequiredFilters(requiredFilters)) {
+App.tsx:2385:  const effectiveDateLabels = requiredFilters.date.length > 0
+App.tsx:2388:  const requiredReminderValues = removeRepeatStatusFilters(requiredFilters.reminder);
+App.tsx:2392:    requiredFilters.list.every((value) => (
+App.tsx:2395:    requiredFilters.date.every((value) => (
+App.tsx:2398:    requiredFilters.priority.every((value) => todo.filters.priority.includes(value)) &&
+App.tsx:2399:    requiredFilters.tag.every((value) => todoHasTagFilter(todo, value)) &&
+App.tsx:2402:      !hasRepeatingItemsFilter(requiredFilters.reminder) ||
+App.tsx:2410:  avoidedFilters: SelectedFilters,
+App.tsx:2414:  if (!hasAnyFilterValues(avoidedFilters)) {
+App.tsx:2418:  const effectiveDateLabels = avoidedFilters.date.length > 0
+App.tsx:2421:  const avoidedReminderValues = removeRepeatStatusFilters(avoidedFilters.reminder);
+App.tsx:2425:    avoidedFilters.list.some((value) => (
+App.tsx:2428:    avoidedFilters.date.some((value) => (
+App.tsx:2431:    avoidedFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
+App.tsx:2432:    avoidedFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
+App.tsx:2435:      hasRepeatingItemsFilter(avoidedFilters.reminder) &&
+App.tsx:2479:  requiredFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
+App.tsx:2480:  avoidedFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
+App.tsx:2482:  const optionalFilters = getOptionalSelectedFilters(filters, requiredFilters);
+App.tsx:2485:    !todoMatchesAvoidedFilters(todo, avoidedFilters, listMenuTree, now) &&
+App.tsx:2486:    todoMatchesRequiredFilters(todo, requiredFilters, listMenuTree, now) &&
+App.tsx:2559:        childrenContainerStyle={styles.listMenuPresetSwipeChildren}
+App.tsx:2684:        childrenContainerStyle={styles.settingsListSwipeChildren}
+App.tsx:3183:                    { backgroundColor: swatch.accent ?? 'transparent' },
+App.tsx:3328:  const [filterConfigUiState, setFilterConfigUiState] = useState<FilterConfigUiState>(
+App.tsx:3332:  const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
+App.tsx:3344:  const dateLabelDisplayModeRef = useRef<DateLabelDisplayMode>(dateLabelDisplayMode);
+App.tsx:3363:  const metaTagVisibilityRef = useRef<MetaTagVisibility>(cloneMetaTagVisibility());
+App.tsx:3372:  const [todoGroupMode, setTodoGroupMode] = useState<TodoGroupMode>('none');
+App.tsx:3374:  const requiredFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
+App.tsx:3375:  const avoidedFiltersRef = useRef<TodoFilters>(cloneTodoFilters());
+App.tsx:3377:  const todoGroupModeRef = useRef<TodoGroupMode>(todoGroupMode);
+App.tsx:3388:  const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
+App.tsx:3389:  const todoSortModeRef = useRef<TodoSortMode>(todoSortMode);
+App.tsx:3390:  const [metaTagVisibility, setMetaTagVisibility] = useState<MetaTagVisibility>(
+App.tsx:3408:  const [requiredFilters, setRequiredFilters] = useState<SelectedFilters>(
+App.tsx:3411:  const [avoidedFilters, setAvoidedFilters] = useState<SelectedFilters>(
+App.tsx:3461:  dateLabelDisplayModeRef.current = dateLabelDisplayMode;
+App.tsx:3470:  metaTagVisibilityRef.current = metaTagVisibility;
+App.tsx:3474:  requiredFiltersRef.current = requiredFilters;
+App.tsx:3475:  avoidedFiltersRef.current = avoidedFilters;
+App.tsx:3477:  todoGroupModeRef.current = todoGroupMode;
+App.tsx:3478:  todoSortModeRef.current = todoSortMode;
+App.tsx:3713:          settings.requiredFilters,
+App.tsx:3719:        setAvoidedFilters(settings.avoidedFilters);
+App.tsx:3721:        setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
+App.tsx:3727:        setDateLabelDisplayMode(settings.dateLabelDisplayMode);
+App.tsx:3735:        setTodoGroupMode(settings.todoGroupMode);
+App.tsx:3737:        setTodoSortMode(settings.todoSortMode);
+App.tsx:3738:        setMetaTagVisibility(cloneMetaTagVisibility(settings.metaTagVisibility));
+App.tsx:3767:    filterConfigUiState,
+App.tsx:3772:    dateLabelDisplayMode,
+App.tsx:3777:    metaTagVisibility,
+App.tsx:3781:    avoidedFilters,
+App.tsx:3782:    requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
+App.tsx:3785:    todoGroupMode,
+App.tsx:3786:    todoSortMode,
+App.tsx:3794:    dateLabelDisplayMode,
+App.tsx:3796:    filterConfigUiState,
+App.tsx:3806:    metaTagVisibility,
+App.tsx:3809:    avoidedFilters,
+App.tsx:3810:    requiredFilters,
+App.tsx:3813:    todoGroupMode,
+App.tsx:3814:    todoSortMode,
+App.tsx:4051:    dateLabelDisplayMode: dateLabelDisplayModeRef.current,
+App.tsx:4060:    metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
+App.tsx:4063:    avoidedFilters: cloneTodoFilters(avoidedFiltersRef.current),
+App.tsx:4064:    requiredFilters: pruneTodoFilters(requiredFiltersRef.current, selectedFiltersRef.current),
+App.tsx:4067:    todoGroupMode: todoGroupModeRef.current,
+App.tsx:4068:    todoSortMode: todoSortModeRef.current,
+App.tsx:4196:    const restoredMetaTagVisibility = cloneMetaTagVisibility(snapshot.metaTagVisibility);
+App.tsx:4204:    const restoredAvoidedFilters = cloneTodoFilters(snapshot.avoidedFilters);
+App.tsx:4206:      snapshot.requiredFilters,
+App.tsx:4214:      dateLabelDisplayMode: snapshot.dateLabelDisplayMode,
+App.tsx:4223:      metaTagVisibility: restoredMetaTagVisibility,
+App.tsx:4226:      avoidedFilters: restoredAvoidedFilters,
+App.tsx:4227:      requiredFilters: restoredRequiredFilters,
+App.tsx:4230:      todoGroupMode: snapshot.todoGroupMode,
+App.tsx:4231:      todoSortMode: snapshot.todoSortMode,
+App.tsx:4246:    metaTagVisibilityRef.current = restoredMetaTagVisibility;
+App.tsx:4250:    requiredFiltersRef.current = restoredRequiredFilters;
+App.tsx:4251:    avoidedFiltersRef.current = restoredAvoidedFilters;
+App.tsx:4253:    todoGroupModeRef.current = snapshot.todoGroupMode;
+App.tsx:4254:    todoSortModeRef.current = snapshot.todoSortMode;
+App.tsx:4265:    setDateLabelDisplayMode(snapshot.dateLabelDisplayMode);
+App.tsx:4277:    setTodoGroupMode(snapshot.todoGroupMode);
+App.tsx:4278:    setTodoSortMode(snapshot.todoSortMode);
+App.tsx:5178:      todoSortMode,
+App.tsx:5179:      todoGroupMode,
+App.tsx:5184:      todoGroupMode,
+App.tsx:5185:      todoSortMode,
+App.tsx:5268:        requiredFilters,
+App.tsx:5269:        avoidedFilters,
+App.tsx:5280:    avoidedFilters,
+App.tsx:5282:    requiredFilters,
+App.tsx:5489:    const nextRequiredFilters = pruneTodoFilters(requiredFilters, nextSelectedFilters);
+App.tsx:5496:    if (!filtersEqual(requiredFilters, nextRequiredFilters)) {
+App.tsx:5524:    requiredFilters,
+App.tsx:5620:    () => formatCreateDrawerDateLabel(createDraftFilters.date, dateLabelDisplayMode),
+App.tsx:5621:    [createDraftFilters.date, dateLabelDisplayMode],
+App.tsx:6071:    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+App.tsx:6073:      avoidedFiltersRef.current,
+App.tsx:6078:      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+App.tsx:6079:      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:6806:      requiredFilters,
+App.tsx:6807:      avoidedFilters,
+App.tsx:6811:      metaTagVisibility,
+App.tsx:6818:    metaTagVisibility,
+App.tsx:6820:    avoidedFilters,
+App.tsx:6821:    requiredFilters,
+App.tsx:6905:        ...getQuickPresetNavDetail(heldQuickPresetNavItem.preset, dateLabelDisplayMode),
+App.tsx:6958:      dateLabelDisplayMode,
+App.tsx:6963:      dateLabelDisplayMode,
+App.tsx:7241:  const menuRequiredFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : requiredFilters;
+App.tsx:7242:  const menuAvoidedFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : avoidedFilters;
+App.tsx:7249:  const selectedFilterCount = countFilters(selectedFilters) + countFilters(avoidedFilters);
+App.tsx:7262:          if (hideDoneTodos && preset.todoGroupMode !== 'status' && todo.done) {
+App.tsx:7271:            preset.requiredFilters,
+App.tsx:7272:            preset.avoidedFilters,
+App.tsx:7364:        if (hideDoneTodos && item.preset.todoGroupMode !== 'status' && todo.done) {
+App.tsx:7373:          item.preset.requiredFilters,
+App.tsx:7374:          item.preset.avoidedFilters,
+App.tsx:7489:    metaTagVisibility,
+App.tsx:7507:        requiredFilters,
+App.tsx:7508:        avoidedFilters,
+App.tsx:7512:        metaTagVisibility,
+App.tsx:7605:            latestMenuPreset.requiredFilters,
+App.tsx:7606:            latestMenuPreset.avoidedFilters,
+App.tsx:7607:            latestMenuPreset.todoSortMode,
+App.tsx:7608:            latestMenuPreset.todoGroupMode,
+App.tsx:7610:            latestMenuPreset.metaTagVisibility,
+App.tsx:7648:            preset.requiredFilters,
+App.tsx:7649:            preset.avoidedFilters,
+App.tsx:7650:            preset.todoSortMode,
+App.tsx:7651:            preset.todoGroupMode,
+App.tsx:7653:            preset.metaTagVisibility,
+App.tsx:7666:              section.requiredFilters,
+App.tsx:7667:              section.avoidedFilters,
+App.tsx:7668:              section.todoSortMode,
+App.tsx:7669:              section.todoGroupMode,
+App.tsx:7671:              section.metaTagVisibility,
+App.tsx:7817:        valueLabel: formatMetaTagVisibilitySummary(metaTagVisibility),
+App.tsx:7863:    metaTagVisibility,
+App.tsx:8013:      reminder: toggleRepeatingItemsFilterValue(selectedFiltersRef.current.reminder),
+App.tsx:8015:    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+App.tsx:8017:      avoidedFiltersRef.current,
+App.tsx:8023:      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+App.tsx:8024:      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:8091:      requiredFiltersRef.current,
+App.tsx:8096:      avoidedFiltersRef.current,
+App.tsx:8120:      ? removeFilterValueFromRequiredFilters(requiredFiltersRef.current, filterKey, value)
+App.tsx:8122:        ? requiredFiltersRef.current
+App.tsx:8123:        : addFilterValueToRequiredFilters(requiredFiltersRef.current, filterKey, storedValue);
+App.tsx:8126:      ? removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, filterKey, value)
+App.tsx:8128:        ? addFilterValueToAvoidedFilters(avoidedFiltersRef.current, filterKey, storedValue)
+App.tsx:8129:        : removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, filterKey, value);
+App.tsx:8133:      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters) &&
+App.tsx:8134:      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:8152:    const currentlyRequired = isFilterValueRequired(requiredFiltersRef.current, 'list', item.label);
+App.tsx:8153:    const currentlyAvoided = isFilterValueAvoided(avoidedFiltersRef.current, 'list', item.label);
+App.tsx:8159:      if (item.isSubsection && item.parentLabel) {
+App.tsx:8160:        const parentNode = findListMenuNode(listMenuTree, item.parentLabel);
+App.tsx:8161:        const siblingLabels = parentNode?.children?.map((child) => child.label) ?? [];
+App.tsx:8163:          (label) => label !== item.parentLabel && !siblingLabels.includes(label),
+App.tsx:8169:      const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
+App.tsx:8186:      const childLabels = findListMenuNode(listMenuTree, item.label)?.children?.map((child) => (
+App.tsx:8202:      ? removeFilterValueFromRequiredFilters(requiredFiltersRef.current, 'list', item.label)
+App.tsx:8204:        ? requiredFiltersRef.current
+App.tsx:8205:        : addFilterValueToRequiredFilters(requiredFiltersRef.current, 'list', item.label);
+App.tsx:8208:      ? removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, 'list', item.label)
+App.tsx:8210:        ? addFilterValueToAvoidedFilters(avoidedFiltersRef.current, 'list', item.label)
+App.tsx:8211:        : removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, 'list', item.label);
+App.tsx:8215:      filtersEqual(requiredFiltersRef.current, prunedRequiredFilters) &&
+App.tsx:8216:      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:8243:        filtersEqual(requiredFiltersRef.current, emptyFilters) &&
+App.tsx:8244:        filtersEqual(avoidedFiltersRef.current, emptyFilters)
+App.tsx:8314:      : pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+App.tsx:8318:        avoidedFiltersRef.current,
+App.tsx:8325:      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+App.tsx:8326:      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:8381:    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+App.tsx:8383:      avoidedFiltersRef.current,
+App.tsx:8390:      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+App.tsx:8391:      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:8415:        !filtersEqual(requiredFiltersRef.current, defaultFilters) ||
+App.tsx:8416:        !filtersEqual(avoidedFiltersRef.current, defaultFilters) ||
+App.tsx:8417:        todoSortModeRef.current !== 'newest' ||
+App.tsx:8418:        todoGroupModeRef.current !== 'none' ||
+App.tsx:8455:        !filtersEqual(requiredFiltersRef.current, defaultFilters) ||
+App.tsx:8456:        !filtersEqual(avoidedFiltersRef.current, defaultFilters);
+App.tsx:8531:      todoSortMode,
+App.tsx:8532:      todoGroupMode,
+App.tsx:8554:    todoGroupMode,
+App.tsx:8555:    todoSortMode,
+App.tsx:8751:      getDateMenuItemDisplayLabel(menuLabel, dateLabels, dateLabelDisplayMode),
+App.tsx:8752:    [dateLabelDisplayMode],
+App.tsx:8764:      todoSortMode,
+App.tsx:8765:      todoGroupMode,
+App.tsx:8787:    todoGroupMode,
+App.tsx:8788:    todoSortMode,
+App.tsx:8813:        const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+App.tsx:8814:        const nextAvoidedFilters = clearKey(cloneTodoFilters(avoidedFiltersRef.current));
+App.tsx:8818:          filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+App.tsx:8819:          filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+App.tsx:8852:        todoSortMode,
+App.tsx:8853:        todoGroupMode,
+App.tsx:8877:        todoSortMode,
+App.tsx:8878:        todoGroupMode,
+App.tsx:8898:      if (metaTagVisibilityMatchesDefault(metaTagVisibility)) {
+App.tsx:8913:    metaTagVisibility,
+App.tsx:8916:    todoGroupMode,
+App.tsx:8917:    todoSortMode,
+App.tsx:8934:      requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+App.tsx:8935:      avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
+App.tsx:8937:      metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
+App.tsx:8938:      todoGroupMode: effectiveGroupMode,
+App.tsx:8939:      todoSortMode: effectiveSortMode,
+App.tsx:8957:    metaTagVisibility,
+App.tsx:9034:      requiredFiltersRef.current,
+App.tsx:9039:      avoidedFiltersRef.current,
+App.tsx:9067:    requiredFiltersRef.current = prunedRequiredFilters;
+App.tsx:9068:    avoidedFiltersRef.current = nextAvoidedFilters;
+App.tsx:9109:      avoidedFilters: cloneTodoFilters(nextAvoidedFilters),
+App.tsx:9110:      requiredFilters: cloneTodoFilters(prunedRequiredFilters),
+App.tsx:9424:    const nextRequiredFilters = pruneTodoFilters(preset.requiredFilters, nextFilters);
+App.tsx:9425:    const nextAvoidedFilters = cloneTodoFilters(preset.avoidedFilters);
+App.tsx:9441:      setTodoGroupMode(preset.todoGroupMode);
+App.tsx:9442:      setTodoSortMode(preset.todoSortMode);
+App.tsx:9446:        preset.todoSortMode,
+App.tsx:9447:        preset.todoGroupMode,
+App.tsx:9449:      if (preset.metaTagVisibility) {
+App.tsx:9450:        setMetaTagVisibility(cloneMetaTagVisibility(preset.metaTagVisibility));
+App.tsx:9485:        requiredFilters,
+App.tsx:9486:        avoidedFilters,
+App.tsx:9490:        metaTagVisibility,
+App.tsx:9505:    const nextRequiredFilters = pruneTodoFilters(requiredFilters, nextFilters);
+App.tsx:9514:    if (!filtersEqual(requiredFilters, nextRequiredFilters)) {
+App.tsx:9519:    avoidedFilters,
+App.tsx:9526:    metaTagVisibility,
+App.tsx:9530:    requiredFilters,
+App.tsx:9540:    const nextRequiredFilters = pruneTodoFilters(section.requiredFilters, nextFilters);
+App.tsx:9541:    const nextAvoidedFilters = cloneTodoFilters(section.avoidedFilters);
+App.tsx:9557:      setTodoGroupMode(section.todoGroupMode);
+App.tsx:9558:      setTodoSortMode(section.todoSortMode);
+App.tsx:9562:        section.todoSortMode,
+App.tsx:9563:        section.todoGroupMode,
+App.tsx:9565:      if (section.metaTagVisibility) {
+App.tsx:9566:        setMetaTagVisibility(cloneMetaTagVisibility(section.metaTagVisibility));
+App.tsx:9600:        metaTagVisibility,
+App.tsx:9612:      formatPresetSectionLabel(menuFilters, dateLabelDisplayMode),
+App.tsx:9618:      requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+App.tsx:9619:      avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
+App.tsx:9621:      metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
+App.tsx:9622:      todoGroupMode: effectiveGroupMode,
+App.tsx:9623:      todoSortMode: effectiveSortMode,
+App.tsx:9638:    dateLabelDisplayMode,
+App.tsx:9643:    metaTagVisibility,
+App.tsx:9695:        currentPreset.requiredFilters,
+App.tsx:9698:      !filtersEqual(currentPreset.avoidedFilters, menuAvoidedFilters) ||
+App.tsx:9700:      currentPreset.todoGroupMode !== effectiveGroupMode ||
+App.tsx:9701:      currentPreset.todoSortMode !== effectiveSortMode ||
+App.tsx:9703:        currentPreset.metaTagVisibility &&
+App.tsx:9704:        metaTagVisibilityEqual(currentPreset.metaTagVisibility, metaTagVisibility)
+App.tsx:9719:            requiredFilters: pruneTodoFilters(menuRequiredFilters, menuFilters),
+App.tsx:9720:            avoidedFilters: cloneTodoFilters(menuAvoidedFilters),
+App.tsx:9722:            metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
+App.tsx:9723:            todoGroupMode: effectiveGroupMode,
+App.tsx:9724:            todoSortMode: effectiveSortMode,
+App.tsx:9740:    metaTagVisibility,
+App.tsx:9754:        currentPreset.requiredFilters,
+App.tsx:9755:        pruneTodoFilters(requiredFilters, selectedFilters),
+App.tsx:9757:      !filtersEqual(currentPreset.avoidedFilters, avoidedFilters) ||
+App.tsx:9759:      currentPreset.todoGroupMode !== effectiveGroupMode ||
+App.tsx:9760:      currentPreset.todoSortMode !== effectiveSortMode ||
+App.tsx:9762:        currentPreset.metaTagVisibility &&
+App.tsx:9763:        metaTagVisibilityEqual(currentPreset.metaTagVisibility, metaTagVisibility)
+App.tsx:9780:              requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
+App.tsx:9781:              avoidedFilters: cloneTodoFilters(avoidedFilters),
+App.tsx:9783:              metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
+App.tsx:9784:              todoGroupMode: effectiveGroupMode,
+App.tsx:9785:              todoSortMode: effectiveSortMode,
+App.tsx:9797:        requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
+App.tsx:9798:        avoidedFilters: cloneTodoFilters(avoidedFilters),
+App.tsx:9800:        metaTagVisibility: cloneMetaTagVisibility(metaTagVisibility),
+App.tsx:9801:        todoGroupMode: effectiveGroupMode,
+App.tsx:9802:        todoSortMode: effectiveSortMode,
+App.tsx:9832:    avoidedFilters,
+App.tsx:9833:    metaTagVisibility,
+App.tsx:9834:    requiredFilters,
+App.tsx:9952:        requiredFilters,
+App.tsx:9953:        avoidedFilters,
+App.tsx:9957:        metaTagVisibility,
+App.tsx:9986:    metaTagVisibility,
+App.tsx:9989:    avoidedFilters,
+App.tsx:9990:    requiredFilters,
+App.tsx:10142:      requiredFilters: cloneTodoFilters(),
+App.tsx:10143:      avoidedFilters: cloneTodoFilters(),
+App.tsx:10145:      metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
+App.tsx:10146:      todoGroupMode: todoGroupModeRef.current,
+App.tsx:10147:      todoSortMode: todoSortModeRef.current,
+App.tsx:10454:        requiredFilters: {
+App.tsx:10455:          ...preset.requiredFilters,
+App.tsx:10456:          list: preset.requiredFilters.list.filter((label) => !removedLabels.has(label)),
+App.tsx:10458:        avoidedFilters: {
+App.tsx:10459:          ...preset.avoidedFilters,
+App.tsx:10460:          list: preset.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
+App.tsx:10468:          requiredFilters: {
+App.tsx:10469:            ...section.requiredFilters,
+App.tsx:10470:            list: section.requiredFilters.list.filter((label) => !removedLabels.has(label)),
+App.tsx:10472:          avoidedFilters: {
+App.tsx:10473:            ...section.avoidedFilters,
+App.tsx:10474:            list: section.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
+App.tsx:11154:        dateLabelDisplayMode,
+App.tsx:11156:      filterConfigUiState,
+App.tsx:11169:      avoidedFilters,
+App.tsx:11170:      requiredFilters,
+App.tsx:11173:      todoGroupMode,
+App.tsx:11174:      todoSortMode,
+App.tsx:11175:      metaTagVisibility,
+App.tsx:11192:    dateLabelDisplayMode,
+App.tsx:11194:    filterConfigUiState,
+App.tsx:11204:    metaTagVisibility,
+App.tsx:11208:    avoidedFilters,
+App.tsx:11209:    requiredFilters,
+App.tsx:11212:    todoGroupMode,
+App.tsx:11213:    todoSortMode,
+App.tsx:11260:      backup.payload.settings.requiredFilters,
+App.tsx:11263:    setAvoidedFilters(normalizeTodoFilters(backup.payload.settings.avoidedFilters));
+App.tsx:11264:    setFilterConfigUiState(cloneFilterConfigUiState(backup.payload.settings.filterConfigUiState));
+App.tsx:11272:      backup.payload.settings.dateLabelDisplayMode,
+App.tsx:11292:    setTodoGroupMode(backup.payload.settings.todoGroupMode);
+App.tsx:11294:    setTodoSortMode(backup.payload.settings.todoSortMode);
+App.tsx:11295:    setMetaTagVisibility(cloneMetaTagVisibility(backup.payload.settings.metaTagVisibility));
+App.tsx:11738:    () => mergeCreateSectionFilters(requiredFilters, selectedFilters),
+App.tsx:11739:    [requiredFilters, selectedFilters],
+App.tsx:11900:                dateLabelDisplayMode={dateLabelDisplayMode}
+App.tsx:11911:                metaTagVisibility={metaTagVisibility}
+App.tsx:11976:                dateLabelDisplayMode={dateLabelDisplayMode}
+App.tsx:11987:                metaTagVisibility={metaTagVisibility}
+App.tsx:12059:                    mergeCreateSectionFilters(item.preset.requiredFilters, item.preset.filters),
+App.tsx:12131:                dateLabelDisplayMode={dateLabelDisplayMode}
+App.tsx:12142:                metaTagVisibility={metaTagVisibility}
+App.tsx:12293:                    dateLabelDisplayMode={dateLabelDisplayMode}
+App.tsx:12305:                    metaTagVisibility={metaTagVisibility}
+App.tsx:12352:            dateLabelDisplayMode={dateLabelDisplayMode}
+App.tsx:12362:            metaTagVisibility={metaTagVisibility}
+App.tsx:12386:      dateLabelDisplayMode,
+App.tsx:12393:      metaTagVisibility,
+App.tsx:13075:                                  ? formatDateFilterDisplayLabel(item.label, dateLabelDisplayMode)
+App.tsx:13204:                              const isSelected = metaTagVisibility[item.metaTagKey];
+App.tsx:13340:                                  metaTagVisibility,
+App.tsx:13577:                            item.isSubsection && item.parentLabel ? item.parentLabel : item.label,
+App.tsx:13599:                                    ? `${item.label} subsection of ${item.parentLabel}`
+App.tsx:13898:          transparent
+App.tsx:13984:          transparent
+App.tsx:14392:          avoidedFilters={avoidedFilters}
+App.tsx:14394:          dateLabelDisplayMode={dateLabelDisplayMode}
+App.tsx:14397:          uiState={filterConfigUiState}
+App.tsx:14402:          metaTagVisibility={metaTagVisibility}
+App.tsx:14487:                      {DATE_LABEL_DISPLAY_MODE_SUMMARIES[dateLabelDisplayMode]}
+App.tsx:14519:                      accessibilityValue={{ text: DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode] }}
+App.tsx:14529:                          {DATE_LABEL_DISPLAY_MODE_DESCRIPTIONS[dateLabelDisplayMode]}
+App.tsx:14535:                          dateLabelDisplayMode !== 'exact' && styles.settingsStatusPillEnabled,
+App.tsx:14541:                            dateLabelDisplayMode !== 'exact' && styles.settingsStatusTextEnabled,
+App.tsx:14544:                          {DATE_LABEL_DISPLAY_MODE_LABELS[dateLabelDisplayMode]}
+App.tsx:15309:          transparent
+App.tsx:15408:          transparent
+App.tsx:15482:          transparent
+App.tsx:16871:    backgroundColor: 'transparent',
+App.tsx:17274:    borderTopColor: 'transparent',
+App.tsx:17772:    backgroundColor: 'transparent',
+App.tsx:17850:    backgroundColor: 'transparent',

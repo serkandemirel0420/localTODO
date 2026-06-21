@@ -1,0 +1,75 @@
+== google auth/backup static ==
+src/google/googleAuthStore.ts:1:import * as SecureStore from 'expo-secure-store';
+src/google/googleAuthStore.ts:38:    await SecureStore.deleteItemAsync(STORAGE_KEY);
+src/google/googleAuthStore.ts:42:    const stored = await SecureStore.getItemAsync(STORAGE_KEY);
+src/google/googleAuthStore.ts:47:    await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(normalizeStoredGoogleAuth(auth)));
+src/google/driveBackup.ts:108:  googleDriveBackupEnabled: boolean;
+src/google/driveBackup.ts:629:      googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
+src/google/driveBackup.ts:686:      googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,
+src/google/driveBackup.ts:770:export const listDriveBackupSlots = async (
+src/google/driveBackup.ts:819:  const slots = await listDriveBackupSlots(accessToken, scope);
+src/google/driveBackup.ts:851:    : getNextBackupUploadPlan(await listDriveBackupSlots(accessToken, scope));
+src/google/driveBackup.ts:880:    uploadPlan.filesToPrune.map((backupFile) => deleteDriveBackupFile(accessToken, backupFile, scope)),
+src/google/driveBackup.ts:889:export const deleteDriveBackupFile = async (
+App.tsx:111:  deleteDriveBackupFile,
+App.tsx:115:  listDriveBackupSlots,
+App.tsx:271:  googleDriveBackupEnabled: boolean;
+App.tsx:3334:  const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
+App.tsx:3349:  const googleDriveBackupEnabledRef = useRef(googleDriveBackupEnabled);
+App.tsx:3457:  const autoBackupInFlightRef = useRef(false);
+App.tsx:3458:  const autoBackupFailedStateKeyRef = useRef<string | null>(null);
+App.tsx:3459:  const autoBackupStateKeyRef = useRef<string | null>(null);
+App.tsx:3463:  googleDriveBackupEnabledRef.current = googleDriveBackupEnabled;
+App.tsx:3723:        setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
+App.tsx:3769:    googleDriveBackupEnabled,
+App.tsx:3798:    googleDriveBackupEnabled,
+App.tsx:3851:  const autoBackupStateKey = useMemo(() => {
+App.tsx:4054:    googleDriveBackupEnabled: googleDriveBackupEnabledRef.current,
+App.tsx:4217:      googleDriveBackupEnabled: snapshot.googleDriveBackupEnabled,
+App.tsx:4234:    autoBackupFailedStateKeyRef.current = null;
+App.tsx:4235:    autoBackupStateKeyRef.current = null;
+App.tsx:4240:    googleDriveBackupEnabledRef.current = snapshot.googleDriveBackupEnabled;
+App.tsx:4263:    setGoogleDriveBackupEnabled(snapshot.googleDriveBackupEnabled);
+App.tsx:10880:  const disconnectGoogleDrive = useCallback(async () => {
+App.tsx:10952:  const getFreshGoogleAccessToken = useCallback(async (authOverride?: StoredGoogleAuth) => {
+App.tsx:11039:            deleteDriveBackupFile(picker.accessToken, file, picker.scope)
+App.tsx:11040:              .then(() => listDriveBackupSlots(picker.accessToken, picker.scope))
+App.tsx:11158:      googleDriveBackupEnabled,
+App.tsx:11196:    googleDriveBackupEnabled,
+App.tsx:11223:    const backupSlots = await listDriveBackupSlots(accessToken, scope);
+App.tsx:11249:    autoBackupStateKeyRef.current = null;
+App.tsx:11250:    autoBackupFailedStateKeyRef.current = null;
+App.tsx:11266:    setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
+App.tsx:11314:    const accessToken = await getFreshGoogleAccessToken(authOverride);
+App.tsx:11324:        await listDriveBackupSlots(accessToken, scope),
+App.tsx:11342:    getFreshGoogleAccessToken,
+App.tsx:11408:  const performGoogleDriveAction = useCallback(async (
+App.tsx:11454:    await performGoogleDriveAction('backup');
+App.tsx:11455:  }, [performGoogleDriveAction]);
+App.tsx:11458:    await performGoogleDriveAction('restore');
+App.tsx:11459:  }, [performGoogleDriveAction]);
+App.tsx:11462:    await performGoogleDriveAction('manage');
+App.tsx:11463:  }, [performGoogleDriveAction]);
+App.tsx:11466:    if (!loaded || !settingsLoaded || autoBackupStateKey === null) {
+App.tsx:11470:    if (autoBackupStateKeyRef.current === null) {
+App.tsx:11471:      autoBackupStateKeyRef.current = autoBackupStateKey;
+App.tsx:11475:    if (autoBackupStateKeyRef.current === autoBackupStateKey) {
+App.tsx:11479:    if (!googleDriveBackupEnabled) {
+App.tsx:11480:      autoBackupStateKeyRef.current = autoBackupStateKey;
+App.tsx:11481:      autoBackupFailedStateKeyRef.current = null;
+App.tsx:11489:      autoBackupInFlightRef.current ||
+App.tsx:11490:      autoBackupFailedStateKeyRef.current === autoBackupStateKey
+App.tsx:11495:    const stateKey = autoBackupStateKey;
+App.tsx:11497:      if (googleDriveBusyRef.current || autoBackupInFlightRef.current) {
+App.tsx:11501:      autoBackupInFlightRef.current = true;
+App.tsx:11503:      getFreshGoogleAccessToken()
+App.tsx:11506:          autoBackupStateKeyRef.current = stateKey;
+App.tsx:11507:          autoBackupFailedStateKeyRef.current = null;
+App.tsx:11510:          autoBackupFailedStateKeyRef.current = stateKey;
+App.tsx:11521:          autoBackupInFlightRef.current = false;
+App.tsx:11528:    autoBackupStateKey,
+App.tsx:11529:    getFreshGoogleAccessToken,
+App.tsx:11532:    googleDriveBackupEnabled,
+App.tsx:14629:                      accessibilityState={{ checked: googleDriveBackupEnabled }}
+App.tsx:14642:                        {googleDriveBackupEnabled ? 'Enabled' : 'Disabled'}
+App.tsx:14695:                        onPress={disconnectGoogleDrive}

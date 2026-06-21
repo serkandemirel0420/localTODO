@@ -1,0 +1,181 @@
+== todoDatabase migration/search ==
+38:      await ensureTodoSearchColumns(database);
+40:      await ensureTodoSearchTable(database);
+41:      await rebuildTodoSearchIndexIfNeeded(database);
+73:const ensureTodoSearchColumns = async (database: SQLite.SQLiteDatabase) => {
+177:const migrateLegacyAsyncStorage = async (database: SQLite.SQLiteDatabase) => {
+201:  await replaceAllTodos(database, todos);
+205:const ensureTodoSearchTable = async (database: SQLite.SQLiteDatabase) => {
+245:const rebuildTodoSearchIndexIfNeeded = async (database: SQLite.SQLiteDatabase) => {
+271:  await migrateLegacyAsyncStorage(database);
+272:  await rebuildTodoSearchIndexIfNeeded(database);
+296:  await migrateLegacyAsyncStorage(database);
+297:  await rebuildTodoSearchIndexIfNeeded(database);
+335:const replaceAllTodos = async (
+377:  await replaceAllTodos(database, todos);
+380:export const replaceAllTodosInDatabase = saveTodosToDatabase;
+== lifecycle/date/alarm/haptics ==
+src/haptics.ts:1:import * as Haptics from 'expo-haptics';
+src/haptics.ts:4:export const triggerSubtleHaptic = (): void => {
+src/haptics.ts:6:    ? Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Clock_Tick)
+src/haptics.ts:7:    : Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+App.tsx:16:  AppState,
+App.tsx:17:  type AppStateStatus,
+App.tsx:157:import { triggerSubtleHaptic } from './src/haptics';
+App.tsx:208:  reconcileTodoAlarms,
+App.tsx:2847:                triggerSubtleHaptic();
+App.tsx:2871:                triggerSubtleHaptic();
+App.tsx:3026:      triggerSubtleHaptic();
+App.tsx:3040:    triggerSubtleHaptic();
+App.tsx:3263:  const [dateStatusKey, setDateStatusKey] = useState(() => getDateStatusKey());
+App.tsx:3549:  const dateStatusNow = useMemo(() => new Date(), [dateStatusKey]);
+App.tsx:3597:    triggerSubtleHaptic();
+App.tsx:3620:    const refreshDateStatusOnActive = (nextState: AppStateStatus) => {
+App.tsx:3629:    const subscription = AppState.addEventListener('change', refreshDateStatusOnActive);
+App.tsx:3661:        reconcileTodoAlarms(loadedTodos).catch(() => undefined);
+App.tsx:3676:    const syncAlarmsOnActive = (nextState: AppStateStatus) => {
+App.tsx:3687:      reconcileTodoAlarms(todosRef.current).catch(() => undefined);
+App.tsx:3690:    const subscription = AppState.addEventListener('change', syncAlarmsOnActive);
+App.tsx:3927:      reconcileTodoAlarms(testTodos).catch(() => undefined);
+App.tsx:4298:    reconcileTodoAlarms(restoredTodos).catch(() => undefined);
+App.tsx:4320:    triggerSubtleHaptic();
+App.tsx:4346:    triggerSubtleHaptic();
+App.tsx:4587:    triggerSubtleHaptic();
+App.tsx:4642:    triggerSubtleHaptic();
+App.tsx:4647:    triggerSubtleHaptic();
+App.tsx:4652:    triggerSubtleHaptic();
+App.tsx:4675:    triggerSubtleHaptic();
+App.tsx:4722:    triggerSubtleHaptic();
+App.tsx:4777:        triggerSubtleHaptic();
+App.tsx:4899:    triggerSubtleHaptic();
+App.tsx:4906:    triggerSubtleHaptic();
+App.tsx:4915:    triggerSubtleHaptic();
+App.tsx:5064:      triggerSubtleHaptic();
+App.tsx:5117:      triggerSubtleHaptic();
+App.tsx:5123:      triggerSubtleHaptic();
+App.tsx:5316:    triggerSubtleHaptic();
+App.tsx:5367:    triggerSubtleHaptic();
+App.tsx:5400:    triggerSubtleHaptic();
+App.tsx:5512:    triggerSubtleHaptic();
+App.tsx:5538:      triggerSubtleHaptic();
+App.tsx:5565:    triggerSubtleHaptic();
+App.tsx:5574:    triggerSubtleHaptic();
+App.tsx:5647:    triggerSubtleHaptic();
+App.tsx:5685:    triggerSubtleHaptic();
+App.tsx:5727:    triggerSubtleHaptic();
+App.tsx:5746:      reconcileTodoAlarms(next).catch(() => undefined);
+App.tsx:5747:      triggerSubtleHaptic();
+App.tsx:5781:        triggerSubtleHaptic();
+App.tsx:5791:      reconcileTodoAlarms(next).catch(() => undefined);
+App.tsx:5792:      triggerSubtleHaptic();
+App.tsx:5820:            triggerSubtleHaptic();
+App.tsx:5913:            triggerSubtleHaptic();
+App.tsx:5931:    triggerSubtleHaptic();
+App.tsx:6049:    triggerSubtleHaptic();
+App.tsx:6114:      triggerSubtleHaptic();
+App.tsx:6142:    triggerSubtleHaptic();
+App.tsx:6171:    triggerSubtleHaptic();
+App.tsx:6179:    triggerSubtleHaptic();
+App.tsx:6192:    triggerSubtleHaptic();
+App.tsx:6203:    triggerSubtleHaptic();
+App.tsx:6212:    triggerSubtleHaptic();
+App.tsx:6236:    triggerSubtleHaptic();
+App.tsx:6241:    triggerSubtleHaptic();
+App.tsx:6252:      triggerSubtleHaptic();
+App.tsx:6273:      triggerSubtleHaptic();
+App.tsx:6294:      triggerSubtleHaptic();
+App.tsx:6309:    triggerSubtleHaptic();
+App.tsx:6320:      triggerSubtleHaptic();
+App.tsx:6350:    triggerSubtleHaptic();
+App.tsx:6381:    triggerSubtleHaptic();
+App.tsx:6388:    triggerSubtleHaptic();
+App.tsx:6421:    triggerSubtleHaptic();
+App.tsx:6434:    triggerSubtleHaptic();
+App.tsx:6446:    triggerSubtleHaptic();
+App.tsx:6462:    triggerSubtleHaptic();
+App.tsx:6477:    triggerSubtleHaptic();
+App.tsx:6496:    triggerSubtleHaptic();
+App.tsx:6514:    triggerSubtleHaptic();
+App.tsx:6594:          triggerSubtleHaptic();
+App.tsx:6599:        triggerSubtleHaptic();
+App.tsx:6650:          triggerSubtleHaptic();
+App.tsx:7050:      dateStatusKey,
+App.tsx:7063:      dateStatusKey,
+App.tsx:7226:    triggerSubtleHaptic();
+App.tsx:8002:    triggerSubtleHaptic();
+App.tsx:8033:    triggerSubtleHaptic();
+App.tsx:8144:    triggerSubtleHaptic();
+App.tsx:8226:    triggerSubtleHaptic();
+App.tsx:8254:      triggerSubtleHaptic();
+App.tsx:8277:    triggerSubtleHaptic();
+App.tsx:8306:      triggerSubtleHaptic();
+App.tsx:8335:    triggerSubtleHaptic();
+App.tsx:8375:      triggerSubtleHaptic();
+App.tsx:8400:    triggerSubtleHaptic();
+App.tsx:8439:    triggerSubtleHaptic();
+App.tsx:8471:    triggerSubtleHaptic();
+App.tsx:8519:    triggerSubtleHaptic();
+App.tsx:8547:    triggerSubtleHaptic();
+App.tsx:8559:    triggerSubtleHaptic();
+App.tsx:8597:    triggerSubtleHaptic();
+App.tsx:8613:    triggerSubtleHaptic();
+App.tsx:8637:    triggerSubtleHaptic();
+App.tsx:8727:    triggerSubtleHaptic();
+App.tsx:8734:    triggerSubtleHaptic();
+App.tsx:8740:    triggerSubtleHaptic();
+App.tsx:8746:    triggerSubtleHaptic();
+App.tsx:8780:    triggerSubtleHaptic();
+App.tsx:8828:        triggerSubtleHaptic();
+App.tsx:8833:      triggerSubtleHaptic();
+App.tsx:8868:      triggerSubtleHaptic();
+App.tsx:8893:      triggerSubtleHaptic();
+App.tsx:8904:      triggerSubtleHaptic();
+App.tsx:8948:    triggerSubtleHaptic();
+App.tsx:8986:    triggerSubtleHaptic();
+App.tsx:8999:    triggerSubtleHaptic();
+App.tsx:9012:    triggerSubtleHaptic();
+App.tsx:9292:    triggerSubtleHaptic();
+App.tsx:9315:    triggerSubtleHaptic();
+App.tsx:9461:      triggerSubtleHaptic();
+App.tsx:9573:    triggerSubtleHaptic();
+App.tsx:9605:      triggerSubtleHaptic();
+App.tsx:9636:    triggerSubtleHaptic();
+App.tsx:9669:    triggerSubtleHaptic();
+App.tsx:9679:    triggerSubtleHaptic();
+App.tsx:9730:    triggerSubtleHaptic();
+App.tsx:9823:    triggerSubtleHaptic();
+App.tsx:9898:    triggerSubtleHaptic();
+App.tsx:9978:    triggerSubtleHaptic();
+App.tsx:10072:    triggerSubtleHaptic();
+App.tsx:10084:    triggerSubtleHaptic();
+App.tsx:10110:    triggerSubtleHaptic();
+App.tsx:10189:    triggerSubtleHaptic();
+App.tsx:10218:    triggerSubtleHaptic();
+App.tsx:10244:    triggerSubtleHaptic();
+App.tsx:10281:    triggerSubtleHaptic();
+App.tsx:10409:    triggerSubtleHaptic();
+App.tsx:10511:    triggerSubtleHaptic();
+App.tsx:10565:    triggerSubtleHaptic();
+App.tsx:10637:    triggerSubtleHaptic();
+App.tsx:10653:      triggerSubtleHaptic();
+App.tsx:10723:      triggerSubtleHaptic();
+App.tsx:10770:    triggerSubtleHaptic();
+App.tsx:10836:      triggerSubtleHaptic();
+App.tsx:10859:    triggerSubtleHaptic();
+App.tsx:10877:    triggerSubtleHaptic();
+App.tsx:10896:      triggerSubtleHaptic();
+App.tsx:11014:      triggerSubtleHaptic();
+App.tsx:11061:                triggerSubtleHaptic();
+App.tsx:11187:      triggerSubtleHaptic();
+App.tsx:11254:    reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
+App.tsx:11306:    triggerSubtleHaptic();
+App.tsx:11356:      triggerSubtleHaptic();
+App.tsx:11723:    triggerSubtleHaptic();
+App.tsx:11899:                dateStatusKey={dateStatusKey}
+App.tsx:11975:                dateStatusKey={dateStatusKey}
+App.tsx:12130:                dateStatusKey={dateStatusKey}
+App.tsx:12292:                    dateStatusKey={dateStatusKey}
+App.tsx:12351:            dateStatusKey={dateStatusKey}
+App.tsx:12385:      dateStatusKey,
+App.tsx:12441:                triggerSubtleHaptic();
+App.tsx:15121:                            triggerSubtleHaptic();

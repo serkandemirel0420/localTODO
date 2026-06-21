@@ -1,0 +1,60 @@
+== selection/bulk/delete/create/detail ==
+App.tsx:55:  ReminderTimeModal,
+App.tsx:56:  type ReminderTimeModalHandle,
+App.tsx:57:  type ReminderTimeModalSource,
+App.tsx:58:} from './src/components/ReminderTimeModal';
+App.tsx:59:import { RepeatReminderModal } from './src/components/RepeatReminderModal';
+App.tsx:3267:  const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
+App.tsx:3268:  const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
+App.tsx:3290:  const [activeTodoDetailDraftTags, setActiveTodoDetailDraftTags] = useState<string[]>([]);
+App.tsx:4607:  const enterTodoSelectMode = useCallback((id: string) => {
+App.tsx:4619:  const toggleTodoSelection = useCallback((id: string) => {
+App.tsx:4959:    setRepeatReminderModalVisible(false);
+App.tsx:4974:    setRepeatReminderModalVisible(false);
+App.tsx:5010:    setRepeatReminderModalVisible(false);
+App.tsx:5074:      setRepeatReminderModalVisible(false);
+App.tsx:5362:    setRepeatReminderModalVisible(false);
+App.tsx:5377:  const openCreateDrawerFromTodoSettings = useCallback((sourceTodo: Todo) => {
+App.tsx:5395:    setRepeatReminderModalVisible(false);
+App.tsx:5572:    setRepeatReminderModalVisible(false);
+App.tsx:5888:  const deleteSelectedTodos = useCallback(() => {
+App.tsx:5920:  const markSelectedTodosDone = useCallback((done: boolean) => {
+App.tsx:6190:    setRepeatReminderModalVisible(false);
+App.tsx:6354:    source: ReminderTimeModalSource,
+App.tsx:6387:    setRepeatReminderModalVisible(true);
+App.tsx:6392:    setRepeatReminderModalVisible(false);
+App.tsx:6420:    setRepeatReminderModalVisible(false);
+App.tsx:6476:    setRepeatReminderModalVisible(true);
+App.tsx:7171:  const activeTodoDetailDraftTagsForSave = useMemo(
+App.tsx:7172:    () => normalizeTodoTags(activeTodoDetailDraftTags),
+App.tsx:7173:    [activeTodoDetailDraftTags],
+App.tsx:7181:        !filterValueListsEqual(activeTodoDetail.tags, activeTodoDetailDraftTagsForSave)
+App.tsx:7190:  const saveActiveTodoDetail = useCallback(() => {
+App.tsx:7199:      tags: activeTodoDetailDraftTagsForSave,
+App.tsx:7232:    activeTodoDetailDraftTagsForSave,
+App.tsx:11913:                onCreateFromSettings={openCreateDrawerFromTodoSettings}
+App.tsx:11916:                onEnterSelectMode={enterTodoSelectMode}
+App.tsx:11921:                onToggleSelect={toggleTodoSelection}
+App.tsx:11989:                onCreateFromSettings={openCreateDrawerFromTodoSettings}
+App.tsx:11992:                onEnterSelectMode={enterTodoSelectMode}
+App.tsx:11997:                onToggleSelect={toggleTodoSelection}
+App.tsx:12144:                onCreateFromSettings={openCreateDrawerFromTodoSettings}
+App.tsx:12147:                onEnterSelectMode={enterTodoSelectMode}
+App.tsx:12152:                onToggleSelect={toggleTodoSelection}
+App.tsx:12307:                    onCreateFromSettings={openCreateDrawerFromTodoSettings}
+App.tsx:12310:                    onEnterSelectMode={enterTodoSelectMode}
+App.tsx:12315:                    onToggleSelect={toggleTodoSelection}
+App.tsx:12364:            onCreateFromSettings={openCreateDrawerFromTodoSettings}
+App.tsx:12367:            onEnterSelectMode={enterTodoSelectMode}
+App.tsx:12372:            onToggleSelect={toggleTodoSelection}
+App.tsx:12389:      enterTodoSelectMode,
+App.tsx:12400:      openCreateDrawerFromTodoSettings,
+App.tsx:12416:      toggleTodoSelection,
+App.tsx:12466:                onPress={() => markSelectedTodosDone(!selectedTodosAllDone)}
+App.tsx:12481:                onPress={deleteSelectedTodos}
+App.tsx:13010:                                  onPress={deleteSelectedTodos}
+App.tsx:13798:                  onPress={activeTodoDetailHasChanges ? saveActiveTodoDetail : closeTodoDetailModal}
+App.tsx:13851:                {availableTodoTags.length > 0 || activeTodoDetailDraftTags.length > 0 ? (
+App.tsx:13854:                      const selected = activeTodoDetailDraftTags.some(
+App.tsx:14379:        <ReminderTimeModal
+App.tsx:14384:        <RepeatReminderModal

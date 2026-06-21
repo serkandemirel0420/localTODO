@@ -1,0 +1,18 @@
+0|id|TEXT|1||1
+1|content|TEXT|1|''|0
+2|content_search|TEXT|1|''|0
+3|tags_json|TEXT|1|'[]'|0
+4|tags_search|TEXT|1|''|0
+5|text|TEXT|1||0
+6|text_search|TEXT|1|''|0
+7|done|INTEGER|1||0
+8|pinned|INTEGER|1|0|0
+9|created_at|INTEGER|1||0
+10|filters_json|TEXT|1||0
+65
+65
+1782074779870-raqxsl0gvh|QA_created_001|0|0|{"date":["2026-06-21"],"list":["Inbox"],"priority":[],"reminder":[],"tag":[]}
+dev-test-18|Included priority then date medium|0|0|{"date":["2026-06-22"],"list":["Client"],"priority":["Medium"],"reminder":[],"tag":[]}
+dev-test-17|Included priority then date high|0|0|{"date":["2026-06-27"],"list":["Focus"],"priority":["High"],"reminder":[],"tag":[]}
+dev-test-16|Someday excluded low|0|0|{"date":["Later"],"list":["Someday"],"priority":["Low"],"reminder":[],"tag":[]}
+dev-test-15|Archive excluded medium|0|0|{"date":["2026-06-26"],"list":["Archive"],"priority":["Medium"],"reminder":[],"tag":[]}

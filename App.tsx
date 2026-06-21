@@ -7700,6 +7700,13 @@ export default function App() {
       return [
         ...(pinActionRow ? [pinActionRow] : []),
         {
+          id: 'main-presets',
+          label: 'Saved lists',
+          menuMode: 'presets',
+          type: 'menu',
+          valueLabel: formatPresetCount(menuPresets.length, 'list'),
+        },
+        {
           count: menuFilters.list.length || undefined,
           id: 'main-lists',
           label: 'Lists',
@@ -7741,6 +7748,13 @@ export default function App() {
 
     const rows: MenuRow[] = [
       ...(pinActionRow ? [pinActionRow] : []),
+      {
+        id: 'main-presets',
+        label: 'Saved lists',
+        menuMode: 'presets',
+        type: 'menu',
+        valueLabel: formatPresetCount(menuPresets.length, 'list'),
+      },
       {
         count: (menuFilters.list.length + menuAvoidedFilters.list.length) || undefined,
         id: 'main-lists',

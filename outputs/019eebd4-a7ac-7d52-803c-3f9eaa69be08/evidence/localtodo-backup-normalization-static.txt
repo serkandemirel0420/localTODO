@@ -1,0 +1,328 @@
+
+    if (slot.file) {
+      filesToPrune.set(slot.file.id, slot.file);
+    }
+  }
+
+  return {
+    filesToPrune: [...filesToPrune.values()],
+    targetSlot,
+  };
+};
+
+export const createBackupPayload = (
+  todos: Todo[],
+  settings: BackupSettings,
+): LocalTodoBackup => {
+  const exportedAt = new Date().toISOString();
+
+  return {
+    app: 'localTODO',
+    exportedAt,
+    schemaVersion: 1,
+    settings: {
+      collapsedTodoGroupIds: [...settings.collapsedTodoGroupIds],
+      customTags: normalizeTodoTags(settings.customTags),
+      dateLabelDisplayMode: settings.dateLabelDisplayMode,
+      deletedTodos: cloneDeletedTodos(settings.deletedTodos),
+      filterConfigUiState: cloneFilterConfigUiState(settings.filterConfigUiState),
+      filterColors: cloneFilterColors(settings.filterColors),
+      googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
+      googleDriveLastBackupAt: exportedAt,
+      googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
+      hideDoneTodos: settings.hideDoneTodos,
+      lastCreateTodoFilters: cloneTodoFilters(settings.lastCreateTodoFilters),
+      listMenuTree: cloneListMenuTree(settings.listMenuTree),
+      listOrderMode: settings.listOrderMode,
+      menuPresets: cloneMenuPresets(settings.menuPresets),
+      metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
+      quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
+      quickPresetNavIconNames: cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames),
+      quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
+      avoidedFilters: cloneTodoFilters(settings.avoidedFilters),
+      requiredFilters: pruneTodoFilters(settings.requiredFilters, settings.selectedFilters),
+      selectedFilters: cloneTodoFilters(settings.selectedFilters),
+      showOverdueMetaTags: settings.showOverdueMetaTags,
+      todoGroupMode: settings.todoGroupMode,
+      todoSortMode: settings.todoSortMode,
+    },
+    todos,
+  };
+};
+
+export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null => {
+  if (!isRecord(value) || !Array.isArray(value.todos)) {
+    return null;
+  }
+
+  const todos = value.todos.map(normalizeTodo).filter((todo): todo is Todo => Boolean(todo));
+  const settings = isRecord(value.settings) ? value.settings : {};
+  const normalizedQuickPresetNavPresetIds = normalizeQuickPresetNavPresetIds(
+    settings.quickPresetNavPresetIds,
+  );
+  const quickPresetDefaults = ensureQuickPresetDefaults(
+    normalizeBackupMenuPresets(settings.menuPresets),
+    normalizedQuickPresetNavPresetIds,
+    normalizeQuickPresetNavIconNames(
+      settings.quickPresetNavIconNames,
+      normalizedQuickPresetNavPresetIds.length || undefined,
+    ),
+    typeof settings.quickPresetDefaultsVersion === 'number'
+      ? settings.quickPresetDefaultsVersion
+      : 0,
+  );
+  const selectedFilters = normalizeTodoFilters(settings.selectedFilters);
+
+  return {
+    app: 'localTODO',
+    exportedAt: typeof value.exportedAt === 'string' ? value.exportedAt : new Date().toISOString(),
+    schemaVersion: 1,
+    settings: {
+      collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(settings.collapsedTodoGroupIds),
+      customTags: normalizeTodoTags(settings.customTags),
+      dateLabelDisplayMode: normalizeDateLabelDisplayMode(settings.dateLabelDisplayMode),
+      deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
+      filterConfigUiState: normalizeFilterConfigUiState(settings.filterConfigUiState),
+      filterColors: normalizeFilterColors(settings.filterColors),
+      googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,
+      googleDriveLastBackupAt:
+        typeof settings.googleDriveLastBackupAt === 'string' ? settings.googleDriveLastBackupAt : null,
+      googleDriveLastRestoreAt:
+        typeof settings.googleDriveLastRestoreAt === 'string' ? settings.googleDriveLastRestoreAt : null,
+      hideDoneTodos: settings.hideDoneTodos === true,
+      lastCreateTodoFilters: normalizeTodoFilters(settings.lastCreateTodoFilters),
+      listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
+      listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
+      menuPresets: quickPresetDefaults.menuPresets,
+      metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
+      quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
+      quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
+      quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,
+      avoidedFilters: normalizeTodoFilters(settings.avoidedFilters),
+      requiredFilters: pruneTodoFilters(normalizeTodoFilters(settings.requiredFilters), selectedFilters),
+      selectedFilters,
+      showOverdueMetaTags: settings.showOverdueMetaTags !== false,
+      todoGroupMode: normalizeBackupTodoGroupMode(settings.todoGroupMode),
+      todoSortMode: normalizeBackupTodoSortMode(settings.todoSortMode),
+    },
+    todos,
+  };
+};
+
+export const listDriveBackupFiles = async (
+  accessToken: string,
+  scope: DriveBackupScope = 'main',
+) => {
+  const files: DriveBackupFile[] = [];
+  let pageToken: string | undefined;
+  const legacyBackupFileName = getLegacyBackupFileName(scope);
+  const legacyBackupFileNamePrefix = getLegacyBackupFileNamePrefix(scope);
+  const slotBackupFileNamePrefix = `${getBackupFileBasename()}-slot-`;
+
+  do {
+    const params = new URLSearchParams({
+      fields: 'nextPageToken,files(id,name,modifiedTime,size)',
+      orderBy: 'modifiedTime desc',
+      pageSize: '100',
+      pageSize: '100',
+      q: [
+        '(',
+        `name='${escapeDriveQueryString(legacyBackupFileName)}'`,
+        ' or ',
+        `name contains '${escapeDriveQueryString(legacyBackupFileNamePrefix)}'`,
+        ' or ',
+        `name contains '${escapeDriveQueryString(slotBackupFileNamePrefix)}'`,
+        ') and trashed=false',
+      ].join(''),
+      spaces: 'appDataFolder',
+    });
+
+    if (pageToken) {
+      params.set('pageToken', pageToken);
+    }
+
+    const response = await driveFetch(
+      `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+      accessToken,
+    );
+    const parsed = (await response.json()) as unknown;
+
+    if (!isRecord(parsed) || !Array.isArray(parsed.files)) {
+      return files;
+    }
+
+    parsed.files
+      .map(parseDriveFile)
+      .filter((file): file is DriveBackupFile => Boolean(file))
+      .filter((file) => (
+        file.name === legacyBackupFileName ||
+        file.name.startsWith(legacyBackupFileNamePrefix) ||
+        file.name.startsWith(slotBackupFileNamePrefix)
+      ))
+      .forEach((file) => {
+        files.push(file);
+      });
+
+    pageToken = typeof parsed.nextPageToken === 'string' ? parsed.nextPageToken : undefined;
+  } while (pageToken);
+
+  return files;
+};
+
+export const listDriveBackupSlots = async (
+  accessToken: string,
+  scope: DriveBackupScope = 'main',
+): Promise<DriveBackupSlot[]> => {
+  const files = await listDriveBackupFiles(accessToken, scope);
+  const filesBySlot = new Map<number, DriveBackupFile>();
+  let newestLegacyFile: DriveBackupFile | null = null;
+
+  files.forEach((file) => {
+    const slot = parseBackupSlotFromFileName(file.name, scope);
+    if (slot) {
+      if (!filesBySlot.has(slot)) {
+        filesBySlot.set(slot, file);
+      }
+      return;
+    }
+
+    if (!newestLegacyFile) {
+      newestLegacyFile = file;
+    }
+  });
+
+  // Older app versions had one rolling backup or timestamped backups. Show the
+  // newest legacy file in slot 1 so users can still restore it after upgrading.
+  if (!filesBySlot.has(1) && newestLegacyFile) {
+    filesBySlot.set(1, newestLegacyFile);
+  }
+
+  const filledSlots = [...filesBySlot.keys()].sort((first, second) => first - second);
+  const nextEmptySlot = getNextEmptyBackupSlot(filledSlots);
+  const slots = filledSlots.map((slot) => ({
+    file: filesBySlot.get(slot) ?? null,
+    slot,
+  }));
+
+  if (nextEmptySlot !== null) {
+    slots.push({
+      file: null,
+      slot: nextEmptySlot,
+    });
+  }
+
+  return slots.sort(compareBackupSlotNewestFirst);
+};
+
+export const findDriveBackupFile = async (
+  accessToken: string,
+  scope: DriveBackupScope = 'main',
+) => {
+  const slots = await listDriveBackupSlots(accessToken, scope);
+  const firstFilledSlot = slots.find((slot) => slot.file);
+
+  return firstFilledSlot?.file ?? null;
+};
+
+const createMultipartBody = (metadata: Record<string, unknown>, payload: LocalTodoBackup) => {
+  const boundary = `localtodo-${Date.now().toString(36)}`;
+  const body = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    `Content-Type: ${BACKUP_MIME_TYPE}; charset=UTF-8`,
+    '',
+    JSON.stringify(payload),
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
+
+  return { body, boundary };
+};
+
+export const uploadDriveBackup = async (
+  accessToken: string,
+  payload: LocalTodoBackup,
+  target?: DriveBackupUploadTarget,
+  scope: DriveBackupScope = 'main',
+): Promise<DriveUploadResult> => {
+  const uploadPlan = target
+    ? { filesToPrune: [], targetSlot: target.slot.slot }
+    : getNextBackupUploadPlan(await listDriveBackupSlots(accessToken, scope));
+  const targetSlot = uploadPlan.targetSlot;
+  const existingFile = target ? target.slot.file : null;
+  const backupFileName = getBackupSlotFileName(scope, targetSlot);
+  const metadata = existingFile
+    ? { mimeType: BACKUP_MIME_TYPE, name: backupFileName }
+    : { mimeType: BACKUP_MIME_TYPE, name: backupFileName, parents: ['appDataFolder'] };
+  const { body, boundary } = createMultipartBody(metadata, payload);
+  const params = new URLSearchParams({
+    fields: 'id,name,modifiedTime,size',
+    uploadType: 'multipart',
+  });
+  const url = existingFile
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?${params.toString()}`
+    : `https://www.googleapis.com/upload/drive/v3/files?${params.toString()}`;
+  const response = await driveFetch(url, accessToken, {
+    body,
+    headers: {
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    method: existingFile ? 'PATCH' : 'POST',
+  });
+  const file = parseDriveFile((await response.json()) as unknown);
+
+  if (!file) {
+    throw new Error('Google Drive returned an invalid backup file response.');
+  }
+
+  await Promise.all(
+    uploadPlan.filesToPrune.map((backupFile) => deleteDriveBackupFile(accessToken, backupFile, scope)),
+  );
+
+  return {
+    file,
+    uploadedAt: payload.exportedAt,
+  };
+};
+
+export const deleteDriveBackupFile = async (
+  accessToken: string,
+  backupFile: DriveBackupFile,
+  _scope: DriveBackupScope = 'main',
+) => {
+  await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupFile.id)}`,
+    accessToken,
+    { method: 'DELETE' },
+  );
+};
+
+export const downloadDriveBackup = async (
+  accessToken: string,
+  backupFile?: DriveBackupFile,
+  scope: DriveBackupScope = 'main',
+) => {
+  const file = backupFile ?? await findDriveBackupFile(accessToken, scope);
+
+  if (!file) {
+    return null;
+  }
+
+  const response = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+    accessToken,
+  );
+  const payload = normalizeBackupPayload((await response.json()) as unknown);
+
+  if (!payload) {
+    throw new Error('Google Drive backup file is not a valid Local Todo backup.');
+  }
+
+  return {
+    file,
+    payload,
+  };
+};

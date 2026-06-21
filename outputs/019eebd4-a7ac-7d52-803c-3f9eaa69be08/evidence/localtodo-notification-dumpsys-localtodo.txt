@@ -1,0 +1,24 @@
+140-      AppSettings: com.google.android.apps.wellbeing (10092)
+141-        NotificationChannel{mId='discovery_notifications', mName=Suggested features, mDescription=, mImportance=2, mBypassDnd=false, mLockscreenVisibility=-1000, mSound=null, mLights=false, mLightColor=0, mVibration=null, mUserLockedFields=0, mFgServiceShown=false, mVibrationEnabled=false, mShowBadge=true, mDeleted=false, mDeletedTimeMs=-1, mGroup='null', mAudioAttributes=AudioAttributes: usage=USAGE_NOTIFICATION content=CONTENT_TYPE_SONIFICATION flags=0x800 tags= bundle=null, mBlockableSystem=false, mAllowBubbles=-1, mImportanceLockedByOEM=false, mImportanceLockedDefaultApp=false, mOriginalImp=2, mParent=null, mConversationId=null, mDemoted=false, mImportantConvo=false}
+142-        NotificationChannel{mId='app_limit_updates', mName=Updates, mDescription=, mImportance=2, mBypassDnd=false, mLockscreenVisibility=-1000, mSound=content://settings/system/notification_sound, mLights=false, mLightColor=0, mVibration=null, mUserLockedFields=0, mFgServiceShown=true, mVibrationEnabled=false, mShowBadge=true, mDeleted=false, mDeletedTimeMs=-1, mGroup='null', mAudioAttributes=AudioAttributes: usage=USAGE_NOTIFICATION content=CONTENT_TYPE_SONIFICATION flags=0x800 tags= bundle=null, mBlockableSystem=false, mAllowBubbles=-1, mImportanceLockedByOEM=false, mImportanceLockedDefaultApp=false, mOriginalImp=2, mParent=null, mConversationId=null, mDemoted=false, mImportantConvo=false}
+143:      AppSettings: com.localtodo.app.dev (10151)
+144:        NotificationChannel{mId='todo-alarms', mName=Todo alarms, mDescription=, mImportance=4, mBypassDnd=false, mLockscreenVisibility=-1000, mSound=content://settings/system/notification_sound, mLights=false, mLightColor=0, mVibration=null, mUserLockedFields=0, mFgServiceShown=false, mVibrationEnabled=true, mShowBadge=true, mDeleted=false, mDeletedTimeMs=-1, mGroup='null', mAudioAttributes=null, mBlockableSystem=false, mAllowBubbles=-1, mImportanceLockedByOEM=false, mImportanceLockedDefaultApp=false, mOriginalImp=4, mParent=null, mConversationId=null, mDemoted=false, mImportantConvo=false}
+145-      AppSettings: com.android.mtp (10058)
+146-        NotificationChannel{mId='device_notification_channel', mName=Uncategorized, mDescription=, mImportance=2, mBypassDnd=false, mLockscreenVisibility=-1000, mSound=content://settings/system/notification_sound, mLights=false, mLightColor=0, mVibration=null, mUserLockedFields=0, mFgServiceShown=false, mVibrationEnabled=false, mShowBadge=true, mDeleted=false, mDeletedTimeMs=-1, mGroup='null', mAudioAttributes=AudioAttributes: usage=USAGE_NOTIFICATION content=CONTENT_TYPE_SONIFICATION flags=0x800 tags= bundle=null, mBlockableSystem=false, mAllowBubbles=-1, mImportanceLockedByOEM=false, mImportanceLockedDefaultApp=false, mOriginalImp=2, mParent=null, mConversationId=null, mDemoted=false, mImportantConvo=false}
+147-      AppSettings: com.android.printspooler (10086)
+--
+263-    06-21 23:34:14.845 set_zen_mode: off,zmc.onServiceAdded:ComponentInfo{com.google.android.apps.wellbeing/com.google.android.apps.wellbeing.dnd.impl.DndConditionProviderService}
+264-    06-21 23:34:49.317 config: zmc.onServiceAdded:ComponentInfo{com.google.android.gms/com.google.android.location.settings.DrivingConditionProvider} no changes
+265-    06-21 23:34:49.398 set_zen_mode: off,zmc.onServiceAdded:ComponentInfo{com.google.android.gms/com.google.android.location.settings.DrivingConditionProvider}
+266:    06-21 23:35:42.103 config: com.localtodo.app.dev|removeAutomaticZenRules no changes
+267:    06-21 23:35:42.108 set_zen_mode: off,com.localtodo.app.dev|removeAutomaticZenRules
+268-
+269-  Condition providers:
+270-    Allowed condition providers:
+271-      com.google.android.apps.safetyhub:com.google.intelligence.sense:com.google.android.apps.wellbeing:com.google.android.dialer:com.google.android.gms:com.google.android.settings.intelligence:com.google.android.GoogleCamera (user: 0 isPrimary: true)
+272-      com.google.android.apps.nexuslauncher (user: 0 isPrimary: false)
+273-    Has user set:
+274:      userId=0 value={com.google.android.apps.safetyhub, com.google.intelligence.sense, com.google.android.apps.wellbeing, com.google.android.dialer, com.google.android.gms, com.google.android.apps.nexuslauncher, com.localtodo.app.dev, com.google.android.settings.intelligence, com.google.android.GoogleCamera}
+275-    All condition providers (2) enabled for current profiles:
+276-      ComponentInfo{com.google.android.gms/com.google.android.location.settings.DrivingConditionProvider}
+277-      ComponentInfo{com.google.android.apps.wellbeing/com.google.android.apps.wellbeing.dnd.impl.DndConditionProviderService}

@@ -112,7 +112,7 @@ const getTodoListGroupForLabel = (
       return parent.children?.length
         ? createListGroup(
           `${parent.label}::${NOT_SECTIONED_LABEL}`,
-          NOT_SECTIONED_LABEL,
+          parent.label,
           orderedListLabels,
           parent.label,
         )
@@ -158,7 +158,7 @@ export const collectListGroupsFromMenuTree = (
 
     addGroup(createListGroup(
       `${parent.label}::${NOT_SECTIONED_LABEL}`,
-      NOT_SECTIONED_LABEL,
+      parent.label,
       orderedListLabels,
       parent.label,
     ));
@@ -204,7 +204,7 @@ const collectListGroupsForLabels = (
 
     addGroup(createListGroup(
       `${node.label}::${NOT_SECTIONED_LABEL}`,
-      NOT_SECTIONED_LABEL,
+      node.label,
       orderedListLabels,
       node.label,
     ));

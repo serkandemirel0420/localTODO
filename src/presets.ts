@@ -64,22 +64,6 @@ export const createQuickListPreset = (
 export const isListScopedPreset = (preset: StoredMenuPreset | null | undefined) =>
   Boolean(preset && preset.filters.list.length > 0);
 
-// If the user has saved a preset named exactly like a navbar list label, prefer
-// it over the generated shortcut so their custom board/sort/group choices win.
-export const buildMenuPresetByListLabel = (menuPresets: StoredMenuPreset[]) => {
-  const presetsByLabel = new Map<string, StoredMenuPreset>();
-
-  menuPresets.forEach((preset) => {
-    const normalizedLabel = normalizeQuickListPresetLabel(preset.label);
-
-    if (normalizedLabel) {
-      presetsByLabel.set(normalizedLabel, preset);
-    }
-  });
-
-  return presetsByLabel;
-};
-
 export const getQuickPresetNavSlotLimit = (
   listMenuTree: StoredListMenuNode[],
   menuPresets: StoredMenuPreset[],
@@ -107,7 +91,7 @@ export const resolveQuickPresetNavSlotIconName = (
   ] ?? 'star-four-points';
 
   return resolveMaterialCommunityIconName(
-    listAtSettingsIndex?.iconName ?? quickPresetNavIconName,
+    quickPresetNavIconName ?? listAtSettingsIndex?.iconName,
     fallbackIconName,
   );
 };
@@ -116,7 +100,6 @@ export const buildQuickPresetNavItems = ({
   listMenuTree,
   listOrderMode,
   menuPresetById,
-  menuPresetByListLabel,
   menuPresets,
   quickPresetNavIconNames,
   quickPresetNavPresetIds,
@@ -124,7 +107,6 @@ export const buildQuickPresetNavItems = ({
   listMenuTree: StoredListMenuNode[];
   listOrderMode: ListOrderMode;
   menuPresetById: Map<string, StoredMenuPreset>;
-  menuPresetByListLabel: Map<string, StoredMenuPreset>;
   menuPresets: StoredMenuPreset[];
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
@@ -159,20 +141,18 @@ export const buildQuickPresetNavItems = ({
     }
 
     const explicitPreset = explicitPresetId ? menuPresetById.get(explicitPresetId) ?? null : null;
-    const normalizedListLabel = list ? normalizeQuickListPresetLabel(list.label) : '';
     const listPreset = list
-      ? menuPresetByListLabel.get(normalizedListLabel)
-        ?? createQuickListPreset(list, listOrderMode)
+      ? createQuickListPreset(list, listOrderMode)
       : null;
     const automaticPreset = usesAutomaticSlots && !listPreset ? menuPresets[index] ?? null : null;
     const preset = explicitPreset ?? listPreset ?? automaticPreset;
 
     items.push({
-      displayLabel: list?.label ?? preset?.label ?? '',
+      displayLabel: explicitPreset?.label ?? list?.label ?? preset?.label ?? '',
       iconName: resolveQuickPresetNavSlotIconName(
         index,
         listMenuTree,
-        usesAutomaticSlots ? undefined : quickPresetNavIconNames[index],
+        quickPresetNavIconNames[index],
       ),
       id: `quick-preset-slot-${index + 1}`,
       navIndex: index,

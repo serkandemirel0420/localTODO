@@ -183,7 +183,6 @@ import {
   type TodoSortMode,
 } from './src/storage/appSettingsStore';
 import {
-  buildMenuPresetByListLabel,
   buildQuickPresetNavItems,
   getQuickListPresetId,
   isListScopedPreset,
@@ -1914,12 +1913,8 @@ const renameListLabelInPreset = (
   oldLabel: string,
   newLabel: string,
 ): MenuPreset => {
-  const presetLabelMatchesList =
-    normalizeQuickListPresetLabel(preset.label) === normalizeQuickListPresetLabel(oldLabel);
-
   return {
     ...preset,
-    label: presetLabelMatchesList ? newLabel : preset.label,
     filters: renameListLabelInFilters(preset.filters, oldLabel, newLabel),
     requiredFilters: renameListLabelInFilters(preset.requiredFilters, oldLabel, newLabel),
     avoidedFilters: renameListLabelInFilters(preset.avoidedFilters, oldLabel, newLabel),
@@ -2638,8 +2633,9 @@ type SettingsListSwipeRowProps = {
   listIconName?: string;
   onDelete?: () => void;
   onIconPress: () => void;
-  onMainPress: () => void;
+  onMainPress?: () => void;
   onPinPress?: () => void;
+  mainPressDisabled?: boolean;
   showInNavbar?: boolean;
 };
 
@@ -2653,9 +2649,11 @@ function SettingsListSwipeRow({
   onIconPress,
   onMainPress,
   onPinPress,
+  mainPressDisabled,
   showInNavbar,
 }: SettingsListSwipeRowProps) {
   const renderedIconName = resolveMaterialCommunityIconName(listIconName, 'paw');
+  const mainPressLocked = mainPressDisabled || !onMainPress;
   const renderRightActions = useCallback(
     () => (allowDelete && onDelete ? (
       <View style={styles.settingsListSwipeActions}>
@@ -2709,12 +2707,18 @@ function SettingsListSwipeRow({
             ) : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Tap to edit list name and search keywords."
+              accessibilityHint={
+                mainPressLocked
+                  ? 'Edit this list name from the List section.'
+                  : 'Tap to edit list name and search keywords.'
+              }
               accessibilityLabel={label}
+              accessibilityState={{ disabled: mainPressLocked }}
+              disabled={mainPressLocked}
               onPress={onMainPress}
               style={({ pressed }) => [
                 styles.settingsListMainPress,
-                pressed && styles.settingsListRowPressed,
+                !mainPressLocked && pressed && styles.settingsListRowPressed,
               ]}
             >
               <Text
@@ -2766,8 +2770,9 @@ type SettingsListReorderRowProps = {
   item: ListMenuNode;
   onDelete?: () => void;
   onIconPickerChange: (index: number | null) => void;
-  onMainPress: () => void;
+  onMainPress?: () => void;
   onPinPress?: () => void;
+  mainPressDisabled?: boolean;
   onReorderHandlePress: (index: number) => void;
   onSetIcon: (index: number, iconName: string | null) => void;
 };
@@ -2784,6 +2789,7 @@ function SettingsListReorderRow({
   onIconPickerChange,
   onMainPress,
   onPinPress,
+  mainPressDisabled,
   onReorderHandlePress,
   onSetIcon,
 }: SettingsListReorderRowProps) {
@@ -2832,6 +2838,7 @@ function SettingsListReorderRow({
                 onIconPickerChange(isIconPickerOpen ? null : index);
                 triggerSubtleHaptic();
               }}
+              mainPressDisabled={mainPressDisabled}
               onMainPress={onMainPress}
               onPinPress={onPinPress}
               showInNavbar={showInNavbar}
@@ -2931,8 +2938,9 @@ type SettingsListEditorProps = {
   items: ListMenuNode[];
   onDelete?: (index: number) => void;
   onIconPickerChange: (index: number | null) => void;
-  onMainPress: (index: number) => void;
+  onMainPress?: (index: number) => void;
   onPinPress?: (index: number) => void;
+  mainPressDisabled?: boolean;
   onSetIcon: (index: number, iconName: string | null) => void;
   onSwap?: (fromIndex: number, toIndex: number) => void;
   reorderCancelNonce: number;
@@ -2949,6 +2957,7 @@ function SettingsListEditor({
   onIconPickerChange,
   onMainPress,
   onPinPress,
+  mainPressDisabled = false,
   onSetIcon,
   onSwap,
   reorderCancelNonce,
@@ -3036,7 +3045,7 @@ function SettingsListEditor({
         <MemoizedSettingsListReorderRow
           allowDelete={allowDelete}
           allowIconEdit={allowIconEdit}
-          key={item.label}
+          key={`${index}-${item.label}`}
           canReorder={canReorder}
           iconPickerIndex={iconPickerIndex}
           index={index}
@@ -3045,9 +3054,10 @@ function SettingsListEditor({
             || swapFlashIndices.includes(index)
           }
           item={item}
+          mainPressDisabled={mainPressDisabled}
           onDelete={onDelete ? () => onDelete(index) : undefined}
           onIconPickerChange={onIconPickerChange}
-          onMainPress={() => onMainPress(index)}
+          onMainPress={onMainPress ? () => onMainPress(index) : undefined}
           onPinPress={onPinPress ? () => onPinPress(index) : undefined}
           onReorderHandlePress={handleReorderHandlePress}
           onSetIcon={onSetIcon}
@@ -6802,10 +6812,6 @@ export default function App() {
     () => new Map(menuPresets.map((preset) => [preset.id, preset])),
     [menuPresets],
   );
-  const menuPresetByListLabel = useMemo(
-    () => buildMenuPresetByListLabel(menuPresets),
-    [menuPresets],
-  );
   const searchKeywordEditTitle = useMemo(() => {
     if (!searchKeywordEditTarget || searchKeywordEditTarget.kind === 'list') {
       return '';
@@ -6841,7 +6847,6 @@ export default function App() {
       listMenuTree,
       listOrderMode,
       menuPresetById,
-      menuPresetByListLabel,
       menuPresets,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
@@ -6850,11 +6855,32 @@ export default function App() {
       listMenuTree,
       listOrderMode,
       menuPresetById,
-      menuPresetByListLabel,
       menuPresets,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
     ],
+  );
+  const quickPresetNavItemByNavIndex = useMemo(() => {
+    const itemsByIndex = new Map<number, QuickPresetNavItem>();
+    quickPresetNavItems.forEach((item) => {
+      itemsByIndex.set(item.navIndex, item);
+    });
+    return itemsByIndex;
+  }, [quickPresetNavItems]);
+  const settingsNavbarItems = useMemo(
+    () => listMenuTree.map((item, index) => {
+      const navItem = quickPresetNavItemByNavIndex.get(index);
+      if (!navItem) {
+        return item;
+      }
+
+      return {
+        ...item,
+        iconName: navItem.iconName,
+        label: navItem.displayLabel || item.label,
+      };
+    }),
+    [listMenuTree, quickPresetNavItemByNavIndex],
   );
   const quickPresetNavVirtualPresetById = useMemo(() => {
     const presetsById = new Map<string, MenuPreset>();
@@ -10040,6 +10066,41 @@ export default function App() {
     });
     triggerSubtleHaptic();
   }, [persistListMenuTree, recordUndo]);
+
+  const setSettingsNavbarIcon = useCallback((index: number, iconName: string | null) => {
+    if (!listMenuTreeRef.current[index]) {
+      return;
+    }
+
+    const defaultIconName = DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+      index % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+    ] ?? 'star-four-points';
+    const nextIconName = iconName ?? defaultIconName;
+    if (quickPresetNavIconNamesRef.current[index] === nextIconName) {
+      return;
+    }
+
+    recordUndo('Change navbar icon');
+    const nextLength = Math.max(
+      quickPresetNavIconNamesRef.current.length,
+      listMenuTreeRef.current.length,
+      index + 1,
+    );
+    const nextIconNames = Array.from({ length: nextLength }, (_, itemIndex) => (
+      quickPresetNavIconNamesRef.current[itemIndex]
+      ?? DEFAULT_QUICK_PRESET_NAV_ICON_NAMES[
+        itemIndex % DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length
+      ]
+      ?? 'star-four-points'
+    ));
+    nextIconNames[index] = nextIconName;
+    const normalizedIconNames = cloneQuickPresetNavIconNames(nextIconNames);
+
+    quickPresetNavIconNamesRef.current = normalizedIconNames;
+    setQuickPresetNavIconNames(normalizedIconNames);
+    void persistAppSettings({ quickPresetNavIconNames: normalizedIconNames });
+    triggerSubtleHaptic();
+  }, [persistAppSettings, recordUndo]);
 
   const toggleSettingsListNavbarPinned = useCallback((index: number) => {
     if (!listMenuTreeRef.current[index]) {
@@ -14492,13 +14553,13 @@ export default function App() {
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Presets</Text>
+                    <Text style={styles.settingsSectionTitle}>Navbar</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       {settingsNavbarPinnedListCount} in navbar · {listMenuTree.length} lists
                     </Text>
                   </View>
                   <Pressable
-                    accessibilityLabel={`${settingsPresetsExpanded ? 'Collapse' : 'Expand'} Presets section`}
+                    accessibilityLabel={`${settingsPresetsExpanded ? 'Collapse' : 'Expand'} Navbar section`}
                     accessibilityRole="button"
                     accessibilityState={{ expanded: settingsPresetsExpanded }}
                     hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
@@ -14523,23 +14584,23 @@ export default function App() {
                   <View style={styles.settingsCard}>
                     <Text style={[styles.settingsListReorderHint, styles.settingsListReorderHintFirst]}>
                       {listMenuTree.length > 1
-                        ? 'Tap the handle on one preset, then another to swap navbar order. Pin to show in navbar.'
+                        ? 'Tap the handle on one navbar item, then another to swap navbar order. Pin to show in navbar.'
                         : 'Pin to show in navbar.'}
                     </Text>
 
                     <MemoizedSettingsListEditor
                       allowDelete={false}
                       iconPickerIndex={settingsPresetIconPickerIndex}
-                      items={listMenuTree}
+                      items={settingsNavbarItems}
+                      mainPressDisabled
                       onIconPickerChange={(index) => {
                         setSettingsPresetIconPickerIndex(index);
                         setSettingsListIconPickerIndex(null);
                       }}
                       reorderCancelNonce={settingsListReorderCancelNonce}
-                      onMainPress={openSettingsListKeywordPrompt}
                       onPinPress={toggleSettingsListNavbarPinned}
                       onSwap={handleSettingsListSwap}
-                      onSetIcon={setSettingsListIcon}
+                      onSetIcon={setSettingsNavbarIcon}
                     />
                   </View>
                 ) : null}

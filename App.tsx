@@ -10288,7 +10288,40 @@ export default function App() {
     swapSettingsListItems(fromIndex, toIndex);
   }, [swapSettingsListItems]);
 
-  const removeSettingsList = useCallback((index: number) => {
+  const removeSettingsNavbarItem = useCallback((index: number) => {
+    const currentItem = listMenuTreeRef.current[index];
+    if (!currentItem || currentItem.showInNavbar === false) {
+      return;
+    }
+
+    const removedSlotNumber = quickPresetNavItemByNavIndex.get(index)?.slotNumber ?? null;
+
+    recordUndo('Remove navbar item');
+    setSettingsListReorderCancelNonce((current) => current + 1);
+    setSettingsPresetIconPickerIndex((current) => (current === index ? null : current));
+    setOpenQuickPresetNavSlotNumber((current) => (
+      current === removedSlotNumber ? null : current
+    ));
+    setHeldQuickPresetNavSlotNumber((current) => (
+      current === removedSlotNumber ? null : current
+    ));
+    setListMenuTree((current) => {
+      const next = current.map((item, itemIndex) => {
+        if (itemIndex !== index) {
+          return item;
+        }
+
+        return { ...item, showInNavbar: false };
+      });
+
+      listMenuTreeRef.current = next;
+      persistListMenuTree(next);
+      return next;
+    });
+    triggerSubtleHaptic();
+  }, [persistListMenuTree, quickPresetNavItemByNavIndex, recordUndo]);
+
+  const removeSettingsListNow = useCallback((index: number) => {
     if (!listMenuTreeRef.current[index]) {
       return;
     }
@@ -10367,6 +10400,15 @@ export default function App() {
           .catch(() => undefined);
         return nextItems;
       });
+      setDeletedTodos((items) => (
+        items.map((todo) => ({
+          ...todo,
+          filters: {
+            ...todo.filters,
+            list: todo.filters.list.filter((label) => !removedLabels.has(label)),
+          },
+        }))
+      ));
       setFilterColors((colors) => ({
         ...colors,
         list: Object.fromEntries(
@@ -10380,6 +10422,39 @@ export default function App() {
     });
     triggerSubtleHaptic();
   }, [pendingDeleteIds, persistListMenuTree, recordUndo]);
+
+  const removeSettingsList = useCallback((index: number) => {
+    const node = listMenuTreeRef.current[index];
+    if (!node) {
+      return;
+    }
+
+    const removedLabels = new Set(collectListNodeLabels([node]));
+    const affectedTodoCount = todosRef.current.filter((todo) => (
+      !pendingDeleteIdsRef.current.has(todo.id) &&
+      todo.filters.list.some((label) => removedLabels.has(label))
+    )).length;
+
+    if (affectedTodoCount === 0) {
+      removeSettingsListNow(index);
+      return;
+    }
+
+    Alert.alert(
+      `Delete ${node.label}?`,
+      `${affectedTodoCount} ${
+        affectedTodoCount === 1 ? 'item uses' : 'items use'
+      } this list. Continue will remove this list from those items; items with no other list move to no list (-).`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete list',
+          style: 'destructive',
+          onPress: () => removeSettingsListNow(index),
+        },
+      ],
+    );
+  }, [removeSettingsListNow]);
 
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
@@ -14713,15 +14788,16 @@ export default function App() {
                   <View style={styles.settingsCard}>
                     <Text style={[styles.settingsListReorderHint, styles.settingsListReorderHintFirst]}>
                       {listMenuTree.length > 1
-                        ? 'Tap the handle on one navbar item, then another to swap navbar order. Pin to show in navbar.'
-                        : 'Pin to show in navbar.'}
+                        ? 'Tap handles to swap navbar order. Swipe left to remove from navbar.'
+                        : 'Swipe left to remove from navbar.'}
                     </Text>
 
                     <MemoizedSettingsListEditor
-                      allowDelete={false}
+                      allowDelete
                       iconPickerIndex={settingsPresetIconPickerIndex}
                       items={settingsNavbarItems}
                       mainPressHint="Tap to edit the navbar name shown at the top."
+                      onDelete={removeSettingsNavbarItem}
                       onIconPickerChange={(index) => {
                         setSettingsPresetIconPickerIndex(index);
                         setSettingsListIconPickerIndex(null);

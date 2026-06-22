@@ -140,7 +140,10 @@ export const getTodoRowTitleAreaWidth = (
     width -= TODO_ROW_GROUPED_SHELL_PADDING * 2;
   }
 
-  width -= TODO_ROW_HORIZONTAL_PADDING * 2;
+  if (!grouped) {
+    width -= TODO_ROW_HORIZONTAL_PADDING * 2;
+  }
+
   width -= TODO_ROW_CHECKBOX_SIZE + TODO_ROW_CHECKBOX_MARGIN;
   width -= grouped ? TODO_ROW_GROUPED_TEXT_RIGHT_INSET : TODO_ROW_TEXT_RIGHT_INSET;
 

@@ -6322,11 +6322,6 @@ export default function App() {
     triggerSubtleHaptic();
   }, [toggleTagSelection]);
 
-  const toggleActiveTodoDetailDraftTag = useCallback((label: string) => {
-    setActiveTodoDetailDraftTags((current) => toggleTagSelection(current, label));
-    triggerSubtleHaptic();
-  }, [toggleTagSelection]);
-
   const handleCreateDrawerCalendarPress = useCallback(() => {
     if (createDrawerPicker === 'date') {
       if (createDrawerDateActive) {
@@ -14010,44 +14005,6 @@ export default function App() {
                     value={activeTodoDetailDraftContent}
                   />
                 </View>
-                {availableTodoTags.length > 0 || activeTodoDetailDraftTags.length > 0 ? (
-                  <View style={styles.todoDetailTagPicker}>
-                    {availableTodoTags.map((label) => {
-                      const selected = activeTodoDetailDraftTags.some(
-                        (tag) => tag.toLocaleLowerCase() === label.toLocaleLowerCase(),
-                      );
-
-                      return (
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityState={{ disabled: !activeTodoDetailCanEdit, selected }}
-                          disabled={!activeTodoDetailCanEdit}
-                          key={`todo-detail-tag-${label}`}
-                          onPress={() => toggleActiveTodoDetailDraftTag(label)}
-                          style={({ pressed }) => [
-                            styles.todoDetailTagChip,
-                            selected && styles.todoDetailTagChipSelected,
-                            !activeTodoDetailCanEdit && styles.todoDetailTagChipDisabled,
-                            pressed && styles.settingsOptionRowPressed,
-                          ]}
-                        >
-                          <Text
-                            numberOfLines={1}
-                            style={[
-                              styles.todoDetailTagChipText,
-                              selected && styles.todoDetailTagChipTextSelected,
-                            ]}
-                          >
-                            {label}
-                          </Text>
-                          {selected ? (
-                            <Ionicons color={THEME_ACCENT} name="checkmark" size={14} />
-                          ) : null}
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                ) : null}
               </View>
               </View>
           </View>
@@ -15951,46 +15908,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 0,
-  },
-  todoDetailTagPicker: {
-    borderTopColor: '#F0E9E1',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    paddingBottom: 16,
-  },
-  todoDetailTagChip: {
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4DED6',
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 6,
-    minHeight: 32,
-    maxWidth: '100%',
-    paddingHorizontal: 10,
-  },
-  todoDetailTagChipSelected: {
-    backgroundColor: THEME_ACCENT_SOFT,
-    borderColor: '#C9DED6',
-  },
-  todoDetailTagChipDisabled: {
-    opacity: 0.56,
-  },
-  todoDetailTagChipText: {
-    color: THEME_TEXT_SECONDARY,
-    flexShrink: 1,
-    fontSize: 13,
-    fontWeight: FONT_MEDIUM,
-    letterSpacing: 0,
-    lineHeight: 17,
-  },
-  todoDetailTagChipTextSelected: {
-    color: THEME_ACCENT,
   },
   deletedTodoDetailHeader: {
     alignItems: 'flex-start',

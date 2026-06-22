@@ -351,6 +351,8 @@ type MenuMode =
   | 'sort'
   | 'tags';
 
+type MenuEditOwner = 'items' | 'presets';
+
 type SelectedFilters = TodoFilters;
 
 type GoogleDriveAction = 'backup' | 'manage' | 'restore';
@@ -389,6 +391,11 @@ type MenuRow =
       id: string;
       label: string;
       type: 'settings';
+    }
+  | {
+      id: string;
+      label: string;
+      type: 'switchMenuOwner';
     }
   | {
       id: string;
@@ -3279,6 +3286,7 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [navTab, setNavTab] = useState<NavTab | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
+  const [menuEditOwner, setMenuEditOwner] = useState<MenuEditOwner>('presets');
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
   const [activeTodoMenuHighlightId, setActiveTodoMenuHighlightId] = useState<string | null>(null);
   const [newlyCreatedTodoHighlightId, setNewlyCreatedTodoHighlightId] = useState<string | null>(
@@ -3440,6 +3448,7 @@ export default function App() {
   const listMenuScrollOffsetY = useRef(0);
   const menuPullAnim = useRef(new Animated.Value(0)).current;
   const menuModeRef = useRef<MenuMode | null>(null);
+  const menuEditOwnerRef = useRef<MenuEditOwner>('presets');
   const activeTodoMenuIdRef = useRef<string | null>(null);
   const listMenuOpenRef = useRef(false);
   const pendingTodoMenuHighlightRef = useRef<{ id: string; offset: number } | null>(null);
@@ -3489,6 +3498,7 @@ export default function App() {
   todoSortModeRef.current = todoSortMode;
   filterColorsRef.current = filterColors;
   loadedRef.current = loaded;
+  menuEditOwnerRef.current = menuEditOwner;
   pendingDeleteIdsRef.current = pendingDeleteIds;
   repeatingTodoCompletionFeedbackIdsRef.current = repeatingTodoCompletionFeedbackIds;
   googleDriveBusyRef.current = googleDriveBusy;
@@ -4622,12 +4632,21 @@ export default function App() {
   }, []);
 
   const closeListMenuState = useCallback(() => {
+    const shouldExitEditedBulkSelection =
+      menuEditOwnerRef.current === 'items' &&
+      activeTodoMenuIdRef.current === null &&
+      filterConfigUndoPendingRef.current;
+
     flushFilterConfigUndoBatch();
     clearTodoMenuHighlightRequest();
     setMenuMode(null);
+    setMenuEditOwner('presets');
     setEditingMenuPresetId(null);
     setActiveTodoMenuId(null);
     setActiveTodoMenuHighlightId(null);
+    if (shouldExitEditedBulkSelection) {
+      setSelectedTodoIds(new Set());
+    }
     flushPendingMenuEditedTodoHighlights();
     restoreTodoMenuReturnOffset();
     menuPullAnim.setValue(0);
@@ -4648,6 +4667,7 @@ export default function App() {
 
   const exitTodoSelectMode = useCallback(() => {
     setSelectedTodoIds(new Set());
+    setMenuEditOwner('presets');
   }, []);
 
   const suppressNextHeaderSearchFocus = useCallback(() => {
@@ -4968,6 +4988,7 @@ export default function App() {
   const openFilterConfigModal = useCallback(() => {
     Keyboard.dismiss();
     closeListMenuState();
+    setMenuEditOwner('presets');
     setSettingsModalVisible(false);
     beginFilterConfigUndoBatch();
     setFilterConfigModalVisible(true);
@@ -5119,6 +5140,7 @@ export default function App() {
     }
 
     if (todoSelectMode) {
+      flushFilterConfigUndoBatch();
       exitTodoSelectMode();
       triggerSubtleHaptic();
       return true;
@@ -5202,6 +5224,7 @@ export default function App() {
     createDrawerVisible,
     datePickerVisible,
     exitTodoSelectMode,
+    flushFilterConfigUndoBatch,
     googleDriveBackupPicker,
     menuMode,
     searchKeywordModalVisible,
@@ -6077,6 +6100,10 @@ export default function App() {
   }, [highlightEditedTodos, pendingDeleteIds, recordUndo]);
 
   const getCurrentTodoEditTargetIds = useCallback(() => {
+    if (menuEditOwnerRef.current !== 'items') {
+      return [];
+    }
+
     if (activeTodoMenuIdRef.current) {
       return pendingDeleteIds.has(activeTodoMenuIdRef.current)
         ? []
@@ -6654,6 +6681,7 @@ export default function App() {
           return true;
         }
 
+        setMenuEditOwner('presets');
         setMenuMode('main');
         triggerSubtleHaptic();
         return true;
@@ -7171,9 +7199,10 @@ export default function App() {
 
     return selectedTodosForBulk;
   }, [activeTodoMenuId, pendingDeleteIds, selectedTodosForBulk, todos]);
-  const hasTodoEditTargets = currentTodoEditTargets.length > 0;
+  const menuTodoEditTargets = menuEditOwner === 'items' ? currentTodoEditTargets : [];
+  const hasTodoEditTargets = menuTodoEditTargets.length > 0;
   const todoEditTargetsAllPinned =
-    hasTodoEditTargets && currentTodoEditTargets.every((todo) => todo.pinned);
+    hasTodoEditTargets && menuTodoEditTargets.every((todo) => todo.pinned);
   const todoPinActionLabel = activeTodoMenuId
     ? (todoEditTargetsAllPinned ? 'Unpin item' : 'Pin item')
     : (todoEditTargetsAllPinned ? 'Unpin selected' : 'Pin selected');
@@ -7294,8 +7323,12 @@ export default function App() {
     recordUndo,
     suppressNextHeaderSearchFocus,
   ]);
-  const menuFilters = activeTodoMenuFilters ?? selectedFilters;
-  const menuSelectionFilters = activeTodoMenuSelectionFilters ?? selectedFilters;
+  const menuFilters = hasTodoEditTargets
+    ? activeTodoMenuFilters ?? selectedFilters
+    : selectedFilters;
+  const menuSelectionFilters = hasTodoEditTargets
+    ? activeTodoMenuSelectionFilters ?? selectedFilters
+    : selectedFilters;
   const includeActiveTodoReminderRows = hasTodoEditTargets;
   const menuRequiredFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : requiredFilters;
   const menuAvoidedFilters = hasTodoEditTargets ? EMPTY_SELECTED_FILTERS : avoidedFilters;
@@ -7677,6 +7710,14 @@ export default function App() {
       const rows: MenuRow[] = [];
       const listFilterCount = menuFilters.list.length + menuAvoidedFilters.list.length;
 
+      if (hasTodoEditTargets) {
+        rows.push({
+          id: 'preset-switch-edit-owner',
+          label: 'Edit saved lists',
+          type: 'switchMenuOwner',
+        });
+      }
+
       rows.push({
         id: 'preset-list-filters',
         label: 'Lists',
@@ -7755,12 +7796,12 @@ export default function App() {
       }
       : null;
 
-    if (todoSelectMode) {
+    if (hasTodoEditTargets) {
       return [
         ...(pinActionRow ? [pinActionRow] : []),
         {
           id: 'main-presets',
-          label: 'Saved lists',
+          label: 'Apply saved list',
           menuMode: 'presets',
           type: 'menu',
           valueLabel: formatPresetCount(menuPresets.length, 'list'),
@@ -9734,6 +9775,7 @@ export default function App() {
   }, [menuPresets, recordUndo]);
 
   const openMenuPresetEditor = useCallback((preset: MenuPreset) => {
+    setMenuEditOwner('presets');
     applyMenuPreset(preset, {
       closeMenu: false,
       haptic: false,
@@ -9918,6 +9960,18 @@ export default function App() {
       (openMenuPresetHasChanges && openMenuPreset) ||
       canSaveCurrentMenuPreset,
   );
+  const listMenuOwnerLabel = hasTodoEditTargets
+    ? activeTodoMenuId
+      ? 'Editing item'
+      : `${selectedTodoCount} selected ${selectedTodoCount === 1 ? 'item' : 'items'}`
+    : editingMenuPreset
+      ? `Saved list: ${editingMenuPreset.label}`
+      : openMenuPreset
+        ? `Saved list: ${openMenuPreset.label}`
+        : activeMenuPreset
+          ? `Preset: ${activeMenuPreset.label}`
+          : 'Current filters';
+  const listMenuOwnerIcon = hasTodoEditTargets ? 'checkbox-outline' : 'albums-outline';
   const saveListMenuPreset = useCallback(() => {
     if (editingMenuPreset) {
       updateEditingMenuPreset();
@@ -9941,6 +9995,16 @@ export default function App() {
     saveOpenMenuPreset,
     updateEditingMenuPreset,
   ]);
+
+  const switchListMenuToPresetOwner = useCallback(() => {
+    flushFilterConfigUndoBatch();
+    setActiveTodoMenuId(null);
+    setActiveTodoMenuHighlightId(null);
+    setMenuEditOwner('presets');
+    setSelectedTodoIds(new Set());
+    setMenuMode('presets');
+    triggerSubtleHaptic();
+  }, [flushFilterConfigUndoBatch]);
 
   const applyQuickPresetNavPreset = useCallback((
     preset: MenuPreset | null,
@@ -10760,6 +10824,7 @@ export default function App() {
     if (!shouldKeepSelection) {
       exitTodoSelectMode();
     }
+    setMenuEditOwner(shouldKeepSelection ? 'items' : 'presets');
 
     const sameCalendarOpen =
       tab === 'calendar' &&
@@ -11797,6 +11862,7 @@ export default function App() {
     }
 
     todoMenuReturnOffsetRef.current = actualScrollOffsetY.current;
+    setMenuEditOwner('items');
     setActiveTodoMenuId(id);
     setActiveTodoMenuHighlightId(null);
     Keyboard.dismiss();
@@ -13005,6 +13071,29 @@ export default function App() {
                     >
                       <View style={styles.menuDragHandle} accessibilityRole="adjustable">
                         <View style={styles.menuDragPill} />
+                        <View
+                          style={[
+                            styles.listMenuOwnerBadge,
+                            hasTodoEditTargets
+                              ? styles.listMenuOwnerBadgeItems
+                              : styles.listMenuOwnerBadgePresets,
+                          ]}
+                        >
+                          <Ionicons
+                            color={hasTodoEditTargets ? '#7A4E1D' : THEME_ACCENT}
+                            name={listMenuOwnerIcon}
+                            size={14}
+                          />
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.listMenuOwnerBadgeText,
+                              hasTodoEditTargets && styles.listMenuOwnerBadgeTextItems,
+                            ]}
+                          >
+                            {listMenuOwnerLabel}
+                          </Text>
+                        </View>
                         {canSaveListMenuPreset ? (
                           <Pressable
                             accessibilityRole="button"
@@ -13125,6 +13214,26 @@ export default function App() {
                                     <Text style={styles.listMenuRowTitle}>{item.label}</Text>
                                   </View>
                                   <Text style={styles.listMenuArrow}>›</Text>
+                                </Pressable>
+                              );
+                            }
+
+                            if (item.type === 'switchMenuOwner') {
+                              return (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Edit saved lists"
+                                  onPress={switchListMenuToPresetOwner}
+                                  style={({ pressed }) => [
+                                    styles.listMenuRow,
+                                    pressed && styles.listMenuRowPressed,
+                                  ]}
+                                >
+                                  <View style={styles.listMenuRowTextWrap}>
+                                    <Ionicons color={THEME_ACCENT} name="albums-outline" size={18} />
+                                    <Text style={styles.listMenuRowTitle}>{item.label}</Text>
+                                  </View>
+                                  <Text style={styles.listMenuApplyText}>Edit</Text>
                                 </Pressable>
                               );
                             }
@@ -17622,8 +17731,8 @@ const styles = StyleSheet.create({
   menuDragHandle: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 28,
-    paddingBottom: 4,
+    minHeight: 58,
+    paddingBottom: 6,
     paddingTop: 8,
     position: 'relative',
   },
@@ -17632,6 +17741,37 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     height: 5,
     width: 42,
+  },
+  listMenuOwnerBadge: {
+    alignItems: 'center',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 10,
+    maxWidth: '72%',
+    minHeight: 26,
+    paddingHorizontal: 10,
+  },
+  listMenuOwnerBadgeItems: {
+    backgroundColor: '#FFF2DA',
+    borderColor: '#E8C78E',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  listMenuOwnerBadgePresets: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#CADDD5',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  listMenuOwnerBadgeText: {
+    color: THEME_ACCENT,
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    letterSpacing: 0.1,
+  },
+  listMenuOwnerBadgeTextItems: {
+    color: '#7A4E1D',
   },
   listMenuHeaderSaveButton: {
     alignItems: 'center',

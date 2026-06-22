@@ -114,6 +114,7 @@ export type BackupSettings = {
   listOrderMode: BackupListOrderMode;
   menuPresets: BackupMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
+  presetLabelTagsSeeded: boolean;
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
@@ -635,6 +636,7 @@ export const createBackupPayload = (
       listOrderMode: settings.listOrderMode,
       menuPresets: cloneMenuPresets(settings.menuPresets),
       metaTagVisibility: cloneMetaTagVisibility(settings.metaTagVisibility),
+      presetLabelTagsSeeded: settings.presetLabelTagsSeeded,
       quickPresetDefaultsVersion: settings.quickPresetDefaultsVersion,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames),
       quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds),
@@ -694,6 +696,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
       menuPresets: quickPresetDefaults.menuPresets,
       metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),
+      presetLabelTagsSeeded: settings.presetLabelTagsSeeded === true,
       quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
       quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
       quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,

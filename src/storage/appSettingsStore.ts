@@ -183,6 +183,7 @@ export type AppSettings = {
   listOrderMode: ListOrderMode;
   menuPresets: StoredMenuPreset[];
   metaTagVisibility: MetaTagVisibility;
+  presetLabelTagsSeeded: boolean;
   quickPresetDefaultsVersion: number;
   quickPresetNavIconNames: QuickPresetNavIconNames;
   quickPresetNavPresetIds: QuickPresetNavPresetIds;
@@ -372,6 +373,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   listOrderMode: 'alphabetical',
   menuPresets: cloneMenuPresets(DEFAULT_QUICK_MENU_PRESETS),
   metaTagVisibility: cloneMetaTagVisibility(),
+  presetLabelTagsSeeded: false,
   quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
   quickPresetNavIconNames: cloneQuickPresetNavIconNames(DEFAULT_QUICK_PRESET_NAV_ICON_NAMES),
   quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
@@ -859,6 +861,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       hideDoneTodos: false,
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
       menuPresets: cloneMenuPresets(DEFAULT_APP_SETTINGS.menuPresets),
+      presetLabelTagsSeeded: false,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(
         DEFAULT_APP_SETTINGS.quickPresetNavIconNames,
       ),
@@ -906,6 +909,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
     menuPresets: quickPresetDefaults.menuPresets,
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
+    presetLabelTagsSeeded: value.presetLabelTagsSeeded === true,
     quickPresetDefaultsVersion: quickPresetDefaults.quickPresetDefaultsVersion,
     quickPresetNavIconNames: quickPresetDefaults.quickPresetNavIconNames,
     quickPresetNavPresetIds: quickPresetDefaults.quickPresetNavPresetIds,

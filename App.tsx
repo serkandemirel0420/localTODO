@@ -149,7 +149,6 @@ import {
   META_TAG_LABELS,
   metaTagVisibilityEqual,
   metaTagVisibilityMatchesDefault,
-  type HiddenMetaTagKind,
   type MetaTagKey,
   type MetaTagVisibility,
 } from './src/metaTags';
@@ -275,6 +274,7 @@ type UndoSnapshot = {
   listOrderMode: ListOrderMode;
   menuPresets: MenuPreset[];
   metaTagVisibility: MetaTagVisibility;
+  presetLabelTagsSeeded: boolean;
   quickPresetNavIconNames: string[];
   quickPresetNavPresetIds: Array<string | null>;
   avoidedFilters: TodoFilters;
@@ -1852,6 +1852,14 @@ const filterValueListsEqual = (first: string[], second: string[]) => {
   return firstValues.every((value, index) => value === secondValues[index]);
 };
 
+const addPresetLabelTagsToCustomTags = (
+  tags: unknown,
+  presets: readonly Pick<MenuPreset, 'label'>[],
+) => normalizeCustomTags([
+  ...normalizeCustomTags(tags),
+  ...presets.map((preset) => preset.label),
+]);
+
 const dateFilterValuesIncludeExactDay = (
   dateLabels: string[],
   date: Date,
@@ -3340,6 +3348,7 @@ export default function App() {
     useState<GoogleDriveBackupPickerState | null>(null);
   const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
   const [listOrderMode, setListOrderMode] = useState<ListOrderMode>('alphabetical');
+  const [presetLabelTagsSeeded, setPresetLabelTagsSeeded] = useState(false);
   const deletedTodosRef = useRef<DeletedTodo[]>([]);
   const dateLabelDisplayModeRef = useRef<DateLabelDisplayMode>(dateLabelDisplayMode);
   const googleDriveBackupPickerResolveRef = useRef<(
@@ -3361,6 +3370,7 @@ export default function App() {
   const [quickPresetNavPresetIds, setQuickPresetNavPresetIds] = useState<Array<string | null>>([]);
   const menuPresetsRef = useRef<MenuPreset[]>([]);
   const metaTagVisibilityRef = useRef<MetaTagVisibility>(cloneMetaTagVisibility());
+  const presetLabelTagsSeededRef = useRef(false);
   const quickPresetNavIconNamesRef = useRef<string[]>([]);
   const quickPresetNavPresetIdsRef = useRef<Array<string | null>>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
@@ -3468,6 +3478,7 @@ export default function App() {
   listOrderModeRef.current = listOrderMode;
   menuPresetsRef.current = menuPresets;
   metaTagVisibilityRef.current = metaTagVisibility;
+  presetLabelTagsSeededRef.current = presetLabelTagsSeeded;
   quickPresetNavIconNamesRef.current = quickPresetNavIconNames;
   quickPresetNavPresetIdsRef.current = quickPresetNavPresetIds;
   selectedFiltersRef.current = selectedFilters;
@@ -3499,6 +3510,7 @@ export default function App() {
   const lastSearchNavTapRef = useRef(0);
   const handledToggleAllTodoSectionsRequestRef = useRef(0);
   const lastQuickPresetNavTapRef = useRef({ presetId: '', timestamp: 0 });
+  const didAddExistingPresetTagsRef = useRef(false);
   const quickPresetNavPressInRef = useRef<string | null>(null);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
   const savedSearchScrollOffsetRef = useRef<number | null>(null);
@@ -3730,6 +3742,7 @@ export default function App() {
         setCustomTags(normalizeCustomTags(settings.customTags));
         setListOrderMode(settings.listOrderMode);
         setMenuPresets(cloneMenuPresets(settings.menuPresets));
+        setPresetLabelTagsSeeded(settings.presetLabelTagsSeeded);
         setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
         setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
         setTodoGroupMode(settings.todoGroupMode);
@@ -3775,6 +3788,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    presetLabelTagsSeeded,
     quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
@@ -3804,6 +3818,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    presetLabelTagsSeeded,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
     avoidedFilters,
@@ -3831,6 +3846,43 @@ export default function App() {
   const persistCustomTags = useCallback((tags: string[]) => {
     persistAppSettings({ customTags: normalizeCustomTags(tags) });
   }, [persistAppSettings]);
+
+  const addCustomTagsForMenuPresets = useCallback((
+    presets: readonly Pick<MenuPreset, 'label'>[],
+  ) => {
+    const currentTags = customTagsRef.current;
+    const nextTags = addPresetLabelTagsToCustomTags(currentTags, presets);
+    if (filterValueListsEqual(nextTags, currentTags)) {
+      return { changed: false, tags: currentTags };
+    }
+
+    customTagsRef.current = nextTags;
+    setCustomTags(nextTags);
+    return { changed: true, tags: nextTags };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !settingsLoaded ||
+      presetLabelTagsSeededRef.current ||
+      didAddExistingPresetTagsRef.current
+    ) {
+      return;
+    }
+
+    didAddExistingPresetTagsRef.current = true;
+    const result = addCustomTagsForMenuPresets(menuPresetsRef.current);
+    presetLabelTagsSeededRef.current = true;
+    setPresetLabelTagsSeeded(true);
+    void persistAppSettings({
+      customTags: result.tags,
+      presetLabelTagsSeeded: true,
+    });
+  }, [
+    addCustomTagsForMenuPresets,
+    persistAppSettings,
+    settingsLoaded,
+  ]);
 
   useEffect(() => {
     if (!settingsLoaded) {
@@ -3891,6 +3943,7 @@ export default function App() {
       menuPresetsRef.current,
       seededListLabels,
     );
+    const { tags: nextCustomTags } = addCustomTagsForMenuPresets(seededMenuPresets);
 
     listMenuTreeRef.current = seededListMenuTree;
     menuPresetsRef.current = seededMenuPresets;
@@ -3901,10 +3954,11 @@ export default function App() {
       listMenuTree: seededListMenuTree,
       listOrderMode: 'manual',
       menuPresets: seededMenuPresets,
+      customTags: nextCustomTags,
     });
 
     return seededListLabels;
-  }, [persistAppSettings]);
+  }, [addCustomTagsForMenuPresets, persistAppSettings]);
 
   useEffect(() => {
     if (!isDevAppVariant || !loaded || !settingsLoaded || devTestTodosSeededRef.current) {
@@ -4058,6 +4112,7 @@ export default function App() {
     listOrderMode: listOrderModeRef.current,
     menuPresets: cloneMenuPresets(menuPresetsRef.current),
     metaTagVisibility: cloneMetaTagVisibility(metaTagVisibilityRef.current),
+    presetLabelTagsSeeded: presetLabelTagsSeededRef.current,
     quickPresetNavIconNames: cloneQuickPresetNavIconNames(quickPresetNavIconNamesRef.current),
     quickPresetNavPresetIds: cloneQuickPresetNavPresetIds(quickPresetNavPresetIdsRef.current),
     avoidedFilters: cloneTodoFilters(avoidedFiltersRef.current),
@@ -4194,6 +4249,7 @@ export default function App() {
     const restoredListMenuTree = cloneListMenuTree(snapshot.listMenuTree);
     const restoredMenuPresets = cloneMenuPresets(snapshot.menuPresets);
     const restoredMetaTagVisibility = cloneMetaTagVisibility(snapshot.metaTagVisibility);
+    const restoredPresetLabelTagsSeeded = snapshot.presetLabelTagsSeeded;
     const restoredQuickPresetNavIconNames = cloneQuickPresetNavIconNames(
       snapshot.quickPresetNavIconNames,
     );
@@ -4221,6 +4277,7 @@ export default function App() {
       listOrderMode: snapshot.listOrderMode,
       menuPresets: restoredMenuPresets,
       metaTagVisibility: restoredMetaTagVisibility,
+      presetLabelTagsSeeded: restoredPresetLabelTagsSeeded,
       quickPresetNavIconNames: restoredQuickPresetNavIconNames,
       quickPresetNavPresetIds: restoredQuickPresetNavPresetIds,
       avoidedFilters: restoredAvoidedFilters,
@@ -4244,6 +4301,7 @@ export default function App() {
     listOrderModeRef.current = snapshot.listOrderMode;
     menuPresetsRef.current = restoredMenuPresets;
     metaTagVisibilityRef.current = restoredMetaTagVisibility;
+    presetLabelTagsSeededRef.current = restoredPresetLabelTagsSeeded;
     quickPresetNavIconNamesRef.current = restoredQuickPresetNavIconNames;
     quickPresetNavPresetIdsRef.current = restoredQuickPresetNavPresetIds;
     selectedFiltersRef.current = restoredSelectedFilters;
@@ -4269,6 +4327,7 @@ export default function App() {
     setListOrderMode(snapshot.listOrderMode);
     setMenuPresets(restoredMenuPresets);
     setMetaTagVisibility(restoredMetaTagVisibility);
+    setPresetLabelTagsSeeded(restoredPresetLabelTagsSeeded);
     setQuickPresetNavIconNames(restoredQuickPresetNavIconNames);
     setQuickPresetNavPresetIds(restoredQuickPresetNavPresetIds);
     setSelectedFilters(restoredSelectedFilters);
@@ -8941,6 +9000,7 @@ export default function App() {
     };
 
     recordUndo('Save list');
+    addCustomTagsForMenuPresets([preset]);
     setMenuPresets((current) => [...current, preset]);
     setOpenMenuPresetId(presetId);
     setOpenQuickPresetNavSlotNumber(null);
@@ -8955,6 +9015,7 @@ export default function App() {
     menuRequiredFilters,
     menuAvoidedFilters,
     metaTagVisibility,
+    addCustomTagsForMenuPresets,
     recordUndo,
   ]);
 
@@ -9180,6 +9241,7 @@ export default function App() {
     }
 
     const nextMenuPresets = [...menuPresetsRef.current, savedPreset];
+    const { tags: nextCustomTags } = addCustomTagsForMenuPresets([savedPreset]);
     const nextPresetIdLength = Math.max(
       quickPresetNavPresetIdsRef.current.length,
       quickPresetNavIconNamesRef.current.length,
@@ -9200,11 +9262,13 @@ export default function App() {
     setQuickPresetNavPresetIds(normalizedQuickPresetNavPresetIds);
     setOpenMenuPresetId((current) => (current === navItemPreset.id ? presetId : current));
     void persistAppSettings({
+      customTags: nextCustomTags,
       menuPresets: cloneMenuPresets(nextMenuPresets),
       quickPresetNavPresetIds: normalizedQuickPresetNavPresetIds,
     });
     return true;
   }, [
+    addCustomTagsForMenuPresets,
     persistAppSettings,
     quickPresetNavItemByNavIndex,
     recordUndo,
@@ -9803,6 +9867,7 @@ export default function App() {
         createdAt,
       };
 
+      addCustomTagsForMenuPresets([savedPreset]);
       setMenuPresets((current) => [...current, savedPreset]);
       if (openQuickPresetNavIndex !== null) {
         setQuickPresetNavPresetIds((current) => {
@@ -9828,6 +9893,7 @@ export default function App() {
     menuPresets,
     openQuickPresetNavIndex,
     quickPresetNavIconNames.length,
+    addCustomTagsForMenuPresets,
     recordUndo,
     avoidedFilters,
     metaTagVisibility,
@@ -10168,6 +10234,7 @@ export default function App() {
     );
 
     recordUndo('Add navbar item');
+    const { tags: nextCustomTags } = addCustomTagsForMenuPresets([preset]);
     listMenuTreeRef.current = nextListMenuTree;
     menuPresetsRef.current = nextMenuPresets;
     quickPresetNavPresetIdsRef.current = normalizedPresetIds;
@@ -10181,6 +10248,7 @@ export default function App() {
     setSettingsListIconPickerIndex(null);
     setNewNavbarName('');
     void persistAppSettings({
+      customTags: nextCustomTags,
       listMenuTree: cloneListMenuTree(nextListMenuTree),
       menuPresets: cloneMenuPresets(nextMenuPresets),
       quickPresetNavIconNames: normalizedIconNames,
@@ -10188,6 +10256,7 @@ export default function App() {
     });
     triggerSubtleHaptic();
   }, [
+    addCustomTagsForMenuPresets,
     newNavbarName,
     persistAppSettings,
     quickPresetNavItems,
@@ -11173,6 +11242,7 @@ export default function App() {
       todoGroupMode,
       todoSortMode,
       metaTagVisibility,
+      presetLabelTagsSeeded,
     });
     const uploadResult = await uploadDriveBackup(accessToken, payload, undefined, backupScope);
     if (backupScope === 'main') {
@@ -11202,6 +11272,7 @@ export default function App() {
     listOrderMode,
     menuPresets,
     metaTagVisibility,
+    presetLabelTagsSeeded,
     pendingDeleteIds,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
@@ -11254,6 +11325,17 @@ export default function App() {
     reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
     clearNotificationTodoReveal();
     setDeletedTodos(backup.payload.settings.deletedTodos);
+    const restoredMenuPresets = cloneMenuPresets(backup.payload.settings.menuPresets);
+    const restoredCustomTags = backup.payload.settings.presetLabelTagsSeeded
+      ? normalizeCustomTags(backup.payload.settings.customTags)
+      : addPresetLabelTagsToCustomTags(
+          backup.payload.settings.customTags,
+          restoredMenuPresets,
+        );
+    customTagsRef.current = restoredCustomTags;
+    presetLabelTagsSeededRef.current = true;
+    setCustomTags(restoredCustomTags);
+    setPresetLabelTagsSeeded(true);
     const restoredSelectedFilters = normalizeTodoFilters(backup.payload.settings.selectedFilters);
     setSelectedFilters(restoredSelectedFilters);
     setRequiredFilters(pruneTodoFilters(
@@ -11282,7 +11364,7 @@ export default function App() {
     );
     setListMenuTree(restoredListMenuTree);
     setListOrderMode(backup.payload.settings.listOrderMode);
-    setMenuPresets(cloneMenuPresets(backup.payload.settings.menuPresets));
+    setMenuPresets(restoredMenuPresets);
     setQuickPresetNavIconNames(
       cloneQuickPresetNavIconNames(backup.payload.settings.quickPresetNavIconNames),
     );
@@ -11723,13 +11805,6 @@ export default function App() {
     triggerSubtleHaptic();
   }, [pendingDeleteIds]);
 
-  const groupedHiddenMetaTagKinds = useMemo((): HiddenMetaTagKind[] => {
-    if (todoListGroupMode === 'date') return ['date'];
-    if (todoListGroupMode === 'list') return ['list'];
-    if (todoListGroupMode === 'priority') return ['priority'];
-    return [];
-  }, [todoListGroupMode]);
-
   const renderVisibleTodoRowGap = useCallback(
     (gapBefore: boolean) => (gapBefore ? <View style={styles.todoListRowGap} /> : null),
     [],
@@ -11769,7 +11844,6 @@ export default function App() {
       if (item.type === 'searchListHeader') {
         const isExpanded = !item.isCollapsed;
         const hasExpandedTodos = isExpanded && item.count > 0;
-        const listIconName = item.node.iconName;
         const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
@@ -11803,14 +11877,6 @@ export default function App() {
                   ]}
                 >
                   <View collapsable={false} style={styles.todoSectionHeaderMain}>
-                    {listIconName ? (
-                      <MaterialCommunityIcons
-                        color={THEME_ACCENT}
-                        name={toMaterialCommunityIconName(listIconName)}
-                        size={17}
-                        style={styles.searchListSectionTitleIcon}
-                      />
-                    ) : null}
                     <Text
                       numberOfLines={1}
                       style={[
@@ -12292,7 +12358,6 @@ export default function App() {
                     dateStatusKey={dateStatusKey}
                     dateLabelDisplayMode={dateLabelDisplayMode}
                     filterColors={deferredFilterColors}
-                    hiddenMetaTagKinds={groupedHiddenMetaTagKinds}
                     isSelected={isSelected}
                     item={todo}
                     isMenuTarget={isTodoMenuTarget}
@@ -12387,7 +12452,6 @@ export default function App() {
       deleteTodo,
       deferredFilterColors,
       enterTodoSelectMode,
-      groupedHiddenMetaTagKinds,
       hideCreateFromSettingsCue,
       hidePresetTodoSectionAddButton,
       metaTagVisibility,
@@ -13576,9 +13640,6 @@ export default function App() {
                             'list',
                             item.isSubsection && item.parentLabel ? item.parentLabel : item.label,
                           );
-                          const listIconName = item.isSubsection
-                            ? undefined
-                            : findListMenuNode(listMenuTree, item.label)?.iconName;
                           const isRequired = !hasTodoEditTargets && isFilterValueRequired(
                             menuRequiredFilters,
                             'list',
@@ -13619,14 +13680,6 @@ export default function App() {
                                 <View style={[styles.listMenuRowTextWrap, styles.listMenuRowSelectableContent]}>
                                   {item.isSubsection ? (
                                     <Text style={styles.listMenuSubsectionMarker}>└</Text>
-                                  ) : listIconName ? (
-                                    <View style={styles.listMenuIconSlot}>
-                                      <MaterialCommunityIcons
-                                        color={listColorTheme?.accent ?? '#8F877F'}
-                                        name={toMaterialCommunityIconName(listIconName)}
-                                        size={16}
-                                      />
-                                    </View>
                                   ) : (
                                     <View
                                       style={[
@@ -17834,12 +17887,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#CF413A',
   },
-  listMenuIconSlot: {
-    alignItems: 'center',
-    height: 14,
-    justifyContent: 'center',
-    width: 14,
-  },
   listMenuColorDot: {
     width: 9,
     height: 9,
@@ -18078,9 +18125,6 @@ const styles = StyleSheet.create({
   },
   searchPresetSectionTitleMatched: {
     color: THEME_ACCENT,
-  },
-  searchListSectionTitleIcon: {
-    flexShrink: 0,
   },
   searchPresetSectionEmpty: {
     alignItems: 'center',

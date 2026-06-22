@@ -801,11 +801,6 @@ const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
 const UNDO_HISTORY_LIMIT = 20;
-const undoLabelUsesToast = (label: string) => (
-  label.startsWith('Complete') ||
-  label.startsWith('Reopen') ||
-  label.startsWith('Delete')
-);
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -4161,7 +4156,7 @@ export default function App() {
 
     setUndoHistory((current) => [entry, ...current].slice(0, UNDO_HISTORY_LIMIT));
     setRedoHistory([]);
-    if (options.showToast ?? undoLabelUsesToast(label)) {
+    if (options.showToast === true) {
       setUndoToastEntryId(entry.id);
     } else {
       setUndoToastEntryId(null);

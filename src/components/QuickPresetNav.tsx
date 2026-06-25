@@ -45,6 +45,10 @@ const toMaterialCommunityIconName = (iconName: string): MaterialCommunityIconNam
   iconName as MaterialCommunityIconName
 );
 
+const QUICK_PRESET_NAV_ITEM_WIDTH = 52;
+const QUICK_PRESET_NAV_ITEM_GAP = 6;
+const QUICK_PRESET_NAV_HORIZONTAL_PADDING = 16;
+
 // The quick nav renders saved preset slots. Lists have their own Settings surface.
 export function QuickPresetNav({
   accentColor,
@@ -63,6 +67,62 @@ export function QuickPresetNav({
   pressDelayMs,
   selectedBackgroundColor,
 }: QuickPresetNavProps) {
+  const scrollRef = React.useRef<ScrollView | null>(null);
+  const scrollOffsetRef = React.useRef(0);
+  const [scrollViewportWidth, setScrollViewportWidth] = React.useState(0);
+  const isItemSelected = React.useCallback((item: QuickPresetNavItem) => {
+    const openedFromThisSlot = Boolean(
+      item.preset && openSlotNumber === item.slotNumber && openPresetId,
+    );
+
+    return !isSearchTab && Boolean(
+      item.preset &&
+        (
+          openedFromThisSlot ||
+          (!openSlotNumber && (openPresetId ?? activePresetId) === item.preset.id)
+        ),
+    );
+  }, [activePresetId, isSearchTab, openPresetId, openSlotNumber]);
+  const selectedItemIndex = React.useMemo(
+    () => items.findIndex((item) => isItemSelected(item)),
+    [isItemSelected, items],
+  );
+
+  React.useEffect(() => {
+    if (selectedItemIndex < 0 || scrollViewportWidth <= 0) {
+      return undefined;
+    }
+
+    const contentWidth =
+      (QUICK_PRESET_NAV_HORIZONTAL_PADDING * 2) +
+      (items.length * QUICK_PRESET_NAV_ITEM_WIDTH) +
+      (Math.max(0, items.length - 1) * QUICK_PRESET_NAV_ITEM_GAP);
+    const maxOffset = Math.max(0, contentWidth - scrollViewportWidth);
+    const itemLeft =
+      QUICK_PRESET_NAV_HORIZONTAL_PADDING +
+      (selectedItemIndex * (QUICK_PRESET_NAV_ITEM_WIDTH + QUICK_PRESET_NAV_ITEM_GAP));
+    const itemRight = itemLeft + QUICK_PRESET_NAV_ITEM_WIDTH;
+    const visibleLeft = scrollOffsetRef.current;
+    const visibleRight = visibleLeft + scrollViewportWidth;
+    let targetOffset = visibleLeft;
+
+    if (itemLeft < visibleLeft + QUICK_PRESET_NAV_HORIZONTAL_PADDING) {
+      targetOffset = itemLeft - QUICK_PRESET_NAV_HORIZONTAL_PADDING;
+    } else if (itemRight > visibleRight - QUICK_PRESET_NAV_HORIZONTAL_PADDING) {
+      targetOffset = itemRight - scrollViewportWidth + QUICK_PRESET_NAV_HORIZONTAL_PADDING;
+    } else {
+      return undefined;
+    }
+
+    targetOffset = Math.min(maxOffset, Math.max(0, targetOffset));
+    scrollOffsetRef.current = targetOffset;
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ animated: true, x: targetOffset });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [items.length, scrollViewportWidth, selectedItemIndex]);
+
   return (
     <>
       {detail ? (
@@ -92,20 +152,17 @@ export function QuickPresetNav({
           contentContainerStyle={styles.items}
           horizontal
           keyboardShouldPersistTaps="handled"
+          onLayout={(event) => setScrollViewportWidth(event.nativeEvent.layout.width)}
+          onScroll={(event) => {
+            scrollOffsetRef.current = event.nativeEvent.contentOffset.x;
+          }}
+          ref={scrollRef}
+          scrollEventThrottle={16}
           showsHorizontalScrollIndicator={false}
           style={styles.scroll}
         >
           {items.map((item) => {
-            const openedFromThisSlot = Boolean(
-              item.preset && openSlotNumber === item.slotNumber && openPresetId,
-            );
-            const selected = !isSearchTab && Boolean(
-              item.preset &&
-                (
-                  openedFromThisSlot ||
-                  (!openSlotNumber && (openPresetId ?? activePresetId) === item.preset.id)
-                ),
-            );
+            const selected = isItemSelected(item);
             const iconColor = item.preset
               ? selected ? accentColor : inactiveColor
               : emptyColor;
@@ -203,7 +260,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     height: 32,
     justifyContent: 'center',
-    width: 52,
+    width: QUICK_PRESET_NAV_ITEM_WIDTH,
   },
   itemEmpty: {
     opacity: 0.68,
@@ -214,8 +271,8 @@ const styles = StyleSheet.create({
   },
   items: {
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
+    gap: QUICK_PRESET_NAV_ITEM_GAP,
+    paddingHorizontal: QUICK_PRESET_NAV_HORIZONTAL_PADDING,
   },
   nav: {
     alignItems: 'stretch',

@@ -8291,13 +8291,6 @@ export default function App() {
     const rows: MenuRow[] = [
       ...(pinActionRow ? [pinActionRow] : []),
       {
-        id: 'main-presets',
-        label: 'Saved lists',
-        menuMode: 'presets',
-        type: 'menu',
-        valueLabel: formatPresetCount(menuPresets.length, 'list'),
-      },
-      {
         count: (menuFilters.list.length + menuAvoidedFilters.list.length) || undefined,
         id: 'main-lists',
         label: 'Lists',
@@ -8314,10 +8307,6 @@ export default function App() {
         label: 'Tags',
         menuMode: 'tags',
         type: 'menu',
-        valueLabel:
-          menuFilters.tag.length + menuAvoidedFilters.tag.length
-            ? undefined
-            : formatPresetCount(availableTodoTags.length, 'tag'),
       },
       {
         count: (menuFilters.priority.length + menuAvoidedFilters.priority.length) || undefined,

@@ -3802,6 +3802,7 @@ export default function App() {
   const lastSearchNavTapRef = useRef(0);
   const handledToggleAllTodoSectionsRequestRef = useRef(0);
   const lastQuickPresetNavTapRef = useRef({ presetId: '', timestamp: 0 });
+  const quickPresetNavPressStartedSwipeArmedRef = useRef(false);
   const didAddExistingPresetTagsRef = useRef(false);
   const quickPresetNavPressInRef = useRef<string | null>(null);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
@@ -10536,10 +10537,6 @@ export default function App() {
       target: options.scrollTarget ?? 'top',
     });
 
-    if (isDoubleTap) {
-      setToggleAllTodoSectionsRequest((current) => current + 1);
-    }
-
     requestAnimationFrame(() => {
       searchInputRef.current?.blur();
       Keyboard.dismiss();
@@ -10563,6 +10560,7 @@ export default function App() {
     const timestamp = event.nativeEvent.timestamp || Date.now();
 
     if (phase === 'pressIn') {
+      quickPresetNavPressStartedSwipeArmedRef.current = quickPresetScreenSwipeArmed;
       quickPresetNavPressInRef.current = preset.id;
       if (quickPresetScreenSwipeArmed && openQuickPresetNavSlotNumber === slotNumber) {
         const lastTap = lastQuickPresetNavTapRef.current;
@@ -10598,6 +10596,26 @@ export default function App() {
     applyQuickPresetNavPreset,
     openQuickPresetNavSlotNumber,
     quickPresetScreenSwipeArmed,
+  ]);
+
+  const handleQuickPresetNavLongPress = useCallback((slotNumber: number) => {
+    const targetItem = quickPresetNavItems.find((item) => item.slotNumber === slotNumber);
+    if (!targetItem?.preset) {
+      return;
+    }
+
+    const wasScreenSwipeArmed = quickPresetNavPressStartedSwipeArmedRef.current;
+
+    setHeldQuickPresetNavSlotNumber(slotNumber);
+    applyQuickPresetNavPreset(targetItem.preset, slotNumber, Date.now(), {
+      scrollTarget: 'top',
+    });
+    lastQuickPresetNavTapRef.current = { presetId: '', timestamp: 0 };
+    setToggleAllTodoSectionsRequest((current) => current + 1);
+    setQuickPresetScreenSwipeArmed(wasScreenSwipeArmed);
+  }, [
+    applyQuickPresetNavPreset,
+    quickPresetNavItems,
   ]);
 
   const handleQuickPresetHeaderSwipeStateChange = useCallback((
@@ -13770,7 +13788,7 @@ export default function App() {
             inactiveColor={NAV_ICON_INACTIVE}
             isSearchTab={navTab === 'search' || navTab === 'notifications'}
             items={quickPresetNavItems}
-            onLongPressSlot={setHeldQuickPresetNavSlotNumber}
+            onLongPressSlot={handleQuickPresetNavLongPress}
             onPressItem={(item, event, phase) => (
               handleQuickPresetNavPress(item.preset, item.slotNumber, event, phase)
             )}

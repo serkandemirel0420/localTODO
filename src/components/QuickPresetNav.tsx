@@ -172,7 +172,7 @@ export function QuickPresetNav({
                 accessibilityRole="button"
                 accessibilityHint={
                   item.preset
-                    ? 'Applies this list. Double tap expands or collapses grouped sections. Long press shows details'
+                    ? 'Applies this list. Press and hold shows details and expands or collapses grouped sections'
                     : 'No list assigned'
                 }
                 accessibilityLabel={

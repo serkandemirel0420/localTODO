@@ -10607,14 +10607,10 @@ export default function App() {
     const wasScreenSwipeArmed = quickPresetNavPressStartedSwipeArmedRef.current;
 
     setHeldQuickPresetNavSlotNumber(slotNumber);
-    applyQuickPresetNavPreset(targetItem.preset, slotNumber, Date.now(), {
-      scrollTarget: 'top',
-    });
     lastQuickPresetNavTapRef.current = { presetId: '', timestamp: 0 };
     setToggleAllTodoSectionsRequest((current) => current + 1);
     setQuickPresetScreenSwipeArmed(wasScreenSwipeArmed);
   }, [
-    applyQuickPresetNavPreset,
     quickPresetNavItems,
   ]);
 

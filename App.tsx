@@ -13619,6 +13619,22 @@ export default function App() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel="Notifications"
+              accessibilityState={{ selected: navTab === 'notifications' }}
+              onPress={() => handleNavTabPress('notifications')}
+              style={({ pressed }) => [
+                styles.bottomNavItem,
+                pressed && styles.bottomNavItemPressed,
+              ]}
+            >
+              <Ionicons
+                color={navTab === 'notifications' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+                name="notifications-outline"
+                size={23}
+              />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
               accessibilityLabel="Open filter menu"
               accessibilityState={{ selected: navTab === 'menu' || menuMode === 'main' }}
               {...getInstantPressHandlers(
@@ -13633,22 +13649,6 @@ export default function App() {
               <Ionicons
                 color={navTab === 'menu' || menuMode === 'main' ? NAV_ACCENT : NAV_ICON_INACTIVE}
                 name="options-outline"
-                size={23}
-              />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Notifications"
-              accessibilityState={{ selected: navTab === 'notifications' }}
-              onPress={() => handleNavTabPress('notifications')}
-              style={({ pressed }) => [
-                styles.bottomNavItem,
-                pressed && styles.bottomNavItemPressed,
-              ]}
-            >
-              <Ionicons
-                color={navTab === 'notifications' ? NAV_ACCENT : NAV_ICON_INACTIVE}
-                name="notifications-outline"
                 size={23}
               />
             </Pressable>

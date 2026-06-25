@@ -771,6 +771,10 @@ const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_RESERVED_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
+const QUICK_PRESET_HEADER_SWIPE_DISTANCE = 58;
+const QUICK_PRESET_HEADER_SWIPE_VELOCITY = 650;
+const QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-24, 24];
+const QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y: [number, number] = [-18, 18];
 const MENU_DISMISS_RELEASE = 52;
 const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 116;
 
@@ -3805,6 +3809,7 @@ export default function App() {
     item: null,
     preset: null,
   });
+  const pendingQuickPresetHeaderTopScrollRef = useRef(false);
   const itemSearchResultsCacheRef = useRef(new Map<string, string[]>());
   const previousSearchModeRef = useRef<SearchMode>('preset');
   const skipNextTodoListOffsetEffectRef = useRef(false);
@@ -7946,6 +7951,32 @@ export default function App() {
     showSearchPresetSections,
     visibleTodoListRows,
   ]);
+  const currentQuickPresetSwipeItemIndex = useMemo(() => {
+    if (openQuickPresetNavIndex !== null) {
+      return quickPresetNavItems.findIndex((item) => item.navIndex === openQuickPresetNavIndex);
+    }
+
+    const activeQuickPresetId = openMenuPresetId ?? activeMenuPreset?.id ?? null;
+    if (!activeQuickPresetId) {
+      return -1;
+    }
+
+    return quickPresetNavItems.findIndex((item) => item.preset?.id === activeQuickPresetId);
+  }, [
+    activeMenuPreset?.id,
+    openMenuPresetId,
+    openQuickPresetNavIndex,
+    quickPresetNavItems,
+  ]);
+  const quickPresetHeaderSwipeEnabled =
+    navTab === null &&
+    currentQuickPresetSwipeItemIndex >= 0 &&
+    quickPresetNavItems.length > 1 &&
+    !createDrawerVisible &&
+    !filterConfigModalVisible &&
+    !listMenuOpen &&
+    !settingsModalVisible &&
+    !todoSelectMode;
   const todoListOneHandedOffset = useMemo(() => {
     const viewportHeight = todoListFrameHeight || windowHeight;
     const calculatedOffset = Math.max(
@@ -7957,11 +7988,19 @@ export default function App() {
     );
 
     if (appTodoListData.length === 0) {
-      return navTab === 'search' ? calculatedOffset : 0;
+      return navTab === 'search' || currentQuickPresetSwipeItemIndex >= 0
+        ? calculatedOffset
+        : 0;
     }
 
     return calculatedOffset;
-  }, [appTodoListData.length, navTab, todoListFrameHeight, windowHeight]);
+  }, [
+    appTodoListData.length,
+    currentQuickPresetSwipeItemIndex,
+    navTab,
+    todoListFrameHeight,
+    windowHeight,
+  ]);
   const todoListSearchOffset = todoListOneHandedOffset;
   const todoListRestingOffset = todoListOneHandedOffset + HEADER_SEARCH_ROW_HEIGHT;
   const latestMenuPreset = menuPresets[menuPresets.length - 1] ?? null;
@@ -8400,6 +8439,24 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [todoListOneHandedOffset, todoListRestingOffset]);
 
+  useEffect(() => {
+    if (!pendingQuickPresetHeaderTopScrollRef.current) {
+      return undefined;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      pendingQuickPresetHeaderTopScrollRef.current = false;
+      scrollOffsetY.current = 0;
+      actualScrollOffsetY.current = 0;
+      todoListRef.current?.scrollToOffset({
+        animated: false,
+        offset: 0,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [appTodoListData.length, openQuickPresetNavSlotNumber, todoListOneHandedOffset]);
+
   useLayoutEffect(() => {
     if (navTab !== 'search' || previousSearchModeRef.current === searchMode) {
       previousSearchModeRef.current = searchMode;
@@ -8451,6 +8508,29 @@ export default function App() {
       }
     });
   }, [todoListSearchOffset]);
+
+  const scrollTodoListToHeaderTop = useCallback((
+    options: { ensureAfterDataUpdate?: boolean } = {},
+  ) => {
+    if (options.ensureAfterDataUpdate) {
+      pendingQuickPresetHeaderTopScrollRef.current = true;
+    }
+
+    scrollOffsetY.current = 0;
+    actualScrollOffsetY.current = 0;
+
+    const scrollToTop = () => {
+      todoListRef.current?.scrollToOffset({
+        animated: false,
+        offset: 0,
+      });
+    };
+
+    requestAnimationFrame(() => {
+      scrollToTop();
+      requestAnimationFrame(scrollToTop);
+    });
+  }, []);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -10429,6 +10509,7 @@ export default function App() {
       haptic: false,
     });
     setOpenQuickPresetNavSlotNumber(slotNumber);
+    scrollTodoListToHeaderTop({ ensureAfterDataUpdate: true });
 
     if (isDoubleTap) {
       setToggleAllTodoSectionsRequest((current) => current + 1);
@@ -10441,6 +10522,7 @@ export default function App() {
   }, [
     applyMenuPreset,
     flushFilterConfigUndoBatch,
+    scrollTodoListToHeaderTop,
   ]);
 
   const handleQuickPresetNavPress = useCallback((
@@ -10463,6 +10545,42 @@ export default function App() {
     applyQuickPresetNavPreset(preset, slotNumber, event.nativeEvent.timestamp || Date.now());
   }, [
     applyQuickPresetNavPreset,
+  ]);
+
+  const handleQuickPresetHeaderSwipeStateChange = useCallback((
+    event: PanGestureHandlerStateChangeEvent,
+  ) => {
+    const { state, translationX, velocityX } = event.nativeEvent;
+
+    if (
+      state !== State.END ||
+      !quickPresetHeaderSwipeEnabled ||
+      currentQuickPresetSwipeItemIndex < 0
+    ) {
+      return;
+    }
+
+    const hasDistance = Math.abs(translationX) >= QUICK_PRESET_HEADER_SWIPE_DISTANCE;
+    const hasVelocity = Math.abs(velocityX) >= QUICK_PRESET_HEADER_SWIPE_VELOCITY;
+    if (!hasDistance && !hasVelocity) {
+      return;
+    }
+
+    const direction = hasDistance
+      ? translationX < 0 ? 1 : -1
+      : velocityX < 0 ? 1 : -1;
+    const targetItem = quickPresetNavItems[currentQuickPresetSwipeItemIndex + direction];
+
+    if (!targetItem?.preset) {
+      return;
+    }
+
+    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now());
+  }, [
+    applyQuickPresetNavPreset,
+    currentQuickPresetSwipeItemIndex,
+    quickPresetHeaderSwipeEnabled,
+    quickPresetNavItems,
   ]);
 
   const removeMenuPreset = useCallback((id: string) => {
@@ -13414,10 +13532,26 @@ export default function App() {
                 ListHeaderComponent={
                   <View>
                     {todoListOneHandedOffset > 0 ? (
-                      <View
-                        pointerEvents="none"
-                        style={{ height: todoListOneHandedOffset }}
-                      />
+                      quickPresetHeaderSwipeEnabled ? (
+                        <PanGestureHandler
+                          activeOffsetX={QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X}
+                          failOffsetY={QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y}
+                          onHandlerStateChange={handleQuickPresetHeaderSwipeStateChange}
+                        >
+                          <View
+                            collapsable={false}
+                            style={[
+                              styles.quickPresetHeaderSwipeZone,
+                              { height: todoListOneHandedOffset },
+                            ]}
+                          />
+                        </PanGestureHandler>
+                      ) : (
+                        <View
+                          pointerEvents="none"
+                          style={{ height: todoListOneHandedOffset }}
+                        />
+                      )
                     ) : null}
                     <View style={styles.headerSearchRow}>
                       <View style={styles.searchBox}>
@@ -18163,6 +18297,9 @@ const styles = StyleSheet.create({
   },
   appHeaderSettingsButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
+  },
+  quickPresetHeaderSwipeZone: {
+    backgroundColor: THEME_BG,
   },
   headerSearchRow: {
     backgroundColor: THEME_BG,

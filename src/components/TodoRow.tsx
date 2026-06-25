@@ -507,6 +507,7 @@ export type TodoRowProps = {
   sectionLabel?: string;
   selectMode?: boolean;
   showOverdueMetaTags?: boolean;
+  swipeDisabled?: boolean;
   viewportWidth: number;
 };
 
@@ -539,6 +540,7 @@ function TodoRowComponent({
   searchHighlightContent = true,
   selectMode = false,
   showOverdueMetaTags = true,
+  swipeDisabled = false,
   viewportWidth,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
@@ -599,7 +601,7 @@ function TodoRowComponent({
     (isRecentlyEdited || isHighlightedForCreate || isCompletionFeedback) && !suppressChangeFill;
   const isHighlightedForSelection = selectMode && isSelected;
   const isVisuallyDone = item.done || isCompletionFeedback;
-  const swipeEnabled = !isPendingDelete && !isMenuTarget && !selectMode;
+  const swipeEnabled = !swipeDisabled && !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
   const titleMeasurementKey = [
     Math.round(viewportWidth),
@@ -1433,6 +1435,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.isSelected === next.isSelected &&
   prev.isPendingDelete === next.isPendingDelete &&
   prev.selectMode === next.selectMode &&
+  prev.swipeDisabled === next.swipeDisabled &&
   prev.layout === next.layout &&
   prev.sectionLabel === next.sectionLabel &&
   prev.dateLabelDisplayMode === next.dateLabelDisplayMode &&

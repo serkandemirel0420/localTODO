@@ -771,10 +771,10 @@ const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_RESERVED_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
 const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
-const QUICK_PRESET_HEADER_SWIPE_DISTANCE = 58;
-const QUICK_PRESET_HEADER_SWIPE_VELOCITY = 650;
-const QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-24, 24];
-const QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y: [number, number] = [-18, 18];
+const QUICK_PRESET_HEADER_SWIPE_DISTANCE = 34;
+const QUICK_PRESET_HEADER_SWIPE_VELOCITY = 420;
+const QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-12, 12];
+const QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y: [number, number] = [-22, 22];
 const MENU_DISMISS_RELEASE = 52;
 const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 116;
 
@@ -3587,6 +3587,7 @@ export default function App() {
   const [openQuickPresetNavSlotNumber, setOpenQuickPresetNavSlotNumber] = useState<number | null>(
     null,
   );
+  const [quickPresetScreenSwipeArmed, setQuickPresetScreenSwipeArmed] = useState(false);
   const [heldQuickPresetNavSlotNumber, setHeldQuickPresetNavSlotNumber] = useState<number | null>(
     null,
   );
@@ -3809,7 +3810,7 @@ export default function App() {
     item: null,
     preset: null,
   });
-  const pendingQuickPresetHeaderTopScrollRef = useRef(false);
+  const pendingQuickPresetScrollTargetRef = useRef<'search' | 'top' | null>(null);
   const itemSearchResultsCacheRef = useRef(new Map<string, string[]>());
   const previousSearchModeRef = useRef<SearchMode>('preset');
   const skipNextTodoListOffsetEffectRef = useRef(false);
@@ -7977,6 +7978,13 @@ export default function App() {
     !listMenuOpen &&
     !settingsModalVisible &&
     !todoSelectMode;
+  const quickPresetScreenSwipeEnabled =
+    quickPresetScreenSwipeArmed && quickPresetHeaderSwipeEnabled;
+  useEffect(() => {
+    if (quickPresetScreenSwipeArmed && !quickPresetHeaderSwipeEnabled) {
+      setQuickPresetScreenSwipeArmed(false);
+    }
+  }, [quickPresetHeaderSwipeEnabled, quickPresetScreenSwipeArmed]);
   const todoListOneHandedOffset = useMemo(() => {
     const viewportHeight = todoListFrameHeight || windowHeight;
     const calculatedOffset = Math.max(
@@ -8440,22 +8448,29 @@ export default function App() {
   }, [todoListOneHandedOffset, todoListRestingOffset]);
 
   useEffect(() => {
-    if (!pendingQuickPresetHeaderTopScrollRef.current) {
+    const pendingScrollTarget = pendingQuickPresetScrollTargetRef.current;
+    if (!pendingScrollTarget) {
       return undefined;
     }
 
     const frame = requestAnimationFrame(() => {
-      pendingQuickPresetHeaderTopScrollRef.current = false;
-      scrollOffsetY.current = 0;
-      actualScrollOffsetY.current = 0;
+      const nextOffset = pendingScrollTarget === 'search' ? todoListSearchOffset : 0;
+      pendingQuickPresetScrollTargetRef.current = null;
+      scrollOffsetY.current = nextOffset;
+      actualScrollOffsetY.current = nextOffset;
       todoListRef.current?.scrollToOffset({
         animated: false,
-        offset: 0,
+        offset: nextOffset,
       });
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [appTodoListData.length, openQuickPresetNavSlotNumber, todoListOneHandedOffset]);
+  }, [
+    appTodoListData.length,
+    openQuickPresetNavSlotNumber,
+    todoListOneHandedOffset,
+    todoListSearchOffset,
+  ]);
 
   useLayoutEffect(() => {
     if (navTab !== 'search' || previousSearchModeRef.current === searchMode) {
@@ -8510,27 +8525,33 @@ export default function App() {
   }, [todoListSearchOffset]);
 
   const scrollTodoListToHeaderTop = useCallback((
-    options: { ensureAfterDataUpdate?: boolean } = {},
+    options: {
+      ensureAfterDataUpdate?: boolean;
+      target?: 'search' | 'top';
+    } = {},
   ) => {
+    const target = options.target ?? 'top';
+    const nextOffset = target === 'search' ? todoListSearchOffset : 0;
+
     if (options.ensureAfterDataUpdate) {
-      pendingQuickPresetHeaderTopScrollRef.current = true;
+      pendingQuickPresetScrollTargetRef.current = target;
     }
 
-    scrollOffsetY.current = 0;
-    actualScrollOffsetY.current = 0;
+    scrollOffsetY.current = nextOffset;
+    actualScrollOffsetY.current = nextOffset;
 
-    const scrollToTop = () => {
+    const scrollToTarget = () => {
       todoListRef.current?.scrollToOffset({
         animated: false,
-        offset: 0,
+        offset: nextOffset,
       });
     };
 
     requestAnimationFrame(() => {
-      scrollToTop();
-      requestAnimationFrame(scrollToTop);
+      scrollToTarget();
+      requestAnimationFrame(scrollToTarget);
     });
-  }, []);
+  }, [todoListSearchOffset]);
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -10484,6 +10505,7 @@ export default function App() {
     preset: MenuPreset | null,
     slotNumber: number,
     timestamp: number,
+    options: { scrollTarget?: 'search' | 'top' } = {},
   ) => {
     if (!preset) {
       return;
@@ -10509,7 +10531,10 @@ export default function App() {
       haptic: false,
     });
     setOpenQuickPresetNavSlotNumber(slotNumber);
-    scrollTodoListToHeaderTop({ ensureAfterDataUpdate: true });
+    scrollTodoListToHeaderTop({
+      ensureAfterDataUpdate: true,
+      target: options.scrollTarget ?? 'top',
+    });
 
     if (isDoubleTap) {
       setToggleAllTodoSectionsRequest((current) => current + 1);
@@ -10535,16 +10560,44 @@ export default function App() {
       return;
     }
 
+    const timestamp = event.nativeEvent.timestamp || Date.now();
+
     if (phase === 'pressIn') {
       quickPresetNavPressInRef.current = preset.id;
+      if (quickPresetScreenSwipeArmed && openQuickPresetNavSlotNumber === slotNumber) {
+        const lastTap = lastQuickPresetNavTapRef.current;
+        const elapsed = timestamp - lastTap.timestamp;
+        const isQuickSecondTap =
+          lastTap.presetId === preset.id &&
+          elapsed >= 0 &&
+          elapsed < QUICK_PRESET_NAV_DOUBLE_TAP_MS;
+
+        if (isQuickSecondTap) {
+          applyQuickPresetNavPreset(preset, slotNumber, timestamp, {
+            scrollTarget: 'search',
+          });
+          return;
+        }
+
+        setQuickPresetScreenSwipeArmed(false);
+        lastQuickPresetNavTapRef.current = { presetId: '', timestamp: 0 };
+        triggerSubtleHaptic();
+        return;
+      }
+
+      setQuickPresetScreenSwipeArmed(true);
     } else if (quickPresetNavPressInRef.current === preset.id) {
       quickPresetNavPressInRef.current = null;
       return;
     }
 
-    applyQuickPresetNavPreset(preset, slotNumber, event.nativeEvent.timestamp || Date.now());
+    applyQuickPresetNavPreset(preset, slotNumber, timestamp, {
+      scrollTarget: phase === 'pressIn' || quickPresetScreenSwipeArmed ? 'search' : 'top',
+    });
   }, [
     applyQuickPresetNavPreset,
+    openQuickPresetNavSlotNumber,
+    quickPresetScreenSwipeArmed,
   ]);
 
   const handleQuickPresetHeaderSwipeStateChange = useCallback((
@@ -10575,11 +10628,14 @@ export default function App() {
       return;
     }
 
-    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now());
+    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now(), {
+      scrollTarget: quickPresetScreenSwipeEnabled ? 'search' : 'top',
+    });
   }, [
     applyQuickPresetNavPreset,
     currentQuickPresetSwipeItemIndex,
     quickPresetHeaderSwipeEnabled,
+    quickPresetScreenSwipeEnabled,
     quickPresetNavItems,
   ]);
 
@@ -12787,6 +12843,7 @@ export default function App() {
                 searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
+                swipeDisabled={quickPresetScreenSwipeEnabled}
                 viewportWidth={windowWidth}
               />
             </View>
@@ -12864,6 +12921,7 @@ export default function App() {
                 searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
+                swipeDisabled={quickPresetScreenSwipeEnabled}
                 viewportWidth={windowWidth}
               />
             </View>
@@ -13018,6 +13076,7 @@ export default function App() {
                 searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
+                swipeDisabled={quickPresetScreenSwipeEnabled}
                 viewportWidth={windowWidth}
               />
             </View>
@@ -13181,6 +13240,7 @@ export default function App() {
                     selectMode={todoSelectMode}
                     sectionLabel={item.sectionLabel}
                     showOverdueMetaTags={showOverdueMetaTags}
+                    swipeDisabled={quickPresetScreenSwipeEnabled}
                     viewportWidth={windowWidth}
                   />
                 </View>
@@ -13237,6 +13297,7 @@ export default function App() {
             searchHighlightQuery={itemSearchHighlightQuery}
             selectMode={todoSelectMode}
             showOverdueMetaTags={showOverdueMetaTags}
+            swipeDisabled={quickPresetScreenSwipeEnabled}
             viewportWidth={windowWidth}
           />
         </View>
@@ -13266,6 +13327,7 @@ export default function App() {
       renderTodoSectionAddButton,
       openMenuForTodoAction,
       pendingDeleteIds,
+      quickPresetScreenSwipeEnabled,
       recentlyEditedTodoIds,
       repeatingTodoCompletionFeedbackIds,
       renderVisibleTodoRowGap,
@@ -13450,17 +13512,23 @@ export default function App() {
               />
             </View>
           ) : (
-            <View
-              collapsable={false}
-              onTouchEnd={handleListFrameTouchEnd}
-              onTouchStart={handleListFrameTouchStart}
-              style={styles.todoListTapFrame}
+            <PanGestureHandler
+              activeOffsetX={QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X}
+              enabled={quickPresetScreenSwipeEnabled}
+              failOffsetY={QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y}
+              onHandlerStateChange={handleQuickPresetHeaderSwipeStateChange}
             >
-            <View
-              collapsable={false}
-              onLayout={handleTodoListFrameLayout}
-              style={styles.todoListFrame}
-            >
+              <View
+                collapsable={false}
+                onTouchEnd={handleListFrameTouchEnd}
+                onTouchStart={handleListFrameTouchStart}
+                style={styles.todoListTapFrame}
+              >
+              <View
+                collapsable={false}
+                onLayout={handleTodoListFrameLayout}
+                style={styles.todoListFrame}
+              >
               <FlashList
                 ref={todoListRef}
                 alwaysBounceVertical={false}
@@ -13532,7 +13600,7 @@ export default function App() {
                 ListHeaderComponent={
                   <View>
                     {todoListOneHandedOffset > 0 ? (
-                      quickPresetHeaderSwipeEnabled ? (
+                      quickPresetHeaderSwipeEnabled && !quickPresetScreenSwipeEnabled ? (
                         <PanGestureHandler
                           activeOffsetX={QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X}
                           failOffsetY={QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y}
@@ -13658,8 +13726,9 @@ export default function App() {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
               />
+              </View>
             </View>
-          </View>
+            </PanGestureHandler>
           )}
 
         </View>
@@ -13690,6 +13759,7 @@ export default function App() {
         <View style={[
           styles.bottomNav,
           (settingsModalVisible || filterConfigModalVisible) && styles.bottomNavFlat,
+          quickPresetScreenSwipeEnabled && styles.bottomNavPresetSwipeArmed,
         ]}>
           <QuickPresetNav
             accentColor={NAV_ACCENT}
@@ -18373,6 +18443,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0,
     shadowRadius: 0,
+  },
+  bottomNavPresetSwipeArmed: {
+    borderTopColor: '#D14A42',
+    borderTopWidth: 2,
   },
   bottomNavPrimary: {
     alignItems: 'stretch',

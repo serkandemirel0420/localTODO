@@ -259,7 +259,7 @@ export const isDatePickerMenuItemSelected = (
 
   if (menuLabel === REPEAT_PICKER_LABEL) {
     const { repeat } = decodeTodoReminder(reminderLabels);
-    return repeat !== 'none' && !isRepeatShortcutPreset(repeat);
+    return repeat !== 'none';
   }
 
   return isDateSelected(menuLabel, dateLabels);
@@ -281,11 +281,6 @@ export const getDatePickerMenuDisplayLabel = (
   }
 
   if (menuLabel === REPEAT_PICKER_LABEL) {
-    const { repeat } = decodeTodoReminder(reminderLabels);
-    if (isRepeatShortcutPreset(repeat)) {
-      return REPEAT_PICKER_LABEL;
-    }
-
     return formatRepeatMenuLabel(reminderLabels);
   }
 

@@ -16,6 +16,7 @@ import {
   type ReminderTime,
   type RepeatPreset,
 } from './reminders';
+import { type NotificationLogEntry } from './storage/notificationLogStore';
 import { type Todo } from './todos';
 
 const TODO_ALARM_CHANNEL_ID = 'todo-alarms';
@@ -152,6 +153,39 @@ const getTodoAlarmRequestTodoId = (
 const getTodoAlarmResponseTodoId = (
   response: Notifications.NotificationResponse | null | undefined,
 ) => getTodoAlarmRequestTodoId(response?.notification.request);
+
+const getTodoAlarmNotificationLogEntry = (
+  notification: Notifications.Notification | null | undefined,
+): NotificationLogEntry | null => {
+  if (!notification) {
+    return null;
+  }
+
+  const { request } = notification;
+  const todoId = getTodoAlarmRequestTodoId(request);
+  if (!todoId) {
+    return null;
+  }
+
+  const receivedAt = (
+    typeof notification.date === 'number' &&
+    Number.isFinite(notification.date) &&
+    notification.date > 0
+  )
+    ? notification.date
+    : Date.now();
+  const requestIdentifier = request.identifier || getTodoAlarmIdentifier(todoId);
+
+  return {
+    body: request.content.body?.trim() ?? '',
+    id: `${requestIdentifier}:${receivedAt}`,
+    receivedAt,
+    requestIdentifier,
+    subtitle: request.content.subtitle?.trim() ?? '',
+    title: request.content.title?.trim() || 'Todo',
+    todoId,
+  };
+};
 
 const dismissPresentedTodoAlarmNotifications = async (
   shouldDismiss: (todoId: string) => boolean,
@@ -387,16 +421,21 @@ const createTodoAlarmRequest = (
   };
 };
 
-export const consumeLastTodoAlarmNotificationResponse = async () => {
+export const consumeLastTodoAlarmNotificationResponse = async (
+  onNotification?: (entry: NotificationLogEntry) => void,
+) => {
   if (!canScheduleNotifications()) {
     return null;
   }
 
-  const todoId = getTodoAlarmResponseTodoId(
-    await Notifications.getLastNotificationResponseAsync(),
-  );
+  const response = await Notifications.getLastNotificationResponseAsync();
+  const todoId = getTodoAlarmResponseTodoId(response);
 
   if (todoId) {
+    const logEntry = getTodoAlarmNotificationLogEntry(response?.notification);
+    if (logEntry) {
+      onNotification?.(logEntry);
+    }
     await Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
   }
 
@@ -405,6 +444,7 @@ export const consumeLastTodoAlarmNotificationResponse = async () => {
 
 export const addTodoAlarmResponseListener = (
   openTodo: (todoId: string) => void,
+  onNotification?: (entry: NotificationLogEntry) => void,
 ) => {
   if (!canScheduleNotifications()) {
     return { remove: () => undefined };
@@ -413,9 +453,42 @@ export const addTodoAlarmResponseListener = (
   return Notifications.addNotificationResponseReceivedListener((response) => {
     const todoId = getTodoAlarmResponseTodoId(response);
     if (todoId) {
+      const logEntry = getTodoAlarmNotificationLogEntry(response.notification);
+      if (logEntry) {
+        onNotification?.(logEntry);
+      }
       openTodo(todoId);
     }
   });
+};
+
+export const addTodoAlarmReceivedListener = (
+  onNotification: (entry: NotificationLogEntry) => void,
+) => {
+  if (!canScheduleNotifications()) {
+    return { remove: () => undefined };
+  }
+
+  return Notifications.addNotificationReceivedListener((notification) => {
+    const logEntry = getTodoAlarmNotificationLogEntry(notification);
+    if (logEntry) {
+      onNotification(logEntry);
+    }
+  });
+};
+
+export const getPresentedTodoAlarmNotificationLogEntries = async () => {
+  if (!canScheduleNotifications()) {
+    return [];
+  }
+
+  const presentedNotifications = await Notifications
+    .getPresentedNotificationsAsync()
+    .catch(() => []);
+
+  return presentedNotifications
+    .map(getTodoAlarmNotificationLogEntry)
+    .filter((entry): entry is NotificationLogEntry => Boolean(entry));
 };
 
 export const cancelTodoAlarm = async (todoId: string) => {

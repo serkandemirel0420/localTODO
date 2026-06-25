@@ -8,7 +8,6 @@ import {
 import {
   REMINDER_PICKER_LABEL,
   REPEAT_PICKER_LABEL,
-  REPEAT_SHORTCUT_MENU_ITEMS,
 } from './reminders';
 import {
   type TodoGroupMode,
@@ -22,14 +21,13 @@ export const DATE_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS,
 ];
 
-/** Date drawer list: date choices + repeat shortcuts + Reminder + Repeating. */
+/** Date drawer list: date choices + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS.filter((label) => (
     label !== LATER_DATE_LABEL && label !== CUSTOM_DATE_LABEL
   )),
   LATER_DATE_LABEL,
   CUSTOM_DATE_LABEL,
-  ...REPEAT_SHORTCUT_MENU_ITEMS,
   REMINDER_PICKER_LABEL,
   REPEAT_PICKER_LABEL,
 ];

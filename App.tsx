@@ -88,6 +88,11 @@ import {
 } from './src/dates';
 import { localTodoStore } from './src/storage/todoStore';
 import {
+  notificationLogStore,
+  normalizeNotificationLogEntries,
+  type NotificationLogEntry,
+} from './src/storage/notificationLogStore';
+import {
   cloneDeletedTodos,
   cloneTodo,
   cloneTodoFilters,
@@ -201,9 +206,11 @@ import {
 import { getEffectiveTodoDateLabels } from './src/todoDates';
 import { advanceRepeatingTodoAfterDone } from './src/todoRecurrence';
 import {
+  addTodoAlarmReceivedListener,
   addTodoAlarmResponseListener,
   cancelTodoAlarm,
   consumeLastTodoAlarmNotificationResponse,
+  getPresentedTodoAlarmNotificationLogEntries,
   reconcileTodoAlarms,
   syncTodoAlarm,
 } from './src/todoAlarms';
@@ -978,6 +985,7 @@ const buildItemSearchRows = (todos: Todo[]): SearchItemTodoRow[] =>
 
 const PRESET_SWIPE_DELETE_WIDTH = 72;
 const BACKUP_SLOT_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
+const NOTIFICATION_LOG_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
 const SETTINGS_LIST_ROW_HEIGHT = 54;
 const SETTINGS_LIST_SWIPE_DELETE_WIDTH = PRESET_SWIPE_DELETE_WIDTH;
 const FILTER_KIND_LABELS: Record<FilterKey, string> = {
@@ -1266,7 +1274,7 @@ const buildActiveFilterItems = (
     )),
   ];
 
-type NavTab = 'calendar' | 'menu' | 'search' | 'settings';
+type NavTab = 'calendar' | 'menu' | 'notifications' | 'search' | 'settings';
 
 type CreateDrawerPicker = 'date' | 'list' | 'priority' | 'tags';
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
@@ -1622,6 +1630,93 @@ const getFilledDriveBackupSlots = (slots: DriveBackupSlot[]) => (
   slots.filter((slot) => slot.file)
 );
 
+const formatNotificationLogTime = (value: number) =>
+  new Date(value).toLocaleString(undefined, {
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    month: 'short',
+  });
+
+type NotificationLogSwipeRowProps = {
+  entry: NotificationLogEntry;
+  onDelete: () => void;
+  onPress: () => void;
+};
+
+function NotificationLogSwipeRow({
+  entry,
+  onDelete,
+  onPress,
+}: NotificationLogSwipeRowProps) {
+  const subtitle = [
+    formatNotificationLogTime(entry.receivedAt),
+    entry.subtitle,
+  ].filter(Boolean).join(' · ');
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.notificationLogSwipeActions}>
+        <GHTouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Delete notification ${entry.title}`}
+          activeOpacity={0.82}
+          onPress={onDelete}
+          style={styles.notificationLogSwipeDelete}
+        >
+          <Ionicons color="#FFFFFF" name="trash-outline" size={22} />
+        </GHTouchableOpacity>
+      </View>
+    ),
+    [entry.title, onDelete],
+  );
+
+  return (
+    <View style={styles.notificationLogSwipeShell}>
+      <Swipeable
+        childrenContainerStyle={styles.notificationLogSwipeChildren}
+        containerStyle={styles.notificationLogSwipeContainer}
+        dragOffsetFromLeftEdge={12}
+        dragOffsetFromRightEdge={12}
+        friction={1.1}
+        overshootRight={false}
+        renderRightActions={renderRightActions}
+        rightThreshold={NOTIFICATION_LOG_SWIPE_DELETE_WIDTH}
+      >
+        <Pressable
+          accessibilityHint="Opens the todo from this notification"
+          accessibilityLabel={`${entry.title}. ${subtitle}`}
+          accessibilityRole="button"
+          onPress={onPress}
+          style={({ pressed }) => [
+            styles.notificationLogRow,
+            pressed && styles.notificationLogRowPressed,
+          ]}
+        >
+          <View style={styles.notificationLogIconWrap}>
+            <Ionicons color={THEME_ACCENT} name="notifications-outline" size={20} />
+          </View>
+          <View style={styles.notificationLogTextStack}>
+            <Text numberOfLines={1} style={styles.notificationLogTitle}>
+              {entry.title}
+            </Text>
+            <Text numberOfLines={1} style={styles.notificationLogSubtitle}>
+              {subtitle}
+            </Text>
+            {entry.body ? (
+              <Text numberOfLines={2} style={styles.notificationLogBody}>
+                {entry.body}
+              </Text>
+            ) : null}
+          </View>
+          <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+        </Pressable>
+      </Swipeable>
+    </View>
+  );
+}
+
+const MemoizedNotificationLogSwipeRow = React.memo(NotificationLogSwipeRow);
+
 type GoogleDriveBackupSlotRowProps = {
   actionLabel: string;
   disabled: boolean;
@@ -1629,6 +1724,7 @@ type GoogleDriveBackupSlotRowProps = {
   onDelete: () => void;
   onPress: () => void;
   scrollGestureRef?: React.RefObject<React.ComponentRef<typeof GestureScrollView> | null>;
+  selected?: boolean;
   slot: DriveBackupSlot;
 };
 
@@ -1639,6 +1735,7 @@ function GoogleDriveBackupSlotRow({
   onDelete,
   onPress,
   scrollGestureRef,
+  selected = false,
   slot,
 }: GoogleDriveBackupSlotRowProps) {
   const canDelete = Boolean(slot.file);
@@ -1675,15 +1772,26 @@ function GoogleDriveBackupSlotRow({
         simultaneousHandlers={scrollGestureRef}
       >
         {listOnly ? (
-          <View
-            accessibilityHint={canDelete ? 'Swipe left to delete this backup.' : undefined}
+          <Pressable
             accessibilityLabel={`${title}. ${subtitle}`}
-            accessibilityRole="text"
-            style={[
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: selected, disabled: !canDelete }}
+            disabled={!canDelete}
+            onPress={onPress}
+            style={({ pressed }) => [
               styles.googleDrivePickerChoice,
               slot.file && styles.googleDrivePickerChoiceFilled,
+              selected && styles.googleDrivePickerChoiceSelected,
+              !canDelete && styles.googleDrivePickerChoiceDisabled,
+              pressed && canDelete && styles.googleDrivePickerChoicePressed,
             ]}
           >
+            <Ionicons
+              color={selected ? THEME_ACCENT : THEME_TEXT_TERTIARY}
+              name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+              size={22}
+              style={styles.googleDrivePickerChoiceSelectIcon}
+            />
             <View style={styles.googleDrivePickerChoiceTextWrap}>
               <Text
                 numberOfLines={1}
@@ -1698,7 +1806,7 @@ function GoogleDriveBackupSlotRow({
                 {subtitle}
               </Text>
             </View>
-          </View>
+          </Pressable>
         ) : (
           <Pressable
             accessibilityRole="button"
@@ -1969,6 +2077,79 @@ const renameListLabelInFilterColors = (
 
   return { ...colors, list: nextList };
 };
+
+const removeListLabelsFromFilters = <T extends TodoFilters>(
+  filters: T,
+  removedLabels: Set<string>,
+): T => {
+  const nextList = filters.list.filter((label) => !removedLabels.has(label));
+  return nextList.length === filters.list.length ? filters : { ...filters, list: nextList };
+};
+
+const removeListLabelsFromPresetSection = (
+  section: MenuPresetSection,
+  removedLabels: Set<string>,
+): MenuPresetSection => ({
+  ...section,
+  filters: removeListLabelsFromFilters(section.filters, removedLabels),
+  requiredFilters: removeListLabelsFromFilters(section.requiredFilters, removedLabels),
+  avoidedFilters: removeListLabelsFromFilters(section.avoidedFilters, removedLabels),
+});
+
+const removeListLabelsFromPreset = (
+  preset: MenuPreset,
+  removedLabels: Set<string>,
+): MenuPreset => ({
+  ...preset,
+  filters: removeListLabelsFromFilters(preset.filters, removedLabels),
+  requiredFilters: removeListLabelsFromFilters(preset.requiredFilters, removedLabels),
+  avoidedFilters: removeListLabelsFromFilters(preset.avoidedFilters, removedLabels),
+  ...(preset.sections
+    ? {
+        sections: preset.sections.map((section) => (
+          removeListLabelsFromPresetSection(section, removedLabels)
+        )),
+      }
+    : {}),
+});
+
+const removeListLabelsFromTodo = <T extends Todo>(
+  todo: T,
+  removedLabels: Set<string>,
+): T => {
+  const filters = removeListLabelsFromFilters(todo.filters, removedLabels);
+  return filters === todo.filters ? todo : { ...todo, filters };
+};
+
+const removeListLabelsFromFilterColors = (
+  colors: FilterColorSettings,
+  removedLabels: Set<string>,
+): FilterColorSettings => {
+  const nextList = Object.fromEntries(
+    Object.entries(colors.list).filter(([label]) => !removedLabels.has(label)),
+  );
+
+  return Object.keys(nextList).length === Object.keys(colors.list).length
+    ? colors
+    : { ...colors, list: nextList };
+};
+
+const countTodosUsingListNode = (
+  node: ListMenuNode,
+  todos: Todo[],
+  pendingDeleteIds: Set<string>,
+) => {
+  const labels = new Set(collectListNodeLabels([node]));
+  return todos.reduce((total, todo) => (
+    pendingDeleteIds.has(todo.id) || !todo.filters.list.some((label) => labels.has(label))
+      ? total
+      : total + 1
+  ), 0);
+};
+
+const formatSettingsListCount = (count: number) => (
+  count === 1 ? '1 item' : `${count} items`
+);
 
 const hasAnyFilterValues = (filters: TodoFilters): boolean =>
   filters.date.length > 0 ||
@@ -2642,36 +2823,50 @@ const MemoizedMenuPresetSwipeRow = React.memo(MenuPresetSwipeRow);
 type SettingsListSwipeRowProps = {
   allowDelete: boolean;
   allowIconEdit: boolean;
+  count?: number;
   isIconPickerOpen: boolean;
+  isSelectable?: boolean;
+  isSelected?: boolean;
   label: string;
   listIconName?: string;
   onDelete?: () => void;
   onIconPress: () => void;
   onMainPress?: () => void;
   onPinPress?: () => void;
+  onToggleSelect?: () => void;
   mainPressDisabled?: boolean;
   mainPressHint?: string;
+  selectionMode?: boolean;
   showInNavbar?: boolean;
 };
 
 function SettingsListSwipeRow({
   allowDelete,
   allowIconEdit,
+  count,
   isIconPickerOpen,
+  isSelectable = false,
+  isSelected = false,
   label,
   listIconName,
   onDelete,
   onIconPress,
   onMainPress,
   onPinPress,
+  onToggleSelect,
   mainPressDisabled,
   mainPressHint,
+  selectionMode = false,
   showInNavbar,
 }: SettingsListSwipeRowProps) {
   const renderedIconName = resolveMaterialCommunityIconName(listIconName, 'paw');
-  const mainPressLocked = mainPressDisabled || !onMainPress;
+  const mainPressHandler = selectionMode ? onToggleSelect : onMainPress;
+  const mainPressLocked = selectionMode
+    ? !onToggleSelect
+    : mainPressDisabled || !onMainPress;
+  const swipeDeleteEnabled = allowDelete && !selectionMode;
   const renderRightActions = useCallback(
-    () => (allowDelete && onDelete ? (
+    () => (swipeDeleteEnabled && onDelete ? (
       <View style={styles.settingsListSwipeActions}>
         <GHTouchableOpacity
           accessibilityRole="button"
@@ -2684,7 +2879,7 @@ function SettingsListSwipeRow({
         </GHTouchableOpacity>
       </View>
     ) : null),
-    [allowDelete, label, onDelete],
+    [label, onDelete, swipeDeleteEnabled],
   );
   const showPinControl = Boolean(onPinPress);
 
@@ -2695,13 +2890,35 @@ function SettingsListSwipeRow({
         containerStyle={styles.settingsListSwipeContainer}
         friction={1.1}
         overshootRight={false}
-        renderRightActions={allowDelete ? renderRightActions : undefined}
+        renderRightActions={swipeDeleteEnabled ? renderRightActions : undefined}
         rightThreshold={SETTINGS_LIST_SWIPE_DELETE_WIDTH}
       >
         <View
-          style={styles.settingsListRow}
+          style={[
+            styles.settingsListRow,
+            selectionMode && isSelected && styles.settingsListRowSelected,
+          ]}
         >
           <View style={styles.settingsListRowContent}>
+            {selectionMode && isSelectable ? (
+              <Pressable
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: isSelected }}
+                accessibilityLabel={`${isSelected ? 'Deselect' : 'Select'} ${label}`}
+                onPress={onToggleSelect}
+                style={({ pressed }) => [
+                  styles.settingsListSelectButton,
+                  isSelected && styles.settingsListSelectButtonSelected,
+                  pressed && styles.settingsOptionRowPressed,
+                ]}
+              >
+                <Ionicons
+                  color={isSelected ? THEME_ACCENT : THEME_TEXT_SECONDARY}
+                  name={isSelected ? 'checkbox' : 'square-outline'}
+                  size={20}
+                />
+              </Pressable>
+            ) : null}
             {allowIconEdit ? (
               <Pressable
                 accessibilityRole="button"
@@ -2722,16 +2939,23 @@ function SettingsListSwipeRow({
               </Pressable>
             ) : null}
             <Pressable
-              accessibilityRole="button"
+              accessibilityRole={selectionMode ? 'checkbox' : 'button'}
               accessibilityHint={
-                mainPressLocked
+                selectionMode
+                  ? 'Selects this list for deletion.'
+                  : mainPressLocked
                   ? 'Edit this list name from the List section.'
                   : mainPressHint ?? 'Tap to edit list name and search keywords.'
               }
               accessibilityLabel={label}
-              accessibilityState={{ disabled: mainPressLocked }}
+              accessibilityState={
+                selectionMode
+                  ? { checked: isSelected, disabled: mainPressLocked }
+                  : { disabled: mainPressLocked }
+              }
               disabled={mainPressLocked}
-              onPress={onMainPress}
+              onLongPress={isSelectable ? onToggleSelect : undefined}
+              onPress={mainPressHandler}
               style={({ pressed }) => [
                 styles.settingsListMainPress,
                 !mainPressLocked && pressed && styles.settingsListRowPressed,
@@ -2745,6 +2969,16 @@ function SettingsListSwipeRow({
               </Text>
             </Pressable>
           </View>
+          {count !== undefined ? (
+            <View
+              accessibilityLabel={`${label} has ${formatSettingsListCount(count)}`}
+              style={styles.settingsListCountPill}
+            >
+              <Text style={styles.settingsListCountText}>
+                {count}
+              </Text>
+            </View>
+          ) : null}
           {showPinControl ? (
             <Pressable
               accessibilityRole="switch"
@@ -2780,36 +3014,46 @@ type SettingsListReorderRowProps = {
   allowDelete: boolean;
   allowIconEdit: boolean;
   canReorder: boolean;
+  count?: number;
   iconPickerIndex: number | null;
   index: number;
   isReorderHighlighted: boolean;
+  isSelectable?: boolean;
+  isSelected?: boolean;
   item: ListMenuNode;
   onDelete?: () => void;
   onIconPickerChange: (index: number | null) => void;
   onMainPress?: () => void;
   onPinPress?: () => void;
+  onToggleSelect?: () => void;
   mainPressDisabled?: boolean;
   mainPressHint?: string;
   onReorderHandlePress: (index: number) => void;
   onSetIcon: (index: number, iconName: string | null) => void;
+  selectionMode?: boolean;
 };
 
 function SettingsListReorderRow({
   allowDelete,
   allowIconEdit,
   canReorder,
+  count,
   iconPickerIndex,
   index,
   isReorderHighlighted,
+  isSelectable = false,
+  isSelected = false,
   item,
   onDelete,
   onIconPickerChange,
   onMainPress,
   onPinPress,
+  onToggleSelect,
   mainPressDisabled,
   mainPressHint,
   onReorderHandlePress,
   onSetIcon,
+  selectionMode = false,
 }: SettingsListReorderRowProps) {
   const listIconName = item.iconName;
   const showInNavbar = item.showInNavbar !== false;
@@ -2848,7 +3092,10 @@ function SettingsListReorderRow({
             <MemoizedSettingsListSwipeRow
               allowDelete={allowDelete}
               allowIconEdit={allowIconEdit}
+              count={count}
               isIconPickerOpen={isIconPickerOpen}
+              isSelectable={isSelectable}
+              isSelected={isSelected}
               label={item.label}
               listIconName={listIconName}
               onDelete={onDelete}
@@ -2860,6 +3107,8 @@ function SettingsListReorderRow({
               mainPressHint={mainPressHint}
               onMainPress={onMainPress}
               onPinPress={onPinPress}
+              onToggleSelect={onToggleSelect}
+              selectionMode={selectionMode}
               showInNavbar={showInNavbar}
             />
           </View>
@@ -2952,36 +3201,46 @@ const SETTINGS_LIST_SWAP_FLASH_MS = 320;
 type SettingsListEditorProps = {
   allowDelete?: boolean;
   allowIconEdit?: boolean;
+  allowMultiSelect?: boolean;
   allowReorder?: boolean;
   iconPickerIndex: number | null;
+  itemCounts?: number[];
   items: ListMenuNode[];
   onDelete?: (index: number) => void;
   onIconPickerChange: (index: number | null) => void;
   onMainPress?: (index: number) => void;
   onPinPress?: (index: number) => void;
+  onToggleSelect?: (index: number) => void;
   mainPressDisabled?: boolean;
   mainPressHint?: string;
   onSetIcon: (index: number, iconName: string | null) => void;
   onSwap?: (fromIndex: number, toIndex: number) => void;
   reorderCancelNonce: number;
+  selectedLabels?: Set<string>;
+  selectionMode?: boolean;
   sortAscending?: boolean;
 };
 
 function SettingsListEditor({
   allowDelete = true,
   allowIconEdit = true,
+  allowMultiSelect = false,
   allowReorder = true,
   iconPickerIndex,
+  itemCounts,
   items,
   onDelete,
   onIconPickerChange,
   onMainPress,
   onPinPress,
+  onToggleSelect,
   mainPressDisabled = false,
   mainPressHint,
   onSetIcon,
   onSwap,
   reorderCancelNonce,
+  selectedLabels,
+  selectionMode = false,
   sortAscending = false,
 }: SettingsListEditorProps) {
   const swapFlashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3068,12 +3327,15 @@ function SettingsListEditor({
           allowIconEdit={allowIconEdit}
           key={`${index}-${item.label}`}
           canReorder={canReorder}
+          count={itemCounts?.[index]}
           iconPickerIndex={iconPickerIndex}
           index={index}
           isReorderHighlighted={
             selectedReorderIndex === index
             || swapFlashIndices.includes(index)
           }
+          isSelectable={allowMultiSelect}
+          isSelected={Boolean(selectedLabels?.has(item.label))}
           item={item}
           mainPressDisabled={mainPressDisabled}
           mainPressHint={mainPressHint}
@@ -3083,6 +3345,8 @@ function SettingsListEditor({
           onPinPress={onPinPress ? () => onPinPress(index) : undefined}
           onReorderHandlePress={handleReorderHandlePress}
           onSetIcon={onSetIcon}
+          onToggleSelect={onToggleSelect ? () => onToggleSelect(index) : undefined}
+          selectionMode={selectionMode}
         />
       ))}
     </View>
@@ -3251,6 +3515,7 @@ export default function App() {
     ids: string[];
     query: string;
   } | null>(null);
+  const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
@@ -3349,6 +3614,8 @@ export default function App() {
   const [googleDriveLastRestoreAt, setGoogleDriveLastRestoreAt] = useState<string | null>(null);
   const [googleDriveBackupPicker, setGoogleDriveBackupPicker] =
     useState<GoogleDriveBackupPickerState | null>(null);
+  const [googleDriveBackupPickerSelectedFileIds, setGoogleDriveBackupPickerSelectedFileIds] =
+    useState<Set<string>>(() => new Set());
   const [googleAuth, setGoogleAuth] = useState<StoredGoogleAuth | null>(null);
   const [listOrderMode, setListOrderMode] = useState<ListOrderMode>('alphabetical');
   const [presetLabelTagsSeeded, setPresetLabelTagsSeeded] = useState(false);
@@ -3358,6 +3625,17 @@ export default function App() {
     (selection: GoogleDriveBackupPickerSelection) => void
   ) | null>(null);
   const googleDriveBackupPickerScrollRef = useRef<React.ComponentRef<typeof GestureScrollView>>(null);
+  const googleDriveBackupPickerSelectedCount = useMemo(() => {
+    if (!googleDriveBackupPicker) {
+      return 0;
+    }
+
+    return googleDriveBackupPicker.slots.reduce((count, slot) => (
+      slot.file && googleDriveBackupPickerSelectedFileIds.has(slot.file.id)
+        ? count + 1
+        : count
+    ), 0);
+  }, [googleDriveBackupPicker, googleDriveBackupPickerSelectedFileIds]);
   const googleDriveBackupEnabledRef = useRef(googleDriveBackupEnabled);
   const hideDoneTodosRef = useRef(hideDoneTodos);
   const lastCreateTodoFiltersRef = useRef<TodoFilters>(lastCreateTodoFilters);
@@ -3408,6 +3686,10 @@ export default function App() {
   const [newTagName, setNewTagName] = useState('');
   const [editingTagName, setEditingTagName] = useState<string | null>(null);
   const [settingsListReorderCancelNonce, setSettingsListReorderCancelNonce] = useState(0);
+  const [settingsListSelectMode, setSettingsListSelectMode] = useState(false);
+  const [selectedSettingsListLabels, setSelectedSettingsListLabels] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [settingsListIconPickerIndex, setSettingsListIconPickerIndex] = useState<number | null>(
     null,
   );
@@ -3683,6 +3965,22 @@ export default function App() {
           setLoaded(true);
         }
       });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    notificationLogStore.load()
+      .then((entries) => {
+        if (alive) {
+          setNotificationLogEntries(entries);
+        }
+      })
+      .catch(() => undefined);
 
     return () => {
       alive = false;
@@ -5008,6 +5306,7 @@ export default function App() {
   ) => {
     const resolve = googleDriveBackupPickerResolveRef.current;
     googleDriveBackupPickerResolveRef.current = null;
+    setGoogleDriveBackupPickerSelectedFileIds(new Set());
     setGoogleDriveBackupPicker(null);
     resolve?.(selection);
   }, []);
@@ -5024,8 +5323,30 @@ export default function App() {
   ) => new Promise<GoogleDriveBackupPickerSelection>((resolve) => {
     googleDriveBackupPickerResolveRef.current?.(null);
     googleDriveBackupPickerResolveRef.current = resolve;
+    setGoogleDriveBackupPickerSelectedFileIds(new Set());
     setGoogleDriveBackupPicker({ accessToken, mode, scope, slots });
   }), []);
+
+  const toggleGoogleDriveBackupSlotSelection = useCallback((slot: DriveBackupSlot) => {
+    const file = slot.file;
+
+    if (!file) {
+      return;
+    }
+
+    setGoogleDriveBackupPickerSelectedFileIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(file.id)) {
+        next.delete(file.id);
+      } else {
+        next.add(file.id);
+      }
+
+      return next;
+    });
+    triggerSubtleHaptic();
+  }, []);
 
   const backToCreateDrawerInput = useCallback(() => {
     Keyboard.dismiss();
@@ -5093,6 +5414,48 @@ export default function App() {
     setActiveTodoDetailId(id);
   }, [closeListMenuState, resetCreateDrawerState]);
 
+  const mergeNotificationLog = useCallback((entries: NotificationLogEntry[]) => {
+    if (entries.length === 0) {
+      return;
+    }
+
+    setNotificationLogEntries((current) => (
+      normalizeNotificationLogEntries([...entries, ...current])
+    ));
+    notificationLogStore
+      .merge(entries)
+      .then(setNotificationLogEntries)
+      .catch(() => undefined);
+  }, []);
+
+  const appendNotificationLogEntry = useCallback((entry: NotificationLogEntry) => {
+    setNotificationLogEntries((current) => (
+      normalizeNotificationLogEntries([entry, ...current])
+    ));
+    notificationLogStore
+      .append(entry)
+      .then(setNotificationLogEntries)
+      .catch(() => undefined);
+  }, []);
+
+  const deleteNotificationLogEntry = useCallback((id: string) => {
+    setNotificationLogEntries((current) => current.filter((entry) => entry.id !== id));
+    notificationLogStore
+      .delete(id)
+      .then(setNotificationLogEntries)
+      .catch(() => undefined);
+    triggerSubtleHaptic();
+  }, []);
+
+  const openNotificationLogEntry = useCallback((entry: NotificationLogEntry) => {
+    if (!entry.todoId) {
+      return;
+    }
+
+    openTodoAlarmDetail(entry.todoId);
+    triggerSubtleHaptic();
+  }, [openTodoAlarmDetail]);
+
   useEffect(() => {
     if (!loaded) {
       return;
@@ -5112,7 +5475,7 @@ export default function App() {
       }
     };
 
-    consumeLastTodoAlarmNotificationResponse()
+    consumeLastTodoAlarmNotificationResponse(appendNotificationLogEntry)
       .then((todoId) => {
         if (todoId) {
           openTodo(todoId);
@@ -5120,13 +5483,42 @@ export default function App() {
       })
       .catch(() => undefined);
 
-    const subscription = addTodoAlarmResponseListener(openTodo);
+    const responseSubscription = addTodoAlarmResponseListener(
+      openTodo,
+      appendNotificationLogEntry,
+    );
+    const receivedSubscription = addTodoAlarmReceivedListener(appendNotificationLogEntry);
+    getPresentedTodoAlarmNotificationLogEntries()
+      .then((entries) => {
+        if (alive) {
+          mergeNotificationLog(entries);
+        }
+      })
+      .catch(() => undefined);
 
     return () => {
       alive = false;
+      responseSubscription.remove();
+      receivedSubscription.remove();
+    };
+  }, [appendNotificationLogEntry, mergeNotificationLog, openTodoAlarmDetail]);
+
+  useEffect(() => {
+    const mergePresentedNotificationsOnActive = (nextState: AppStateStatus) => {
+      if (nextState !== 'active') {
+        return;
+      }
+
+      getPresentedTodoAlarmNotificationLogEntries()
+        .then(mergeNotificationLog)
+        .catch(() => undefined);
+    };
+
+    const subscription = AppState.addEventListener('change', mergePresentedNotificationsOnActive);
+    return () => {
       subscription.remove();
     };
-  }, [openTodoAlarmDetail]);
+  }, [mergeNotificationLog]);
 
   const goBackInMenu = useCallback(() => {
     if (activeTodoDetailId) {
@@ -5183,6 +5575,12 @@ export default function App() {
       return true;
     }
 
+    if (navTab === 'notifications') {
+      setNavTab(null);
+      triggerSubtleHaptic();
+      return true;
+    }
+
     if (filterConfigModalVisible) {
       closeFilterConfigModal();
       return true;
@@ -5222,6 +5620,7 @@ export default function App() {
     flushFilterConfigUndoBatch,
     googleDriveBackupPicker,
     menuMode,
+    navTab,
     searchKeywordModalVisible,
     repeatReminderModalVisible,
     presetSaveModalVisible,
@@ -6813,6 +7212,11 @@ export default function App() {
     () => collectListNodeLabels(listMenuTree),
     [listMenuTree],
   );
+  const settingsListItemCounts = useMemo(
+    () => listMenuTree.map((node) => countTodosUsingListNode(node, todos, pendingDeleteIds)),
+    [listMenuTree, pendingDeleteIds, todos],
+  );
+  const selectedSettingsListCount = selectedSettingsListLabels.size;
   const settingsColorGroups = useMemo(
     () => [
       {
@@ -10532,107 +10936,116 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistAppSettings, quickPresetNavItems, recordUndo]);
 
-  const removeSettingsListNow = useCallback((index: number) => {
-    if (!listMenuTreeRef.current[index]) {
+  const deleteSettingsListsByLabels = useCallback((labels: string[]) => {
+    const targetLabels = new Set(labels);
+    const currentListMenuTree = listMenuTreeRef.current;
+    const removedNodes = currentListMenuTree.filter((node) => targetLabels.has(node.label));
+
+    if (removedNodes.length === 0) {
       return;
     }
 
-    recordUndo('Delete list');
+    const removedTopLevelLabels = new Set(removedNodes.map((node) => node.label));
+    const removedLabels = new Set(
+      removedNodes.flatMap((node) => collectListNodeLabels([node])),
+    );
+    const nextListMenuTree = currentListMenuTree.filter((node) => (
+      !removedTopLevelLabels.has(node.label)
+    ));
+    const nextSelectedFilters = removeListLabelsFromFilters(
+      selectedFiltersRef.current,
+      removedLabels,
+    );
+    const nextRequiredFilters = pruneTodoFilters(
+      removeListLabelsFromFilters(requiredFiltersRef.current, removedLabels),
+      nextSelectedFilters,
+    );
+    const nextAvoidedFilters = removeListLabelsFromFilters(
+      avoidedFiltersRef.current,
+      removedLabels,
+    );
+    const nextLastCreateTodoFilters = removeListLabelsFromFilters(
+      lastCreateTodoFiltersRef.current,
+      removedLabels,
+    );
+    const nextMenuPresets = menuPresetsRef.current.map((preset) => (
+      removeListLabelsFromPreset(preset, removedLabels)
+    ));
+    const nextDeletedTodos = deletedTodosRef.current.map((todo) => (
+      removeListLabelsFromTodo(todo, removedLabels)
+    ));
+    const currentTodos = todosRef.current;
+    const nextTodos = currentTodos.map((todo) => removeListLabelsFromTodo(todo, removedLabels));
+    const changedTodos = nextTodos.filter((todo, index) => (
+      todo !== currentTodos[index] && !pendingDeleteIdsRef.current.has(todo.id)
+    ));
+    const nextFilterColors = removeListLabelsFromFilterColors(
+      filterColorsRef.current,
+      removedLabels,
+    );
+
+    recordUndo(removedNodes.length === 1 ? 'Delete list' : 'Delete lists');
     setSettingsListReorderCancelNonce((current) => current + 1);
-    setSettingsListIconPickerIndex((current) => (
-      current === null || current === index ? null : current > index ? current - 1 : current
-    ));
-    setSettingsPresetIconPickerIndex((current) => (
-      current === null || current === index ? null : current > index ? current - 1 : current
-    ));
-    setListMenuTree((current) => {
-      const node = current[index];
-      if (!node) {
-        return current;
-      }
+    setSettingsListIconPickerIndex(null);
+    setSettingsPresetIconPickerIndex(null);
 
-      const removedLabels = new Set(collectListNodeLabels([node]));
-      setSelectedFilters((filters) => ({
-        ...filters,
-        list: filters.list.filter((label) => !removedLabels.has(label)),
-      }));
-      setRequiredFilters((filters) => ({
-        ...filters,
-        list: filters.list.filter((label) => !removedLabels.has(label)),
-      }));
-      setAvoidedFilters((filters) => ({
-        ...filters,
-        list: filters.list.filter((label) => !removedLabels.has(label)),
-      }));
-      setLastCreateTodoFilters((filters) => ({
-        ...filters,
-        list: filters.list.filter((label) => !removedLabels.has(label)),
-      }));
-      setMenuPresets((currentPresets) => currentPresets.map((preset) => ({
-        ...preset,
-        filters: {
-          ...preset.filters,
-          list: preset.filters.list.filter((label) => !removedLabels.has(label)),
-        },
-        requiredFilters: {
-          ...preset.requiredFilters,
-          list: preset.requiredFilters.list.filter((label) => !removedLabels.has(label)),
-        },
-        avoidedFilters: {
-          ...preset.avoidedFilters,
-          list: preset.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
-        },
-        sections: preset.sections?.map((section) => ({
-          ...section,
-          filters: {
-            ...section.filters,
-            list: section.filters.list.filter((label) => !removedLabels.has(label)),
-          },
-          requiredFilters: {
-            ...section.requiredFilters,
-            list: section.requiredFilters.list.filter((label) => !removedLabels.has(label)),
-          },
-          avoidedFilters: {
-            ...section.avoidedFilters,
-            list: section.avoidedFilters.list.filter((label) => !removedLabels.has(label)),
-          },
-        })),
-      })));
-      setTodos((items) => {
-        const nextItems = items.map((todo) => ({
-          ...todo,
-          filters: {
-            ...todo.filters,
-            list: todo.filters.list.filter((label) => !removedLabels.has(label)),
-          },
-        }));
-        localTodoStore
-          .upsertMany(nextItems.filter((todo) => !pendingDeleteIds.has(todo.id)))
-          .catch(() => undefined);
-        return nextItems;
+    selectedFiltersRef.current = nextSelectedFilters;
+    requiredFiltersRef.current = nextRequiredFilters;
+    avoidedFiltersRef.current = nextAvoidedFilters;
+    lastCreateTodoFiltersRef.current = nextLastCreateTodoFilters;
+    listMenuTreeRef.current = nextListMenuTree;
+    menuPresetsRef.current = nextMenuPresets;
+    deletedTodosRef.current = nextDeletedTodos;
+    todosRef.current = nextTodos;
+    filterColorsRef.current = nextFilterColors;
+
+    setSelectedFilters(nextSelectedFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
+    setLastCreateTodoFilters(nextLastCreateTodoFilters);
+    setCreateDraftFilters((filters) => removeListLabelsFromFilters(filters, removedLabels));
+    setListMenuTree(nextListMenuTree);
+    setMenuPresets(nextMenuPresets);
+    setDeletedTodos(nextDeletedTodos);
+    setTodos(nextTodos);
+    setFilterColors(nextFilterColors);
+    setCollapsedSearchListLabels((current) => {
+      let changed = false;
+      const next = new Set(current);
+      removedLabels.forEach((label) => {
+        if (next.delete(label)) {
+          changed = true;
+        }
       });
-      setDeletedTodos((items) => (
-        items.map((todo) => ({
-          ...todo,
-          filters: {
-            ...todo.filters,
-            list: todo.filters.list.filter((label) => !removedLabels.has(label)),
-          },
-        }))
-      ));
-      setFilterColors((colors) => ({
-        ...colors,
-        list: Object.fromEntries(
-          Object.entries(colors.list).filter(([label]) => !removedLabels.has(label)),
-        ),
-      }));
+      return changed ? next : current;
+    });
+    setSelectedSettingsListLabels((current) => {
+      let changed = false;
+      const next = new Set(current);
+      removedTopLevelLabels.forEach((label) => {
+        if (next.delete(label)) {
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
 
-      const next = current.filter((_, itemIndex) => itemIndex !== index);
-      persistListMenuTree(next);
-      return next;
+    if (changedTodos.length > 0) {
+      localTodoStore.upsertMany(changedTodos).catch(() => undefined);
+    }
+
+    void persistAppSettings({
+      deletedTodos: cloneDeletedTodos(nextDeletedTodos),
+      filterColors: cloneFilterColors(nextFilterColors),
+      lastCreateTodoFilters: cloneTodoFilters(nextLastCreateTodoFilters),
+      listMenuTree: cloneListMenuTree(nextListMenuTree),
+      menuPresets: cloneMenuPresets(nextMenuPresets),
+      avoidedFilters: cloneTodoFilters(nextAvoidedFilters),
+      requiredFilters: cloneTodoFilters(nextRequiredFilters),
+      selectedFilters: cloneTodoFilters(nextSelectedFilters),
     });
     triggerSubtleHaptic();
-  }, [pendingDeleteIds, persistListMenuTree, recordUndo]);
+  }, [persistAppSettings, recordUndo]);
 
   const removeSettingsList = useCallback((index: number) => {
     const node = listMenuTreeRef.current[index];
@@ -10640,14 +11053,14 @@ export default function App() {
       return;
     }
 
-    const removedLabels = new Set(collectListNodeLabels([node]));
-    const affectedTodoCount = todosRef.current.filter((todo) => (
-      !pendingDeleteIdsRef.current.has(todo.id) &&
-      todo.filters.list.some((label) => removedLabels.has(label))
-    )).length;
+    const affectedTodoCount = countTodosUsingListNode(
+      node,
+      todosRef.current,
+      pendingDeleteIdsRef.current,
+    );
 
     if (affectedTodoCount === 0) {
-      removeSettingsListNow(index);
+      deleteSettingsListsByLabels([node.label]);
       return;
     }
 
@@ -10661,11 +11074,112 @@ export default function App() {
         {
           text: 'Delete list',
           style: 'destructive',
-          onPress: () => removeSettingsListNow(index),
+          onPress: () => deleteSettingsListsByLabels([node.label]),
         },
       ],
     );
-  }, [removeSettingsListNow]);
+  }, [deleteSettingsListsByLabels]);
+
+  const beginSettingsListSelection = useCallback(() => {
+    if (listMenuTreeRef.current.length === 0) {
+      return;
+    }
+
+    setSettingsListSelectMode(true);
+    setSettingsListIconPickerIndex(null);
+    setSettingsPresetIconPickerIndex(null);
+    triggerSubtleHaptic();
+  }, []);
+
+  const clearSettingsListSelection = useCallback(() => {
+    setSettingsListSelectMode(false);
+    setSelectedSettingsListLabels(new Set());
+    setSettingsListIconPickerIndex(null);
+    triggerSubtleHaptic();
+  }, []);
+
+  const toggleSettingsListSelection = useCallback((index: number) => {
+    const node = listMenuTreeRef.current[index];
+    if (!node) {
+      return;
+    }
+
+    setSettingsListSelectMode(true);
+    setSettingsListIconPickerIndex(null);
+    setSelectedSettingsListLabels((current) => {
+      const next = new Set(current);
+      if (next.has(node.label)) {
+        next.delete(node.label);
+      } else {
+        next.add(node.label);
+      }
+      return next;
+    });
+    triggerSubtleHaptic();
+  }, []);
+
+  const deleteSelectedSettingsLists = useCallback(() => {
+    const currentTree = listMenuTreeRef.current;
+    const targetNodes = currentTree.filter((node) => selectedSettingsListLabels.has(node.label));
+
+    if (targetNodes.length === 0) {
+      return;
+    }
+
+    const removedLabels = new Set(
+      targetNodes.flatMap((node) => collectListNodeLabels([node])),
+    );
+    const affectedTodoCount = todosRef.current.filter((todo) => (
+      !pendingDeleteIdsRef.current.has(todo.id) &&
+      todo.filters.list.some((label) => removedLabels.has(label))
+    )).length;
+    const listCount = targetNodes.length;
+
+    Alert.alert(
+      listCount === 1 ? `Delete ${targetNodes[0].label}?` : `Delete ${listCount} lists?`,
+      affectedTodoCount === 0
+        ? undefined
+        : `${affectedTodoCount} ${
+            affectedTodoCount === 1 ? 'item uses' : 'items use'
+          } ${
+            listCount === 1 ? 'this list' : 'these lists'
+          }. Continue will remove ${
+            listCount === 1 ? 'this list' : 'these lists'
+          } from those items; items with no other list move to no list (-).`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: listCount === 1 ? 'Delete list' : 'Delete lists',
+          style: 'destructive',
+          onPress: () => {
+            deleteSettingsListsByLabels(targetNodes.map((node) => node.label));
+            setSettingsListSelectMode(false);
+            setSelectedSettingsListLabels(new Set());
+          },
+        },
+      ],
+    );
+  }, [deleteSettingsListsByLabels, selectedSettingsListLabels]);
+
+  useEffect(() => {
+    const availableLabels = new Set(listMenuTree.map((node) => node.label));
+    setSelectedSettingsListLabels((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      current.forEach((label) => {
+        if (availableLabels.has(label)) {
+          next.add(label);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+
+    if (listMenuTree.length === 0) {
+      setSettingsListSelectMode(false);
+    }
+  }, [listMenuTree]);
 
   const openSettingsModal = useCallback(() => {
     Keyboard.dismiss();
@@ -10682,6 +11196,8 @@ export default function App() {
     setSettingsListsExpanded(false);
     setSettingsPresetsExpanded(false);
     setSettingsListReorderCancelNonce((current) => current + 1);
+    setSettingsListSelectMode(false);
+    setSelectedSettingsListLabels(new Set());
     setSettingsListIconPickerIndex(null);
     setSettingsPresetIconPickerIndex(null);
     setSettingsModalVisible(true);
@@ -10702,6 +11218,10 @@ export default function App() {
           || activeMenuPreset?.label
           || null
         : null;
+
+    if (navTab === 'notifications') {
+      return 'Notifications';
+    }
 
     if (activePresetTitle) {
       return activePresetTitle;
@@ -10724,6 +11244,7 @@ export default function App() {
     activeListDisplay.listLabel,
     hasTodoEditTargets,
     menuMode,
+    navTab,
     activeMenuPreset,
     openMenuPreset,
     openQuickPresetNavItem,
@@ -10734,6 +11255,7 @@ export default function App() {
   const appHeaderTitleLeftAligned =
     !todoSelectMode
     && !hasTodoEditTargets
+    && navTab !== 'notifications'
     && Boolean(
       openQuickPresetNavItem?.displayLabel
       || openMenuPreset?.label
@@ -10848,6 +11370,12 @@ export default function App() {
       return;
     }
 
+    if (tab === 'notifications' && navTab === 'notifications') {
+      setNavTab(null);
+      triggerSubtleHaptic();
+      return;
+    }
+
     if (tab === 'settings') {
       if (settingsModalVisible) {
         closeSettingsModal();
@@ -10884,6 +11412,17 @@ export default function App() {
         Keyboard.dismiss();
         setMenuMode('main');
         break;
+      case 'notifications':
+        clearNotificationTodoReveal();
+        setNavTab('notifications');
+        Keyboard.dismiss();
+        searchInputRef.current?.blur();
+        closeListMenuState();
+        setFilterConfigModalVisible(false);
+        setCreateDrawerVisible(false);
+        setActiveDeletedTodoDetailId(null);
+        setActiveTodoDetailId(null);
+        break;
       case 'search':
         openHeaderSearch();
         return;
@@ -10894,8 +11433,10 @@ export default function App() {
     triggerSubtleHaptic();
   }, [
     anchorActivePresetForFilterConfig,
+    clearNotificationTodoReveal,
     closeFilterConfigModal,
     closeListMenu,
+    closeListMenuState,
     closeSettingsModal,
     exitTodoSelectMode,
     filterConfigModalVisible,
@@ -11163,6 +11704,8 @@ export default function App() {
             deleteDriveBackupFile(picker.accessToken, file, picker.scope)
               .then(() => listDriveBackupSlots(picker.accessToken, picker.scope))
               .then((slots) => {
+                const nextFileIds = new Set(slots.map((nextSlot) => nextSlot.file?.id).filter(Boolean));
+
                 setGoogleDriveBackupPicker((current) => {
                   if (
                     !current ||
@@ -11181,6 +11724,11 @@ export default function App() {
                     slots: nextSlots,
                   };
                 });
+                setGoogleDriveBackupPickerSelectedFileIds((current) => {
+                  const next = new Set([...current].filter((id) => nextFileIds.has(id)));
+
+                  return next.size === current.size ? current : next;
+                });
                 setGoogleDriveBackupStatus(`${slotTitle} deleted`);
                 triggerSubtleHaptic();
               })
@@ -11192,6 +11740,83 @@ export default function App() {
       ],
     );
   }, [googleDriveBackupPicker, handleGoogleDriveError]);
+
+  const deleteSelectedGoogleDriveBackupSlots = useCallback(() => {
+    const picker = googleDriveBackupPicker;
+
+    if (!picker) {
+      return;
+    }
+
+    const selectedSlots = picker.slots.filter((
+      slot,
+    ): slot is DriveBackupSlot & { file: NonNullable<DriveBackupSlot['file']> } => (
+      Boolean(slot.file && googleDriveBackupPickerSelectedFileIds.has(slot.file.id))
+    ));
+
+    if (selectedSlots.length === 0) {
+      return;
+    }
+
+    const selectedCount = selectedSlots.length;
+    const backupLabel = selectedCount === 1
+      ? formatDriveBackupScopeLabel(picker.scope)
+      : formatDriveBackupScopePluralLabel(picker.scope);
+    const statusLabel = selectedCount === 1
+      ? formatDriveBackupSlotTitle(selectedSlots[0])
+      : `${selectedCount} ${backupLabel}`;
+
+    Alert.alert(
+      `Delete ${selectedCount} ${backupLabel}?`,
+      `This removes the selected ${backupLabel} from Google Drive.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setGoogleDriveBackupStatus(`Deleting ${statusLabel.toLocaleLowerCase()}...`);
+            Promise.all(
+              selectedSlots.map((slot) => deleteDriveBackupFile(picker.accessToken, slot.file, picker.scope)),
+            )
+              .then(() => listDriveBackupSlots(picker.accessToken, picker.scope))
+              .then((slots) => {
+                const nextFileIds = new Set(slots.map((slot) => slot.file?.id).filter(Boolean));
+
+                setGoogleDriveBackupPicker((current) => {
+                  if (
+                    !current ||
+                    current.accessToken !== picker.accessToken ||
+                    current.scope !== picker.scope
+                  ) {
+                    return current;
+                  }
+
+                  const nextSlots = current.mode === 'manage'
+                    ? getFilledDriveBackupSlots(slots)
+                    : slots;
+
+                  return {
+                    ...current,
+                    slots: nextSlots,
+                  };
+                });
+                setGoogleDriveBackupPickerSelectedFileIds((current) => {
+                  const next = new Set([...current].filter((id) => nextFileIds.has(id)));
+
+                  return next.size === current.size ? current : next;
+                });
+                setGoogleDriveBackupStatus(`${statusLabel} deleted`);
+                triggerSubtleHaptic();
+              })
+              .catch((error) => {
+                handleGoogleDriveError(error, 'Google Drive backup delete failed');
+              });
+          },
+        },
+      ],
+    );
+  }, [googleDriveBackupPicker, googleDriveBackupPickerSelectedFileIds, handleGoogleDriveError]);
 
   const authenticateWithAndroidGoogle = useCallback(async () => {
     let nativeGoogleSignIn: NativeGoogleSignIn;
@@ -12539,6 +13164,17 @@ export default function App() {
     ],
   );
 
+  const renderNotificationLogItem = useCallback(
+    ({ item }: { item: NotificationLogEntry }) => (
+      <MemoizedNotificationLogSwipeRow
+        entry={item}
+        onDelete={() => deleteNotificationLogEntry(item.id)}
+        onPress={() => openNotificationLogEntry(item)}
+      />
+    ),
+    [deleteNotificationLogEntry, openNotificationLogEntry],
+  );
+
   const googleDriveNavDisabled = googleDriveBusy || !googleDriveActionReady;
   const googleDriveNavIconColor = googleDriveBusy
     ? NAV_ACCENT
@@ -12667,12 +13303,41 @@ export default function App() {
           style={styles.mainKeyboardAvoiding}
         >
         <View style={styles.listShell}>
-          <View
-            collapsable={false}
-            onTouchEnd={handleListFrameTouchEnd}
-            onTouchStart={handleListFrameTouchStart}
-            style={styles.todoListTapFrame}
-          >
+          {navTab === 'notifications' ? (
+            <View style={styles.notificationPage}>
+              <FlatList
+                alwaysBounceVertical={false}
+                bounces={false}
+                contentContainerStyle={[
+                  styles.notificationListContent,
+                  notificationLogEntries.length === 0 && styles.notificationListContentEmpty,
+                ]}
+                data={notificationLogEntries}
+                keyboardShouldPersistTaps="handled"
+                keyExtractor={(item) => item.id}
+                ListEmptyComponent={
+                  <View style={styles.notificationEmptyState}>
+                    <Ionicons
+                      color={THEME_TEXT_TERTIARY}
+                      name="notifications-outline"
+                      size={30}
+                    />
+                    <Text style={styles.notificationEmptyTitle}>
+                      No notifications yet
+                    </Text>
+                  </View>
+                }
+                renderItem={renderNotificationLogItem}
+                showsVerticalScrollIndicator={false}
+              />
+            </View>
+          ) : (
+            <View
+              collapsable={false}
+              onTouchEnd={handleListFrameTouchEnd}
+              onTouchStart={handleListFrameTouchStart}
+              style={styles.todoListTapFrame}
+            >
             <View
               collapsable={false}
               onLayout={handleTodoListFrameLayout}
@@ -12861,6 +13526,7 @@ export default function App() {
               />
             </View>
           </View>
+          )}
 
         </View>
 
@@ -12898,7 +13564,7 @@ export default function App() {
             detail={heldQuickPresetNavDetail}
             emptyColor={THEME_TEXT_TERTIARY}
             inactiveColor={NAV_ICON_INACTIVE}
-            isSearchTab={navTab === 'search'}
+            isSearchTab={navTab === 'search' || navTab === 'notifications'}
             items={quickPresetNavItems}
             onLongPressSlot={setHeldQuickPresetNavSlotNumber}
             onPressItem={(item, event, phase) => (
@@ -12967,6 +13633,22 @@ export default function App() {
               <Ionicons
                 color={navTab === 'menu' || menuMode === 'main' ? NAV_ACCENT : NAV_ICON_INACTIVE}
                 name="options-outline"
+                size={23}
+              />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Notifications"
+              accessibilityState={{ selected: navTab === 'notifications' }}
+              onPress={() => handleNavTabPress('notifications')}
+              style={({ pressed }) => [
+                styles.bottomNavItem,
+                pressed && styles.bottomNavItemPressed,
+              ]}
+            >
+              <Ionicons
+                color={navTab === 'notifications' ? NAV_ACCENT : NAV_ICON_INACTIVE}
+                name="notifications-outline"
                 size={23}
               />
             </Pressable>
@@ -15117,10 +15799,71 @@ export default function App() {
                         : 'Swipe left to delete.'}
                     </Text>
 
+                    {listMenuTree.length > 0 ? (
+                      <View style={styles.settingsListSelectionToolbar}>
+                        {settingsListSelectMode ? (
+                          <>
+                            <Text
+                              numberOfLines={1}
+                              style={styles.settingsListSelectionText}
+                            >
+                              {selectedSettingsListCount} selected
+                            </Text>
+                            <View style={styles.settingsListSelectionActions}>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel="Cancel list selection"
+                                onPress={clearSettingsListSelection}
+                                style={({ pressed }) => [
+                                  styles.settingsListSelectionButton,
+                                  pressed && styles.settingsSecondaryButtonPressed,
+                                ]}
+                              >
+                                <Ionicons color={THEME_TEXT_SECONDARY} name="close" size={17} />
+                                <Text style={styles.settingsListSelectionButtonText}>Cancel</Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel="Delete selected lists"
+                                disabled={selectedSettingsListCount === 0}
+                                onPress={deleteSelectedSettingsLists}
+                                style={({ pressed }) => [
+                                  styles.settingsListSelectionButton,
+                                  styles.settingsListSelectionDeleteButton,
+                                  selectedSettingsListCount === 0 && styles.settingsButtonDisabled,
+                                  pressed && styles.settingsSecondaryButtonPressed,
+                                ]}
+                              >
+                                <Ionicons color="#FFFFFF" name="trash-outline" size={17} />
+                                <Text style={styles.settingsListSelectionDeleteButtonText}>
+                                  Delete
+                                </Text>
+                              </Pressable>
+                            </View>
+                          </>
+                        ) : (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Select lists"
+                            onPress={beginSettingsListSelection}
+                            style={({ pressed }) => [
+                              styles.settingsListSelectModeButton,
+                              pressed && styles.settingsSecondaryButtonPressed,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="checkbox-outline" size={18} />
+                            <Text style={styles.settingsListSelectModeButtonText}>Select</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    ) : null}
+
                     <MemoizedSettingsListEditor
                       allowIconEdit={false}
+                      allowMultiSelect
                       allowReorder={false}
                       iconPickerIndex={settingsListIconPickerIndex}
+                      itemCounts={settingsListItemCounts}
                       items={listMenuTree}
                       onDelete={removeSettingsList}
                       onIconPickerChange={(index) => {
@@ -15130,6 +15873,9 @@ export default function App() {
                       reorderCancelNonce={settingsListReorderCancelNonce}
                       onMainPress={openSettingsListKeywordPrompt}
                       onSetIcon={setSettingsListIcon}
+                      onToggleSelect={toggleSettingsListSelection}
+                      selectedLabels={selectedSettingsListLabels}
+                      selectionMode={settingsListSelectMode}
                       sortAscending
                     />
 
@@ -15453,7 +16199,7 @@ export default function App() {
                         ? `Each backup creates a new snapshot. The oldest is removed after ${DRIVE_BACKUP_SLOT_LIMIT}.`
                         : googleDriveBackupPicker.mode === 'restore'
                           ? `Choose a saved ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup to restore.`
-                          : `Swipe left on a backup to delete it from Google Drive.`}
+                          : 'Select backups to delete from Google Drive.'}
                     </Text>
 
                     <GestureScrollView
@@ -15484,9 +16230,16 @@ export default function App() {
                             disabled={disabled}
                             key={slot.slot}
                             listOnly={isManageMode}
-                            onPress={() => resolveGoogleDriveBackupPicker({ slot, type: 'slot' })}
+                            onPress={() => (
+                              isManageMode
+                                ? toggleGoogleDriveBackupSlotSelection(slot)
+                                : resolveGoogleDriveBackupPicker({ slot, type: 'slot' })
+                            )}
                             onDelete={() => deleteGoogleDriveBackupSlot(slot)}
                             scrollGestureRef={googleDriveBackupPickerScrollRef}
+                            selected={Boolean(
+                              slot.file && googleDriveBackupPickerSelectedFileIds.has(slot.file.id),
+                            )}
                             slot={slot}
                           />
                         );
@@ -15494,6 +16247,23 @@ export default function App() {
                     </GestureScrollView>
 
                     <View style={styles.presetSaveModalActions}>
+                      {googleDriveBackupPicker.mode === 'manage' && googleDriveBackupPickerSelectedCount > 0 ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${googleDriveBackupPickerSelectedCount} selected backups`}
+                          onPress={deleteSelectedGoogleDriveBackupSlots}
+                          style={({ pressed }) => [
+                            styles.presetSaveModalButton,
+                            styles.presetSaveModalButtonDanger,
+                            pressed && styles.presetSaveModalButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color="#FFFFFF" name="trash-outline" size={17} />
+                          <Text style={styles.presetSaveModalButtonDangerText}>
+                            Delete {googleDriveBackupPickerSelectedCount}
+                          </Text>
+                        </Pressable>
+                      ) : null}
                       <Pressable
                         accessibilityRole="button"
                         onPress={closeGoogleDriveBackupPicker}
@@ -16127,6 +16897,9 @@ const styles = StyleSheet.create({
   googleDrivePickerChoiceFilled: {
     borderColor: THEME_ACCENT,
   },
+  googleDrivePickerChoiceSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
   googleDrivePickerChoiceDisabled: {
     opacity: 0.5,
   },
@@ -16137,6 +16910,9 @@ const styles = StyleSheet.create({
   googleDrivePickerChoiceTextWrap: {
     flex: 1,
     minWidth: 0,
+  },
+  googleDrivePickerChoiceSelectIcon: {
+    flexShrink: 0,
   },
   googleDrivePickerChoiceTitle: {
     color: THEME_TEXT,
@@ -16188,6 +16964,11 @@ const styles = StyleSheet.create({
   presetSaveModalButtonPrimary: {
     backgroundColor: THEME_ACCENT,
   },
+  presetSaveModalButtonDanger: {
+    backgroundColor: '#CF413A',
+    flexDirection: 'row',
+    gap: 6,
+  },
   presetSaveModalButtonPressed: {
     opacity: 0.78,
     transform: [{ scale: 0.98 }],
@@ -16199,6 +16980,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   presetSaveModalButtonPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+  },
+  presetSaveModalButtonDangerText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: FONT_MEDIUM,
@@ -16561,6 +17348,70 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 2,
   },
+  settingsListSelectionToolbar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    minHeight: 38,
+  },
+  settingsListSelectionText: {
+    color: THEME_TEXT_SECONDARY,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    minWidth: 0,
+    paddingRight: 10,
+  },
+  settingsListSelectionActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 8,
+  },
+  settingsListSelectionButton: {
+    alignItems: 'center',
+    backgroundColor: '#F3EEE7',
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 36,
+    paddingHorizontal: 10,
+  },
+  settingsListSelectionButtonText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
+  settingsListSelectionDeleteButton: {
+    backgroundColor: '#CF413A',
+  },
+  settingsListSelectionDeleteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
+  settingsListSelectModeButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'center',
+    minHeight: 36,
+    paddingHorizontal: 12,
+  },
+  settingsListSelectModeButtonText: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+  },
   settingsListEditor: {
     borderTopColor: '#F2EBE3',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -16608,6 +17459,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
+  settingsListRowSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
   settingsListRowContent: {
     alignItems: 'center',
     flex: 1,
@@ -16635,6 +17489,37 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     lineHeight: 20,
     letterSpacing: 0.1,
+    textAlignVertical: 'center',
+  },
+  settingsListSelectButton: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flexShrink: 0,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  settingsListSelectButtonSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  settingsListCountPill: {
+    alignItems: 'center',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minWidth: 28,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  settingsListCountText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    includeFontPadding: false,
+    lineHeight: 16,
     textAlignVertical: 'center',
   },
   settingsListSwipeShell: {
@@ -17426,6 +18311,113 @@ const styles = StyleSheet.create({
   listShell: {
     backgroundColor: THEME_BG,
     flex: 1,
+  },
+  notificationPage: {
+    backgroundColor: THEME_BG,
+    flex: 1,
+  },
+  notificationListContent: {
+    gap: 8,
+    paddingBottom: BOTTOM_NAV_RESERVED_HEIGHT + 16,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 12,
+  },
+  notificationListContentEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  notificationEmptyState: {
+    alignItems: 'center',
+    gap: 10,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  notificationEmptyTitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  notificationLogSwipeShell: {
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  notificationLogSwipeContainer: {
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  notificationLogSwipeChildren: {
+    backgroundColor: THEME_CARD,
+  },
+  notificationLogSwipeActions: {
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    minHeight: 72,
+    width: NOTIFICATION_LOG_SWIPE_DELETE_WIDTH,
+  },
+  notificationLogSwipeDelete: {
+    alignItems: 'center',
+    backgroundColor: '#CF413A',
+    justifyContent: 'center',
+    minHeight: 72,
+    width: NOTIFICATION_LOG_SWIPE_DELETE_WIDTH,
+  },
+  notificationLogRow: {
+    alignItems: 'center',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 72,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  notificationLogRowPressed: {
+    opacity: 0.72,
+  },
+  notificationLogIconWrap: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 17,
+    flexShrink: 0,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  notificationLogTextStack: {
+    flex: 1,
+    minWidth: 0,
+  },
+  notificationLogTitle: {
+    color: THEME_TEXT,
+    fontSize: 15,
+    fontWeight: FONT_SEMIBOLD,
+    includeFontPadding: false,
+    letterSpacing: 0,
+    lineHeight: 20,
+  },
+  notificationLogSubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    includeFontPadding: false,
+    letterSpacing: 0,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  notificationLogBody: {
+    color: THEME_TEXT,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    letterSpacing: 0,
+    lineHeight: 18,
+    marginTop: 4,
   },
   todoListFrame: {
     flex: 1,

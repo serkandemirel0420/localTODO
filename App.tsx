@@ -299,6 +299,526 @@ type UndoHistoryEntry = {
   snapshot: UndoSnapshot;
 };
 
+type UndoHistoryChangeDetail = {
+  after: string;
+  before: string;
+  item: string;
+};
+
+type UndoHistoryDisplayEntry = {
+  details: UndoHistoryChangeDetail[];
+  entry: UndoHistoryEntry;
+};
+
+type UndoHistoryMode = 'redo' | 'undo';
+
+const HISTORY_FILTER_KEYS = ['list', 'tag', 'date', 'priority', 'reminder'] as const;
+type HistoryFilterKey = typeof HISTORY_FILTER_KEYS[number];
+
+const HISTORY_FILTER_LABELS: Record<HistoryFilterKey, string> = {
+  date: 'Dates',
+  list: 'Lists',
+  priority: 'Priority',
+  reminder: 'Reminders',
+  tag: 'Tags',
+};
+
+const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
+  avoidedFilters: true,
+  customTags: true,
+  dateLabelDisplayMode: true,
+  deletedTodos: true,
+  filterColors: true,
+  googleDriveBackupEnabled: true,
+  hideDoneTodos: true,
+  lastCreateTodoFilters: true,
+  listMenuTree: true,
+  listOrderMode: true,
+  menuPresets: true,
+  metaTagVisibility: true,
+  presetLabelTagsSeeded: true,
+  quickPresetNavIconNames: true,
+  quickPresetNavPresetIds: true,
+  requiredFilters: true,
+  selectedFilters: true,
+  showOverdueMetaTags: true,
+  todoGroupMode: true,
+  todoSortMode: true,
+  todos: true,
+};
+
+const HISTORY_TODO_DETAIL_DISPLAY_LIMIT = 3;
+const HISTORY_VALUE_MAX_LENGTH = 96;
+
+const stableStringifyForHistory = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringifyForHistory).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${key}:${stableStringifyForHistory((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+};
+
+const historyValuesEqual = (left: unknown, right: unknown) =>
+  stableStringifyForHistory(left) === stableStringifyForHistory(right);
+
+const truncateHistoryValue = (value: string, maxLength = HISTORY_VALUE_MAX_LENGTH) => {
+  const trimmedValue = value.replace(/\s+/g, ' ').trim();
+
+  if (trimmedValue.length <= maxLength) {
+    return trimmedValue;
+  }
+
+  return `${trimmedValue.slice(0, maxLength - 1).trimEnd()}...`;
+};
+
+const formatHistoryValues = (values: string[], emptyLabel = 'None') => {
+  if (values.length === 0) {
+    return emptyLabel;
+  }
+
+  return truncateHistoryValue(values.join(', '));
+};
+
+const formatHistoryToggle = (value: boolean, enabledLabel = 'On', disabledLabel = 'Off') =>
+  value ? enabledLabel : disabledLabel;
+
+const formatHistoryTodoTitle = (todo: Pick<Todo, 'content' | 'text'> | null | undefined) => {
+  const title = todo?.text.trim() || todo?.content.trim().split('\n')[0] || 'Untitled todo';
+  return truncateHistoryValue(title, 54);
+};
+
+const formatHistoryTodoContent = (content: string) =>
+  content.trim() ? truncateHistoryValue(content.trim().split('\n')[0]) : 'Empty';
+
+const formatHistoryTimestamp = (value: number) => {
+  if (!Number.isFinite(value)) {
+    return 'Unknown';
+  }
+
+  return new Date(value).toLocaleString(undefined, {
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+  });
+};
+
+const addHistoryDetail = (
+  details: UndoHistoryChangeDetail[],
+  item: string,
+  before: string,
+  after: string,
+) => {
+  const normalizedBefore = before || 'None';
+  const normalizedAfter = after || 'None';
+
+  if (normalizedBefore === normalizedAfter) {
+    return;
+  }
+
+  details.push({
+    after: normalizedAfter,
+    before: normalizedBefore,
+    item: truncateHistoryValue(item, 72),
+  });
+};
+
+const compareHistoryScalar = (
+  details: UndoHistoryChangeDetail[],
+  item: string,
+  before: string,
+  after: string,
+) => {
+  addHistoryDetail(details, item, before, after);
+};
+
+const compareHistorySummary = (
+  details: UndoHistoryChangeDetail[],
+  item: string,
+  beforeValue: unknown,
+  afterValue: unknown,
+  beforeLabel: string,
+  afterLabel: string,
+) => {
+  if (historyValuesEqual(beforeValue, afterValue)) {
+    return;
+  }
+
+  addHistoryDetail(
+    details,
+    item,
+    beforeLabel === afterLabel ? 'Previous value' : beforeLabel,
+    beforeLabel === afterLabel ? 'Changed value' : afterLabel,
+  );
+};
+
+const formatHistoryFilterValue = (filters: TodoFilters, key: HistoryFilterKey) =>
+  formatHistoryValues(filters[key] ?? []);
+
+const addFilterHistoryDetails = (
+  details: UndoHistoryChangeDetail[],
+  label: string,
+  before: TodoFilters,
+  after: TodoFilters,
+) => {
+  HISTORY_FILTER_KEYS.forEach((key) => {
+    compareHistorySummary(
+      details,
+      `${label} - ${HISTORY_FILTER_LABELS[key]}`,
+      before[key],
+      after[key],
+      formatHistoryFilterValue(before, key),
+      formatHistoryFilterValue(after, key),
+    );
+  });
+};
+
+type HistoryTodoRecord = {
+  status: 'active';
+  todo: Todo;
+} | {
+  status: 'deleted';
+  todo: DeletedTodo;
+} | {
+  status: 'missing';
+  todo: null;
+};
+
+const buildHistoryTodoLookup = (snapshot: UndoSnapshot) => ({
+  active: new Map(snapshot.todos.map((todo) => [todo.id, todo])),
+  deleted: new Map(snapshot.deletedTodos.map((todo) => [todo.id, todo])),
+});
+
+const getHistoryTodoRecord = (
+  lookup: ReturnType<typeof buildHistoryTodoLookup>,
+  id: string,
+): HistoryTodoRecord => {
+  const activeTodo = lookup.active.get(id);
+
+  if (activeTodo) {
+    return { status: 'active', todo: activeTodo };
+  }
+
+  const deletedTodo = lookup.deleted.get(id);
+
+  if (deletedTodo) {
+    return { status: 'deleted', todo: deletedTodo };
+  }
+
+  return { status: 'missing', todo: null };
+};
+
+const formatHistoryTodoStatus = (record: HistoryTodoRecord) => {
+  if (record.status === 'missing') {
+    return 'Missing';
+  }
+
+  if (record.status === 'deleted') {
+    return 'Deleted';
+  }
+
+  return record.todo.done ? 'Done' : 'Active';
+};
+
+const addTodoHistoryDetails = (
+  details: UndoHistoryChangeDetail[],
+  before: UndoSnapshot,
+  after: UndoSnapshot,
+) => {
+  const beforeLookup = buildHistoryTodoLookup(before);
+  const afterLookup = buildHistoryTodoLookup(after);
+  const todoIds = new Set([
+    ...before.todos.map((todo) => todo.id),
+    ...before.deletedTodos.map((todo) => todo.id),
+    ...after.todos.map((todo) => todo.id),
+    ...after.deletedTodos.map((todo) => todo.id),
+  ]);
+
+  todoIds.forEach((id) => {
+    const beforeRecord = getHistoryTodoRecord(beforeLookup, id);
+    const afterRecord = getHistoryTodoRecord(afterLookup, id);
+    const title = formatHistoryTodoTitle(afterRecord.todo ?? beforeRecord.todo);
+    const todoItemLabel = `Todo: ${title}`;
+
+    if (beforeRecord.status !== afterRecord.status) {
+      addHistoryDetail(
+        details,
+        todoItemLabel,
+        formatHistoryTodoStatus(beforeRecord),
+        formatHistoryTodoStatus(afterRecord),
+      );
+      return;
+    }
+
+    if (beforeRecord.status === 'missing' || afterRecord.status === 'missing') {
+      return;
+    }
+
+    const beforeTodo = beforeRecord.todo;
+    const afterTodo = afterRecord.todo;
+
+    compareHistorySummary(
+      details,
+      `${todoItemLabel} - Title`,
+      beforeTodo.text,
+      afterTodo.text,
+      beforeTodo.text,
+      afterTodo.text,
+    );
+    compareHistorySummary(
+      details,
+      `${todoItemLabel} - Notes`,
+      beforeTodo.content,
+      afterTodo.content,
+      formatHistoryTodoContent(beforeTodo.content),
+      formatHistoryTodoContent(afterTodo.content),
+    );
+    compareHistoryScalar(
+      details,
+      `${todoItemLabel} - Status`,
+      beforeTodo.done ? 'Done' : 'Active',
+      afterTodo.done ? 'Done' : 'Active',
+    );
+    compareHistoryScalar(
+      details,
+      `${todoItemLabel} - Pin`,
+      formatHistoryToggle(beforeTodo.pinned, 'Pinned', 'Unpinned'),
+      formatHistoryToggle(afterTodo.pinned, 'Pinned', 'Unpinned'),
+    );
+    compareHistorySummary(
+      details,
+      `${todoItemLabel} - Tags`,
+      beforeTodo.tags,
+      afterTodo.tags,
+      formatHistoryValues(beforeTodo.tags),
+      formatHistoryValues(afterTodo.tags),
+    );
+    compareHistoryScalar(
+      details,
+      `${todoItemLabel} - Created`,
+      formatHistoryTimestamp(beforeTodo.createdAt),
+      formatHistoryTimestamp(afterTodo.createdAt),
+    );
+    if (beforeRecord.status === 'deleted' && afterRecord.status === 'deleted') {
+      compareHistoryScalar(
+        details,
+        `${todoItemLabel} - Deleted`,
+        formatHistoryTimestamp(beforeRecord.todo.deletedAt),
+        formatHistoryTimestamp(afterRecord.todo.deletedAt),
+      );
+    }
+    addFilterHistoryDetails(details, todoItemLabel, beforeTodo.filters, afterTodo.filters);
+  });
+};
+
+const flattenHistoryListLabels = (nodes: ListMenuNode[], parentLabel: string | null = null): string[] =>
+  nodes.flatMap((node) => {
+    const label = parentLabel ? `${parentLabel}/${node.label}` : node.label;
+    return [label, ...flattenHistoryListLabels(node.children ?? [], label)];
+  });
+
+const formatHistoryListLabels = (labels: string[], emptyLabel: string) => {
+  if (labels.length === 0) {
+    return emptyLabel;
+  }
+
+  const preview = labels.slice(0, 4).join(', ');
+  return labels.length > 4 ? `${preview}, +${labels.length - 4}` : preview;
+};
+
+const formatHistoryListTree = (nodes: ListMenuNode[]) =>
+  formatHistoryListLabels(flattenHistoryListLabels(nodes), 'No lists');
+
+const formatHistoryPresets = (presets: MenuPreset[]) => {
+  const labels = presets.flatMap((preset) => [
+    preset.label,
+    ...(preset.sections ?? []).map((section) => `${preset.label}/${section.label}`),
+  ]);
+
+  return formatHistoryListLabels(labels, 'No saved lists');
+};
+
+const formatHistoryQuickNav = (snapshot: UndoSnapshot) => {
+  const presetLabels = new Map(snapshot.menuPresets.map((preset) => [preset.id, preset.label]));
+  const labels = snapshot.quickPresetNavPresetIds
+    .map((presetId, index) => {
+      if (!presetId) {
+        return null;
+      }
+
+      return `${index + 1}: ${presetLabels.get(presetId) ?? presetId}`;
+    })
+    .filter((label): label is string => Boolean(label));
+
+  return formatHistoryListLabels(labels, 'No navbar items');
+};
+
+const formatHistoryFilterColors = (colors: FilterColorSettings) => {
+  const assignments = Object.entries(colors).flatMap(([group, values]) => (
+    Object.entries(values)
+      .filter(([, color]) => color !== undefined)
+      .map(([label, color]) => `${group}/${label}: ${color ?? 'No color'}`)
+  ));
+
+  return formatHistoryListLabels(assignments, 'Default colors');
+};
+
+const buildUndoSnapshotChangeDetails = (
+  label: string,
+  before: UndoSnapshot,
+  after: UndoSnapshot,
+): UndoHistoryChangeDetail[] => {
+  const details: UndoHistoryChangeDetail[] = [];
+
+  addTodoHistoryDetails(details, before, after);
+  addFilterHistoryDetails(details, 'Filters', before.selectedFilters, after.selectedFilters);
+  addFilterHistoryDetails(details, 'Pinned filters', before.requiredFilters, after.requiredFilters);
+  addFilterHistoryDetails(details, 'Avoided filters', before.avoidedFilters, after.avoidedFilters);
+  addFilterHistoryDetails(
+    details,
+    'New todo defaults',
+    before.lastCreateTodoFilters,
+    after.lastCreateTodoFilters,
+  );
+  compareHistoryScalar(
+    details,
+    'Done items',
+    before.hideDoneTodos ? 'Hidden' : 'Visible',
+    after.hideDoneTodos ? 'Hidden' : 'Visible',
+  );
+  compareHistoryScalar(
+    details,
+    'Date labels',
+    DATE_LABEL_DISPLAY_MODE_LABELS[before.dateLabelDisplayMode],
+    DATE_LABEL_DISPLAY_MODE_LABELS[after.dateLabelDisplayMode],
+  );
+  compareHistoryScalar(
+    details,
+    'Overdue labels',
+    formatHistoryToggle(before.showOverdueMetaTags, 'Shown', 'Hidden'),
+    formatHistoryToggle(after.showOverdueMetaTags, 'Shown', 'Hidden'),
+  );
+  compareHistoryScalar(
+    details,
+    'Auto backup',
+    formatHistoryToggle(before.googleDriveBackupEnabled, 'Enabled', 'Disabled'),
+    formatHistoryToggle(after.googleDriveBackupEnabled, 'Enabled', 'Disabled'),
+  );
+  compareHistoryScalar(
+    details,
+    'Sort',
+    TODO_SORT_LABELS[before.todoSortMode],
+    TODO_SORT_LABELS[after.todoSortMode],
+  );
+  compareHistoryScalar(
+    details,
+    'Group',
+    TODO_GROUP_LABELS[before.todoGroupMode],
+    TODO_GROUP_LABELS[after.todoGroupMode],
+  );
+  compareHistoryScalar(details, 'List order', before.listOrderMode, after.listOrderMode);
+  compareHistorySummary(
+    details,
+    'Lists',
+    before.listMenuTree,
+    after.listMenuTree,
+    formatHistoryListTree(before.listMenuTree),
+    formatHistoryListTree(after.listMenuTree),
+  );
+  compareHistorySummary(
+    details,
+    'Saved lists',
+    before.menuPresets,
+    after.menuPresets,
+    formatHistoryPresets(before.menuPresets),
+    formatHistoryPresets(after.menuPresets),
+  );
+  compareHistorySummary(
+    details,
+    'Navbar',
+    before.quickPresetNavPresetIds,
+    after.quickPresetNavPresetIds,
+    formatHistoryQuickNav(before),
+    formatHistoryQuickNav(after),
+  );
+  compareHistorySummary(
+    details,
+    'Navbar icons',
+    before.quickPresetNavIconNames,
+    after.quickPresetNavIconNames,
+    formatHistoryValues(before.quickPresetNavIconNames, 'No icons'),
+    formatHistoryValues(after.quickPresetNavIconNames, 'No icons'),
+  );
+  compareHistorySummary(
+    details,
+    'Tags',
+    before.customTags,
+    after.customTags,
+    formatHistoryValues(before.customTags),
+    formatHistoryValues(after.customTags),
+  );
+  compareHistorySummary(
+    details,
+    'Meta tags',
+    before.metaTagVisibility,
+    after.metaTagVisibility,
+    formatMetaTagVisibilitySummary(before.metaTagVisibility),
+    formatMetaTagVisibilitySummary(after.metaTagVisibility),
+  );
+  compareHistorySummary(
+    details,
+    'Colors',
+    before.filterColors,
+    after.filterColors,
+    formatHistoryFilterColors(before.filterColors),
+    formatHistoryFilterColors(after.filterColors),
+  );
+  compareHistoryScalar(
+    details,
+    'Preset label tags',
+    formatHistoryToggle(before.presetLabelTagsSeeded, 'Seeded', 'Not seeded'),
+    formatHistoryToggle(after.presetLabelTagsSeeded, 'Seeded', 'Not seeded'),
+  );
+
+  if (details.length === 0 && !historyValuesEqual(before, after)) {
+    addHistoryDetail(details, label, 'Previous app state', 'Changed app state');
+  }
+
+  return details.length > 0
+    ? details
+    : [{ item: label, before: 'No visible difference', after: 'No visible difference' }];
+};
+
+const buildUndoHistoryDisplayEntries = (
+  mode: UndoHistoryMode,
+  entries: UndoHistoryEntry[],
+  currentSnapshot: UndoSnapshot,
+): UndoHistoryDisplayEntry[] =>
+  entries.map((entry, index) => {
+    const beforeSnapshot = mode === 'undo'
+      ? entry.snapshot
+      : index === 0
+        ? currentSnapshot
+        : entries[index - 1].snapshot;
+    const afterSnapshot = mode === 'undo'
+      ? index === 0
+        ? currentSnapshot
+        : entries[index - 1].snapshot
+      : entry.snapshot;
+
+    return {
+      details: buildUndoSnapshotChangeDetails(entry.label, beforeSnapshot, afterSnapshot),
+      entry,
+    };
+  });
+
 type VisibleListMenuItem = {
   depth: number;
   id: string;
@@ -811,7 +1331,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
-const UNDO_HISTORY_LIMIT = 50;
+const UNDO_HISTORY_LIMIT = 10;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -4736,6 +5256,14 @@ export default function App() {
 
     applyUndoHistoryEntry(entry);
   }, [applyUndoHistoryEntry, clearUndoToast, undoHistory]);
+
+  const currentHistorySnapshot = settingsModalVisible ? captureUndoSnapshot() : null;
+  const undoHistoryDisplayEntries = currentHistorySnapshot
+    ? buildUndoHistoryDisplayEntries('undo', undoHistory, currentHistorySnapshot)
+    : [];
+  const redoHistoryDisplayEntries = currentHistorySnapshot
+    ? buildUndoHistoryDisplayEntries('redo', redoHistory, currentHistorySnapshot)
+    : [];
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -15465,32 +15993,66 @@ export default function App() {
                   {undoHistoryCount > 0 ? (
                     <View style={styles.settingsHistoryGroup}>
                       <Text style={styles.settingsHistoryGroupLabel}>Undo</Text>
-                      {undoHistory.map((entry, index) => (
-                        <Pressable
-                          accessibilityLabel={`Undo ${entry.label}`}
-                          accessibilityRole="button"
-                          key={`undo-${entry.id}`}
-                          onPress={() => applyUndoHistoryEntry(entry)}
-                          style={({ pressed }) => [
-                            styles.settingsHistoryRow,
-                            index > 0 && styles.settingsHistoryRowSeparated,
-                            pressed && styles.settingsHistoryRowPressed,
-                          ]}
-                        >
-                          <View style={styles.settingsHistoryIconWrap}>
-                            <Ionicons color={NAV_ACCENT} name="arrow-undo" size={18} />
-                          </View>
-                          <View style={styles.settingsHistoryTextWrap}>
-                            <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
-                              Undo {entry.label}
-                            </Text>
-                            <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
-                              {index === 0 ? 'Latest change' : `${index + 1} changes back`}
-                            </Text>
-                          </View>
-                          <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
-                        </Pressable>
-                      ))}
+                      {undoHistoryDisplayEntries.map((historyEntry, index) => {
+                        const visibleDetails = historyEntry.details.slice(
+                          0,
+                          HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
+                        );
+                        const hiddenDetailCount = Math.max(
+                          0,
+                          historyEntry.details.length - visibleDetails.length,
+                        );
+
+                        return (
+                          <Pressable
+                            accessibilityLabel={`Undo ${historyEntry.entry.label}`}
+                            accessibilityRole="button"
+                            key={`undo-${historyEntry.entry.id}`}
+                            onPress={() => applyUndoHistoryEntry(historyEntry.entry)}
+                            style={({ pressed }) => [
+                              styles.settingsHistoryRow,
+                              index > 0 && styles.settingsHistoryRowSeparated,
+                              pressed && styles.settingsHistoryRowPressed,
+                            ]}
+                          >
+                            <View style={styles.settingsHistoryIconWrap}>
+                              <Ionicons color={NAV_ACCENT} name="arrow-undo" size={18} />
+                            </View>
+                            <View style={styles.settingsHistoryTextWrap}>
+                              <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
+                                {historyEntry.entry.label}
+                              </Text>
+                              <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
+                                {index === 0 ? 'Latest change' : `${index + 1} changes back`}
+                              </Text>
+                              <View style={styles.settingsHistoryDetailList}>
+                                {visibleDetails.map((detail, detailIndex) => (
+                                  <View
+                                    key={`${historyEntry.entry.id}-undo-detail-${detailIndex}`}
+                                    style={styles.settingsHistoryDetail}
+                                  >
+                                    <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
+                                      {detail.item}
+                                    </Text>
+                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
+                                      Current: {detail.after}
+                                    </Text>
+                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
+                                      Undo to: {detail.before}
+                                    </Text>
+                                  </View>
+                                ))}
+                                {hiddenDetailCount > 0 ? (
+                                  <Text style={styles.settingsHistoryMoreText}>
+                                    +{hiddenDetailCount} more changes
+                                  </Text>
+                                ) : null}
+                              </View>
+                            </View>
+                            <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                          </Pressable>
+                        );
+                      })}
                     </View>
                   ) : null}
 
@@ -15502,37 +16064,71 @@ export default function App() {
                       ]}
                     >
                       <Text style={styles.settingsHistoryGroupLabel}>Redo</Text>
-                      {redoHistory.map((entry, index) => (
-                        <Pressable
-                          accessibilityLabel={`Redo ${entry.label}`}
-                          accessibilityRole="button"
-                          key={`redo-${entry.id}`}
-                          onPress={() => applyRedoHistoryEntry(entry)}
-                          style={({ pressed }) => [
-                            styles.settingsHistoryRow,
-                            index > 0 && styles.settingsHistoryRowSeparated,
-                            pressed && styles.settingsHistoryRowPressed,
-                          ]}
-                        >
-                          <View
-                            style={[
-                              styles.settingsHistoryIconWrap,
-                              styles.settingsHistoryRedoIconWrap,
+                      {redoHistoryDisplayEntries.map((historyEntry, index) => {
+                        const visibleDetails = historyEntry.details.slice(
+                          0,
+                          HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
+                        );
+                        const hiddenDetailCount = Math.max(
+                          0,
+                          historyEntry.details.length - visibleDetails.length,
+                        );
+
+                        return (
+                          <Pressable
+                            accessibilityLabel={`Redo ${historyEntry.entry.label}`}
+                            accessibilityRole="button"
+                            key={`redo-${historyEntry.entry.id}`}
+                            onPress={() => applyRedoHistoryEntry(historyEntry.entry)}
+                            style={({ pressed }) => [
+                              styles.settingsHistoryRow,
+                              index > 0 && styles.settingsHistoryRowSeparated,
+                              pressed && styles.settingsHistoryRowPressed,
                             ]}
                           >
-                            <Ionicons color={THEME_ACCENT} name="arrow-redo" size={18} />
-                          </View>
-                          <View style={styles.settingsHistoryTextWrap}>
-                            <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
-                              Redo {entry.label}
-                            </Text>
-                            <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
-                              {index === 0 ? 'Next redo' : `${index + 1} redo steps forward`}
-                            </Text>
-                          </View>
-                          <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
-                        </Pressable>
-                      ))}
+                            <View
+                              style={[
+                                styles.settingsHistoryIconWrap,
+                                styles.settingsHistoryRedoIconWrap,
+                              ]}
+                            >
+                              <Ionicons color={THEME_ACCENT} name="arrow-redo" size={18} />
+                            </View>
+                            <View style={styles.settingsHistoryTextWrap}>
+                              <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
+                                {historyEntry.entry.label}
+                              </Text>
+                              <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
+                                {index === 0 ? 'Next redo' : `${index + 1} redo steps forward`}
+                              </Text>
+                              <View style={styles.settingsHistoryDetailList}>
+                                {visibleDetails.map((detail, detailIndex) => (
+                                  <View
+                                    key={`${historyEntry.entry.id}-redo-detail-${detailIndex}`}
+                                    style={styles.settingsHistoryDetail}
+                                  >
+                                    <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
+                                      {detail.item}
+                                    </Text>
+                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
+                                      Current: {detail.before}
+                                    </Text>
+                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
+                                      Redo to: {detail.after}
+                                    </Text>
+                                  </View>
+                                ))}
+                                {hiddenDetailCount > 0 ? (
+                                  <Text style={styles.settingsHistoryMoreText}>
+                                    +{hiddenDetailCount} more changes
+                                  </Text>
+                                ) : null}
+                              </View>
+                            </View>
+                            <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                          </Pressable>
+                        );
+                      })}
                     </View>
                   ) : null}
                 </View>
@@ -17400,14 +17996,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   settingsHistoryRow: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
     borderRadius: 10,
     flexDirection: 'row',
     gap: 10,
     marginHorizontal: -8,
-    minHeight: 58,
+    minHeight: 74,
     paddingHorizontal: 8,
-    paddingVertical: 9,
+    paddingVertical: 11,
   },
   settingsHistoryRowSeparated: {
     borderTopColor: '#F2EBE3',
@@ -17422,6 +18018,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     height: 32,
     justifyContent: 'center',
+    marginTop: 2,
     width: 32,
   },
   settingsHistoryRedoIconWrap: {
@@ -17443,6 +18040,45 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     lineHeight: 16,
     marginTop: 2,
+  },
+  settingsHistoryDetailList: {
+    gap: 6,
+    marginTop: 8,
+  },
+  settingsHistoryDetail: {
+    backgroundColor: '#FAF7F2',
+    borderColor: '#EFE6DD',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  settingsHistoryDetailItem: {
+    color: THEME_TEXT,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 17,
+  },
+  settingsHistoryDetailValue: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 3,
+  },
+  settingsHistoryDetailTarget: {
+    color: THEME_ACCENT,
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    marginTop: 1,
+  },
+  settingsHistoryMoreText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+    paddingHorizontal: 2,
   },
   settingsDeletedList: {
     borderTopColor: '#F2EBE3',

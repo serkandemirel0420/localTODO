@@ -214,6 +214,38 @@ const dismissPresentedTodoAlarmNotifications = async (
   await Promise.all(dismissals);
 };
 
+const getScheduledTodoAlarmIdentifiers = async (
+  shouldCancel: (todoId: string) => boolean,
+) => {
+  const scheduledNotifications = await Notifications
+    .getAllScheduledNotificationsAsync()
+    .catch(() => []);
+  const identifiers = new Set<string>();
+
+  scheduledNotifications.forEach((request) => {
+    const todoId = getTodoAlarmRequestTodoId(request);
+    if (todoId && shouldCancel(todoId)) {
+      identifiers.add(request.identifier);
+    }
+  });
+
+  return identifiers;
+};
+
+const cancelScheduledTodoAlarmNotifications = async (
+  shouldCancel: (todoId: string) => boolean,
+  extraIdentifiers: string[] = [],
+) => {
+  const identifiers = await getScheduledTodoAlarmIdentifiers(shouldCancel);
+  extraIdentifiers.forEach((identifier) => identifiers.add(identifier));
+
+  await Promise.all(
+    [...identifiers].map((identifier) => (
+      Notifications.cancelScheduledNotificationAsync(identifier)
+    )),
+  );
+};
+
 const allowsNotifications = (
   status: Notifications.NotificationPermissionsStatus,
 ) => (
@@ -496,8 +528,9 @@ export const cancelTodoAlarm = async (todoId: string) => {
     return;
   }
 
-  await Notifications.cancelScheduledNotificationAsync(
-    getTodoAlarmIdentifier(todoId),
+  await cancelScheduledTodoAlarmNotifications(
+    (notificationTodoId) => notificationTodoId === todoId,
+    [getTodoAlarmIdentifier(todoId)],
   );
   await dismissPresentedTodoAlarmNotifications((notificationTodoId) => (
     notificationTodoId === todoId
@@ -515,11 +548,12 @@ export const syncTodoAlarm = async (todo: Todo) => {
     return;
   }
 
+  await cancelTodoAlarm(todo.id);
+
   if (!(await ensureTodoAlarmSchedulingReady())) {
     return;
   }
 
-  await cancelTodoAlarm(todo.id);
   await Notifications.scheduleNotificationAsync(request);
 };
 
@@ -537,20 +571,13 @@ export const reconcileTodoAlarms = async (todos: Todo[]) => {
   const expectedIdentifiers = new Set(
     requests.map((request) => request.identifier!),
   );
-  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const currentTodoIds = new Set(todos.map((todo) => todo.id));
 
-  await Promise.all(
-    scheduled
-      .filter((request) => {
-        const todoId = getTodoIdFromAlarmIdentifier(request.identifier);
-        return todoId !== null && !expectedIdentifiers.has(request.identifier);
-      })
-      .map((request) => (
-        Notifications.cancelScheduledNotificationAsync(request.identifier)
-      )),
+  await cancelScheduledTodoAlarmNotifications(
+    () => true,
+    [...expectedIdentifiers],
   );
 
-  const currentTodoIds = new Set(todos.map((todo) => todo.id));
   await dismissPresentedTodoAlarmNotifications((todoId) => !currentTodoIds.has(todoId));
 
   if (requests.length === 0) {

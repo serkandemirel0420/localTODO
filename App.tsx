@@ -811,7 +811,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
-const UNDO_HISTORY_LIMIT = 20;
+const UNDO_HISTORY_LIMIT = 50;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -3856,11 +3856,6 @@ export default function App() {
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const undoHistoryCount = undoHistory.length;
   const redoHistoryCount = redoHistory.length;
-  const historyButtonMode: 'redo' | 'undo' = redoHistoryCount > 0 ? 'redo' : 'undo';
-  const historyButtonCount = historyButtonMode === 'redo' ? redoHistoryCount : undoHistoryCount;
-  const historyButtonDisabled = historyButtonCount === 0;
-  const historyButtonText = historyButtonMode === 'redo' ? 'Redo' : 'Undo';
-  const historyButtonIcon = historyButtonMode === 'redo' ? 'arrow-redo' : 'arrow-undo';
   const undoToastEntry = undoToastEntryId === null
     ? null
     : undoHistory.find((entry) => entry.id === undoToastEntryId) ?? undoHistory[0] ?? null;
@@ -4668,23 +4663,28 @@ export default function App() {
     itemSearchResultsCacheRef.current.clear();
   }, [clearAllRepeatingTodoCompletionFeedback, createSettingsSnapshot]);
 
-  const undoLastChange = useCallback(() => {
-    const [entry] = undoHistory;
+  const applyUndoHistoryEntry = useCallback((entry: UndoHistoryEntry) => {
+    const entryIndex = undoHistory.findIndex((item) => item.id === entry.id);
 
-    if (!entry) {
+    if (entryIndex === -1) {
       clearUndoToast();
       return;
     }
 
-    const redoEntry = createUndoHistoryEntry(entry.label, captureUndoSnapshot());
+    const currentSnapshot = captureUndoSnapshot();
+    const skippedEntries = undoHistory.slice(0, entryIndex + 1);
+    const redoEntries = [...skippedEntries].reverse().map((skippedEntry, reverseIndex) => {
+      const originalIndex = entryIndex - reverseIndex;
+      const snapshotAfterChange = originalIndex === 0
+        ? currentSnapshot
+        : undoHistory[originalIndex - 1].snapshot;
+
+      return createUndoHistoryEntry(skippedEntry.label, snapshotAfterChange);
+    });
 
     restoreUndoSnapshot(entry.snapshot);
-    setUndoHistory((current) => (
-      current[0]?.id === entry.id
-        ? current.slice(1)
-        : current.filter((item) => item.id !== entry.id)
-    ));
-    setRedoHistory((current) => [redoEntry, ...current].slice(0, UNDO_HISTORY_LIMIT));
+    setUndoHistory((current) => current.slice(entryIndex + 1));
+    setRedoHistory((current) => [...redoEntries, ...current].slice(0, UNDO_HISTORY_LIMIT));
     clearUndoToast();
     triggerSubtleHaptic();
   }, [
@@ -4695,22 +4695,27 @@ export default function App() {
     undoHistory,
   ]);
 
-  const redoLastChange = useCallback(() => {
-    const [entry] = redoHistory;
+  const applyRedoHistoryEntry = useCallback((entry: UndoHistoryEntry) => {
+    const entryIndex = redoHistory.findIndex((item) => item.id === entry.id);
 
-    if (!entry) {
+    if (entryIndex === -1) {
       return;
     }
 
-    const undoEntry = createUndoHistoryEntry(entry.label, captureUndoSnapshot());
+    const currentSnapshot = captureUndoSnapshot();
+    const skippedEntries = redoHistory.slice(0, entryIndex + 1);
+    const undoEntries = [...skippedEntries].reverse().map((skippedEntry, reverseIndex) => {
+      const originalIndex = entryIndex - reverseIndex;
+      const snapshotBeforeChange = originalIndex === 0
+        ? currentSnapshot
+        : redoHistory[originalIndex - 1].snapshot;
+
+      return createUndoHistoryEntry(skippedEntry.label, snapshotBeforeChange);
+    });
 
     restoreUndoSnapshot(entry.snapshot);
-    setRedoHistory((current) => (
-      current[0]?.id === entry.id
-        ? current.slice(1)
-        : current.filter((item) => item.id !== entry.id)
-    ));
-    setUndoHistory((current) => [undoEntry, ...current].slice(0, UNDO_HISTORY_LIMIT));
+    setRedoHistory((current) => current.slice(entryIndex + 1));
+    setUndoHistory((current) => [...undoEntries, ...current].slice(0, UNDO_HISTORY_LIMIT));
     clearUndoToast();
     triggerSubtleHaptic();
   }, [
@@ -4720,6 +4725,17 @@ export default function App() {
     redoHistory,
     restoreUndoSnapshot,
   ]);
+
+  const undoLastChange = useCallback(() => {
+    const [entry] = undoHistory;
+
+    if (!entry) {
+      clearUndoToast();
+      return;
+    }
+
+    applyUndoHistoryEntry(entry);
+  }, [applyUndoHistoryEntry, clearUndoToast, undoHistory]);
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -13436,28 +13452,6 @@ export default function App() {
               <View style={styles.appHeaderActions}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={`${historyButtonText} ${historyButtonCount} change${historyButtonCount === 1 ? '' : 's'}`}
-                  accessibilityState={{ disabled: historyButtonDisabled }}
-                  disabled={historyButtonDisabled}
-                  onPress={historyButtonMode === 'redo' ? redoLastChange : undoLastChange}
-                  style={({ pressed }) => [
-                    styles.appHeaderActionButton,
-                    historyButtonCount > 0 && styles.appHeaderUndoButtonAvailable,
-                    historyButtonDisabled && styles.appHeaderUndoButtonDisabled,
-                    pressed && styles.appHeaderSideButtonPressed,
-                  ]}
-                >
-                  <Ionicons
-                    color={historyButtonCount > 0 ? NAV_ACCENT : THEME_TEXT_TERTIARY}
-                    name={historyButtonIcon}
-                    size={22}
-                  />
-                  {historyButtonCount > 0 ? (
-                    <Text style={styles.appHeaderUndoCountBadge}>{historyButtonCount}</Text>
-                  ) : null}
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
                   accessibilityHint="Opens settings"
                   accessibilityLabel="Settings"
                   accessibilityState={{ selected: navTab === 'settings' }}
@@ -15435,34 +15429,6 @@ export default function App() {
               <View style={styles.settingsHeaderActions}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={`${historyButtonText} ${historyButtonCount} change${historyButtonCount === 1 ? '' : 's'}`}
-                  accessibilityState={{ disabled: historyButtonDisabled }}
-                  disabled={historyButtonDisabled}
-                  onPress={historyButtonMode === 'redo' ? redoLastChange : undoLastChange}
-                  style={({ pressed }) => [
-                    styles.settingsUndoButton,
-                    historyButtonDisabled && styles.settingsUndoButtonDisabled,
-                    pressed && styles.settingsUndoButtonPressed,
-                  ]}
-                >
-                  <Ionicons
-                    color={historyButtonDisabled ? '#B8B0A8' : NAV_ACCENT}
-                    name={historyButtonIcon}
-                    size={16}
-                  />
-                  <Text
-                    style={[
-                      styles.settingsUndoButtonText,
-                      historyButtonDisabled && styles.settingsUndoButtonTextDisabled,
-                    ]}
-                  >
-                    {historyButtonCount > 0
-                      ? `${historyButtonText} ${historyButtonCount}`
-                      : 'Undo'}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
                   accessibilityLabel="Close settings"
                   onPress={closeSettingsModal}
                   style={({ pressed }) => [
@@ -15482,6 +15448,96 @@ export default function App() {
               showsVerticalScrollIndicator={false}
               style={styles.settingsBody}
             >
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Change history</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {undoHistoryCount} undo · {redoHistoryCount} redo · {UNDO_HISTORY_LIMIT} kept
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.settingsCard}>
+                  {undoHistoryCount === 0 && redoHistoryCount === 0 ? (
+                    <Text style={styles.settingsEmptyText}>No recent changes</Text>
+                  ) : null}
+
+                  {undoHistoryCount > 0 ? (
+                    <View style={styles.settingsHistoryGroup}>
+                      <Text style={styles.settingsHistoryGroupLabel}>Undo</Text>
+                      {undoHistory.map((entry, index) => (
+                        <Pressable
+                          accessibilityLabel={`Undo ${entry.label}`}
+                          accessibilityRole="button"
+                          key={`undo-${entry.id}`}
+                          onPress={() => applyUndoHistoryEntry(entry)}
+                          style={({ pressed }) => [
+                            styles.settingsHistoryRow,
+                            index > 0 && styles.settingsHistoryRowSeparated,
+                            pressed && styles.settingsHistoryRowPressed,
+                          ]}
+                        >
+                          <View style={styles.settingsHistoryIconWrap}>
+                            <Ionicons color={NAV_ACCENT} name="arrow-undo" size={18} />
+                          </View>
+                          <View style={styles.settingsHistoryTextWrap}>
+                            <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
+                              Undo {entry.label}
+                            </Text>
+                            <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
+                              {index === 0 ? 'Latest change' : `${index + 1} changes back`}
+                            </Text>
+                          </View>
+                          <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+
+                  {redoHistoryCount > 0 ? (
+                    <View
+                      style={[
+                        styles.settingsHistoryGroup,
+                        undoHistoryCount > 0 && styles.settingsHistoryGroupSpaced,
+                      ]}
+                    >
+                      <Text style={styles.settingsHistoryGroupLabel}>Redo</Text>
+                      {redoHistory.map((entry, index) => (
+                        <Pressable
+                          accessibilityLabel={`Redo ${entry.label}`}
+                          accessibilityRole="button"
+                          key={`redo-${entry.id}`}
+                          onPress={() => applyRedoHistoryEntry(entry)}
+                          style={({ pressed }) => [
+                            styles.settingsHistoryRow,
+                            index > 0 && styles.settingsHistoryRowSeparated,
+                            pressed && styles.settingsHistoryRowPressed,
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.settingsHistoryIconWrap,
+                              styles.settingsHistoryRedoIconWrap,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="arrow-redo" size={18} />
+                          </View>
+                          <View style={styles.settingsHistoryTextWrap}>
+                            <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
+                              Redo {entry.label}
+                            </Text>
+                            <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
+                              {index === 0 ? 'Next redo' : `${index + 1} redo steps forward`}
+                            </Text>
+                          </View>
+                          <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
@@ -17254,37 +17310,6 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     lineHeight: 28,
   },
-  settingsUndoButton: {
-    alignItems: 'center',
-    backgroundColor: THEME_ACCENT_SOFT,
-    borderColor: '#D6E0FF',
-    borderRadius: 21,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 6,
-    height: 42,
-    justifyContent: 'center',
-    minWidth: 88,
-    paddingHorizontal: 12,
-  },
-  settingsUndoButtonDisabled: {
-    backgroundColor: '#F4F0EA',
-    borderColor: '#E8E2DA',
-  },
-  settingsUndoButtonPressed: {
-    opacity: 0.78,
-    transform: [{ scale: 0.97 }],
-  },
-  settingsUndoButtonText: {
-    color: NAV_ACCENT,
-    fontSize: 13,
-    fontWeight: FONT_SEMIBOLD,
-    letterSpacing: 0,
-    lineHeight: 18,
-  },
-  settingsUndoButtonTextDisabled: {
-    color: '#B8B0A8',
-  },
   settingsBody: {
     flex: 1,
   },
@@ -17356,6 +17381,68 @@ const styles = StyleSheet.create({
     fontWeight: FONT_REGULAR,
     lineHeight: 19,
     letterSpacing: 0.1,
+  },
+  settingsHistoryGroup: {
+    width: '100%',
+  },
+  settingsHistoryGroupSpaced: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 12,
+    paddingTop: 12,
+  },
+  settingsHistoryGroupLabel: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 16,
+    marginBottom: 4,
+    paddingHorizontal: 2,
+  },
+  settingsHistoryRow: {
+    alignItems: 'center',
+    borderRadius: 10,
+    flexDirection: 'row',
+    gap: 10,
+    marginHorizontal: -8,
+    minHeight: 58,
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+  },
+  settingsHistoryRowSeparated: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  settingsHistoryRowPressed: {
+    backgroundColor: '#FAF6F0',
+  },
+  settingsHistoryIconWrap: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 16,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  settingsHistoryRedoIconWrap: {
+    backgroundColor: '#E7F0EB',
+  },
+  settingsHistoryTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsHistoryTitle: {
+    color: THEME_TEXT,
+    fontSize: 15,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
+  },
+  settingsHistorySubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 2,
   },
   settingsDeletedList: {
     borderTopColor: '#F2EBE3',
@@ -18314,29 +18401,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     position: 'relative',
     width: 36,
-  },
-  appHeaderUndoButtonAvailable: {
-    backgroundColor: THEME_ACCENT_SOFT,
-  },
-  appHeaderUndoButtonDisabled: {
-    opacity: 0.46,
-  },
-  appHeaderUndoCountBadge: {
-    backgroundColor: NAV_ACCENT,
-    borderColor: THEME_CARD,
-    borderRadius: 9,
-    borderWidth: 1,
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 14,
-    minWidth: 17,
-    overflow: 'hidden',
-    paddingHorizontal: 4,
-    position: 'absolute',
-    right: -3,
-    textAlign: 'center',
-    top: -3,
   },
   appHeaderCreateFromSettingsCue: {
     alignItems: 'center',

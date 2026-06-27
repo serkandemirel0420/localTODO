@@ -7138,10 +7138,12 @@ export default function App() {
     const isoDate = toISODateString(date);
     const source = datePickerApplyRef.current;
     const repeat = datePickerRepeatRef.current;
+    const isTodoEditDate = source === 'filters' && getCurrentTodoEditTargetIds().length > 0;
 
     if (
       !repeat &&
       source === 'filters' &&
+      !isTodoEditDate &&
       dateFilterValuesIncludeExactDay(datePickerDateLabelsRef.current, date)
     ) {
       Alert.alert(
@@ -7155,7 +7157,9 @@ export default function App() {
     const applyDate = (current: SelectedFilters) => {
       const nextFilters: SelectedFilters = {
         ...current,
-        date: source === 'create' || repeat ? [isoDate] : [...current.date, isoDate],
+        date: source === 'create' || repeat || isTodoEditDate
+          ? [isoDate]
+          : [...current.date, isoDate],
       };
 
       if (repeat) {
@@ -7177,7 +7181,7 @@ export default function App() {
 
     closeDatePicker();
     triggerSubtleHaptic();
-  }, [closeDatePicker, updateCurrentTodoTargetFilters]);
+  }, [closeDatePicker, getCurrentTodoEditTargetIds, updateCurrentTodoTargetFilters]);
 
   const clearPickedDate = useCallback(() => {
     const repeat = datePickerRepeatRef.current;

@@ -395,12 +395,24 @@ const createTodoAlarmTrigger = (
   }
 
   const date = resolveTodoAlarmDate(todo.filters.date, now, todo.createdAt);
+  if (date) {
+    const alarmDate = getOneTimeAlarmDate(time, date, now);
+    if (!alarmDate) {
+      return null;
+    }
 
-  if (repeat !== 'none') {
-    return createRepeatingTrigger(repeat, time, date, now);
+    return {
+      channelId: TODO_ALARM_CHANNEL_ID,
+      date: alarmDate,
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+    };
   }
 
-  const alarmDate = getOneTimeAlarmDate(time, date, now);
+  if (repeat !== 'none') {
+    return createRepeatingTrigger(repeat, time, null, now);
+  }
+
+  const alarmDate = getOneTimeAlarmDate(time, null, now);
   if (!alarmDate) {
     return null;
   }

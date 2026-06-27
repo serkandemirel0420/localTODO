@@ -1,4 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 import { APP_VARIANT } from '../appVariant';
 
@@ -35,15 +37,29 @@ export const normalizeStoredGoogleAuth = (value: unknown): StoredGoogleAuth | nu
 
 export const googleAuthStore = {
   async clear() {
+    if (Platform.OS === 'web') {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+
     await SecureStore.deleteItemAsync(STORAGE_KEY);
   },
 
   async load() {
-    const stored = await SecureStore.getItemAsync(STORAGE_KEY);
+    const stored = Platform.OS === 'web'
+      ? await AsyncStorage.getItem(STORAGE_KEY)
+      : await SecureStore.getItemAsync(STORAGE_KEY);
     return stored ? normalizeStoredGoogleAuth(JSON.parse(stored) as unknown) : null;
   },
 
   async save(auth: StoredGoogleAuth) {
-    await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(normalizeStoredGoogleAuth(auth)));
+    const serializedAuth = JSON.stringify(normalizeStoredGoogleAuth(auth));
+
+    if (Platform.OS === 'web') {
+      await AsyncStorage.setItem(STORAGE_KEY, serializedAuth);
+      return;
+    }
+
+    await SecureStore.setItemAsync(STORAGE_KEY, serializedAuth);
   },
 };

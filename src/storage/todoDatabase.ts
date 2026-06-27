@@ -9,6 +9,7 @@ const COMBINING_MARKS_PATTERN = /[\u0300-\u036f]/g;
 const SEARCH_TERM_PATTERN = /[\p{L}\p{N}_]+/gu;
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let todoSearchTableAvailable = false;
 
 const getDatabase = () => {
   if (!databasePromise) {
@@ -37,8 +38,10 @@ const getDatabase = () => {
 
       await ensureTodoSearchColumns(database);
 
-      await ensureTodoSearchTable(database);
-      await rebuildTodoSearchIndexIfNeeded(database);
+      todoSearchTableAvailable = await ensureTodoSearchTable(database);
+      if (todoSearchTableAvailable) {
+        await rebuildTodoSearchIndexIfNeeded(database);
+      }
 
       return database;
     });
@@ -208,7 +211,12 @@ const ensureTodoSearchTable = async (database: SQLite.SQLiteDatabase) => {
   );
 
   if (existing) {
-    return;
+    try {
+      await database.getFirstAsync('SELECT COUNT(*) AS count FROM todos_fts');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   try {
@@ -220,16 +228,22 @@ const ensureTodoSearchTable = async (database: SQLite.SQLiteDatabase) => {
         tokenize = 'unicode61 remove_diacritics 2'
       );
     `);
+    return true;
   } catch {
-    await database.execAsync(`
-      CREATE VIRTUAL TABLE todos_fts USING fts4(
-        id,
-        text,
-        content,
-        tokenize=unicode61,
-        notindexed=id
-      );
-    `);
+    try {
+      await database.execAsync(`
+        CREATE VIRTUAL TABLE todos_fts USING fts4(
+          id,
+          text,
+          content,
+          tokenize=unicode61,
+          notindexed=id
+        );
+      `);
+      return true;
+    } catch {
+      return false;
+    }
   }
 };
 
@@ -269,7 +283,9 @@ const replaceTodoSearchRow = async (
 export const loadTodosFromDatabase = async (): Promise<Todo[]> => {
   const database = await getDatabase();
   await migrateLegacyAsyncStorage(database);
-  await rebuildTodoSearchIndexIfNeeded(database);
+  if (todoSearchTableAvailable) {
+    await rebuildTodoSearchIndexIfNeeded(database);
+  }
 
   const rows = await database.getAllAsync<{
     content: string;
@@ -294,7 +310,9 @@ export const loadTodosFromDatabase = async (): Promise<Todo[]> => {
 export const searchTodosInDatabase = async (query: string): Promise<Todo[]> => {
   const database = await getDatabase();
   await migrateLegacyAsyncStorage(database);
-  await rebuildTodoSearchIndexIfNeeded(database);
+  if (todoSearchTableAvailable) {
+    await rebuildTodoSearchIndexIfNeeded(database);
+  }
 
   const searchTerms = getSearchTerms(query);
 
@@ -338,7 +356,9 @@ const replaceAllTodos = async (
 ) => {
   await database.withTransactionAsync(async () => {
     await database.runAsync('DELETE FROM todos');
-    await database.runAsync('DELETE FROM todos_fts');
+    if (todoSearchTableAvailable) {
+      await database.runAsync('DELETE FROM todos_fts');
+    }
 
     for (const todo of todos) {
       const contentSearch = normalizeSearchText(todo.content);
@@ -364,10 +384,12 @@ const replaceAllTodos = async (
           JSON.stringify(todo.filters),
         ],
       );
-      await database.runAsync(
-        'INSERT INTO todos_fts (id, text, content) VALUES (?, ?, ?)',
-        [todo.id, todo.text, todo.content],
-      );
+      if (todoSearchTableAvailable) {
+        await database.runAsync(
+          'INSERT INTO todos_fts (id, text, content) VALUES (?, ?, ?)',
+          [todo.id, todo.text, todo.content],
+        );
+      }
     }
   });
 };
@@ -416,7 +438,9 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
         JSON.stringify(todo.filters),
       ],
     );
-    await replaceTodoSearchRow(database, todo);
+    if (todoSearchTableAvailable) {
+      await replaceTodoSearchRow(database, todo);
+    }
   });
 };
 
@@ -458,7 +482,9 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
           JSON.stringify(todo.filters),
         ],
       );
-      await replaceTodoSearchRow(database, todo);
+      if (todoSearchTableAvailable) {
+        await replaceTodoSearchRow(database, todo);
+      }
     }
   });
 };
@@ -482,7 +508,9 @@ export const updateTodoFiltersInDatabase = async (
 export const deleteTodoFromDatabase = async (id: string) => {
   const database = await getDatabase();
   await database.withTransactionAsync(async () => {
-    await database.runAsync('DELETE FROM todos_fts WHERE id = ?', [id]);
+    if (todoSearchTableAvailable) {
+      await database.runAsync('DELETE FROM todos_fts WHERE id = ?', [id]);
+    }
     await database.runAsync('DELETE FROM todos WHERE id = ?', [id]);
   });
 };

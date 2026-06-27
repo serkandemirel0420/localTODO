@@ -52,13 +52,94 @@ const canOpenAuthWindow = (targetUrl) => {
   }
 };
 
+const isGoogleAuthCallbackUrl = (targetUrl) => {
+  if (!serverUrl) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(targetUrl);
+    const appUrl = new URL(serverUrl);
+    const params = new URLSearchParams(parsedUrl.search);
+    const fragment = parsedUrl.hash.startsWith('#') ? parsedUrl.hash.slice(1) : parsedUrl.hash;
+    new URLSearchParams(fragment).forEach((value, key) => {
+      if (!params.has(key)) {
+        params.set(key, value);
+      }
+    });
+
+    return (
+      parsedUrl.origin === appUrl.origin &&
+      params.has('state') &&
+      (
+        params.has('access_token') ||
+        params.has('code') ||
+        params.has('error')
+      )
+    );
+  } catch {
+    return false;
+  }
+};
+
+const sendGoogleAuthCallbackToMainWindow = (targetUrl, callbackWindow) => {
+  if (!mainWindow || mainWindow.isDestroyed() || !isGoogleAuthCallbackUrl(targetUrl)) {
+    return false;
+  }
+
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.executeJavaScript(
+    `window.dispatchEvent(new CustomEvent('localtodo-google-auth-callback', { detail: { url: ${JSON.stringify(targetUrl)} } }));`,
+    true,
+  ).catch((error) => {
+    console.error('Failed to deliver Google auth callback to Local Todo.', error);
+  });
+
+  if (callbackWindow && !callbackWindow.isDestroyed() && callbackWindow !== mainWindow) {
+    setTimeout(() => {
+      if (!callbackWindow.isDestroyed()) {
+        callbackWindow.close();
+      }
+    }, 100);
+  }
+
+  return true;
+};
+
+const attachAuthWindowHandlers = (authWindow) => {
+  const interceptAuthCallback = (event, targetUrl) => {
+    if (sendGoogleAuthCallbackToMainWindow(targetUrl, authWindow)) {
+      event?.preventDefault?.();
+    }
+  };
+
+  authWindow.webContents.on('will-navigate', interceptAuthCallback);
+  authWindow.webContents.on('will-redirect', interceptAuthCallback);
+  authWindow.webContents.on('did-navigate', (_event, targetUrl) => {
+    sendGoogleAuthCallbackToMainWindow(targetUrl, authWindow);
+  });
+  authWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (sendGoogleAuthCallbackToMainWindow(targetUrl, authWindow)) {
+      return { action: 'deny' };
+    }
+
+    if (canOpenAuthWindow(targetUrl)) {
+      return { action: 'allow' };
+    }
+
+    shell.openExternal(targetUrl);
+    return { action: 'deny' };
+  });
+};
+
 const sendFile = (response, filePath) => {
   const extension = path.extname(filePath).toLowerCase();
   response.writeHead(200, {
     'Content-Type': mimeTypes.get(extension) || 'application/octet-stream',
     'Cross-Origin-Embedder-Policy': 'require-corp',
-    // Expo AuthSession's web flow completes by posting the Google callback
-    // URL from the popup back to window.opener.
+    // Google OAuth needs popup opener access until the Electron wrapper relays
+    // the final callback URL back to the main app window.
     'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     'Cross-Origin-Resource-Policy': 'same-origin',
   });
@@ -139,6 +220,10 @@ const createWindow = async () => {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (sendGoogleAuthCallbackToMainWindow(targetUrl)) {
+      return { action: 'deny' };
+    }
+
     if (canOpenAuthWindow(targetUrl)) {
       return {
         action: 'allow',
@@ -157,6 +242,11 @@ const createWindow = async () => {
 
     shell.openExternal(targetUrl);
     return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('did-create-window', (authWindow, details) => {
+    attachAuthWindowHandlers(authWindow);
+    sendGoogleAuthCallbackToMainWindow(details.url, authWindow);
   });
 
   await mainWindow.loadURL(url);

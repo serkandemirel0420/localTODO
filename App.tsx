@@ -884,6 +884,11 @@ type MenuEditOwner = 'items' | 'presets';
 type SelectedFilters = TodoFilters;
 
 type GoogleDriveAction = 'backup' | 'manage' | 'restore';
+type PendingDesktopGoogleDriveAction = {
+  action: GoogleDriveAction;
+  scope: DriveBackupScope;
+  startedAt: number;
+};
 type GoogleDriveBackupPickerMode = 'backup' | 'manage' | 'restore';
 type GoogleDriveBackupPickerState = {
   accessToken: string;
@@ -2408,6 +2413,40 @@ const googleNativeTokenToStoredAuth = (
   scope: GOOGLE_AUTH_SCOPES.join(' '),
   tokenType: 'bearer',
 });
+
+const googleAuthCallbackUrlToStoredAuth = (url: string): StoredGoogleAuth | null => {
+  let parsedUrl: URL;
+
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const params = new URLSearchParams(parsedUrl.search);
+  const fragment = parsedUrl.hash.startsWith('#') ? parsedUrl.hash.slice(1) : parsedUrl.hash;
+  new URLSearchParams(fragment).forEach((value, key) => {
+    if (!params.has(key)) {
+      params.set(key, value);
+    }
+  });
+
+  const accessToken = params.get('access_token');
+  if (!accessToken) {
+    return null;
+  }
+
+  const expiresIn = Number(params.get('expires_in'));
+
+  return {
+    accessToken,
+    expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : undefined,
+    idToken: params.get('id_token') ?? undefined,
+    issuedAt: Math.floor(Date.now() / 1000),
+    scope: params.get('scope') ?? undefined,
+    tokenType: params.get('token_type') ?? 'bearer',
+  };
+};
 
 const isGoogleAuthRecoveryError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -4153,6 +4192,8 @@ export default function App() {
   const googleDriveBackupPickerResolveRef = useRef<(
     (selection: GoogleDriveBackupPickerSelection) => void
   ) | null>(null);
+  const desktopGoogleAuthCallbackHandledRef = useRef(false);
+  const pendingDesktopGoogleDriveActionRef = useRef<PendingDesktopGoogleDriveAction | null>(null);
   const googleDriveBackupPickerScrollRef = useRef<React.ComponentRef<typeof GestureScrollView>>(null);
   const googleDriveBackupPickerSelectedCount = useMemo(() => {
     if (!googleDriveBackupPicker) {
@@ -12933,6 +12974,57 @@ export default function App() {
     uploadBackupWithToken,
   ]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return undefined;
+    }
+
+    const handleDesktopGoogleAuthCallback = (rawEvent: Event) => {
+      const event = rawEvent as CustomEvent<{ url?: string }>;
+      const url = event.detail?.url;
+      if (typeof url !== 'string') {
+        return;
+      }
+
+      const nextAuth = googleAuthCallbackUrlToStoredAuth(url);
+      if (!nextAuth) {
+        setGoogleDriveBackupStatus('Google sign in failed');
+        return;
+      }
+
+      const pendingAction = pendingDesktopGoogleDriveActionRef.current;
+      pendingDesktopGoogleDriveActionRef.current = null;
+      desktopGoogleAuthCallbackHandledRef.current = true;
+      setGoogleAuth(nextAuth);
+      setGoogleDriveBusy(true);
+      setGoogleDriveBackupStatus('Google Drive connected');
+
+      googleAuthStore.save(nextAuth)
+        .then(() => {
+          if (
+            !pendingAction ||
+            Date.now() - pendingAction.startedAt > 120000
+          ) {
+            return undefined;
+          }
+
+          return runGoogleDriveAction(pendingAction.action, nextAuth, pendingAction.scope);
+        })
+        .catch((error) => {
+          handleGoogleDriveError(error, 'Google sign in failed');
+        })
+        .finally(() => {
+          setGoogleDriveBusy(false);
+        });
+    };
+
+    window.addEventListener('localtodo-google-auth-callback', handleDesktopGoogleAuthCallback);
+
+    return () => {
+      window.removeEventListener('localtodo-google-auth-callback', handleDesktopGoogleAuthCallback);
+    };
+  }, [handleGoogleDriveError, runGoogleDriveAction]);
+
   const authenticateAndRunGoogleDriveAction = useCallback(async (
     action: GoogleDriveAction,
     scope: DriveBackupScope = 'main',
@@ -12960,9 +13052,21 @@ export default function App() {
         return;
       }
 
+      pendingDesktopGoogleDriveActionRef.current = {
+        action,
+        scope,
+        startedAt: Date.now(),
+      };
+      desktopGoogleAuthCallbackHandledRef.current = false;
+
       const result = await promptGoogleAuth();
 
+      if (desktopGoogleAuthCallbackHandledRef.current) {
+        return;
+      }
+
       if (result.type === 'success' && result.authentication?.accessToken) {
+        pendingDesktopGoogleDriveActionRef.current = null;
         const nextAuth = googleAuthToStoredAuth(result.authentication);
         setGoogleAuth(nextAuth);
         await googleAuthStore.save(nextAuth);
@@ -12971,18 +13075,24 @@ export default function App() {
       }
 
       if (result.type === 'cancel') {
+        pendingDesktopGoogleDriveActionRef.current = null;
         setGoogleDriveBackupStatus('Google sign in cancelled');
       } else if (result.type === 'dismiss') {
         setGoogleDriveBackupStatus('Google sign in dismissed');
       } else if (result.type === 'error') {
+        pendingDesktopGoogleDriveActionRef.current = null;
         setGoogleDriveBackupStatus(result.error?.message ?? 'Google sign in failed');
       } else {
+        pendingDesktopGoogleDriveActionRef.current = null;
         setGoogleDriveBackupStatus('Google sign in did not finish');
       }
     } catch (error) {
+      pendingDesktopGoogleDriveActionRef.current = null;
       handleGoogleDriveError(error, 'Google sign in failed');
     } finally {
-      setGoogleDriveBusy(false);
+      if (!desktopGoogleAuthCallbackHandledRef.current) {
+        setGoogleDriveBusy(false);
+      }
     }
   }, [
     authenticateWithAndroidGoogle,

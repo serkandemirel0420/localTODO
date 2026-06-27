@@ -121,6 +121,7 @@ import {
   uploadDriveBackup,
   type DriveBackupSlot,
   type DriveBackupScope,
+  type LocalTodoBackup,
 } from './src/google/driveBackup';
 import {
   googleAuthStore,
@@ -2140,9 +2141,11 @@ const formatDriveBackupSlotSubtitle = (slot: DriveBackupSlot) => {
 
 const DRIVE_BACKUP_VARIANT_LABEL = isDevAppVariant ? 'Dev' : 'Prod';
 const DRIVE_BACKUP_VARIANT_LOWER_LABEL = DRIVE_BACKUP_VARIANT_LABEL.toLocaleLowerCase();
-const DRIVE_BACKUP_CONFIG_HINT = isDevAppVariant
-  ? 'Add the EXPO_PUBLIC_GOOGLE_*_DEV_CLIENT_ID for this build and rebuild.'
-  : 'Add the EXPO_PUBLIC_GOOGLE_*_PROD_CLIENT_ID for this build and rebuild.';
+const DRIVE_BACKUP_CONFIG_HINT = Platform.OS === 'web'
+  ? 'Add EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for this desktop build and rebuild.'
+  : isDevAppVariant
+    ? 'Add the EXPO_PUBLIC_GOOGLE_*_DEV_CLIENT_ID for this build and rebuild.'
+    : 'Add the EXPO_PUBLIC_GOOGLE_*_PROD_CLIENT_ID for this build and rebuild.';
 
 const formatDriveBackupScopeLabel = (_scope: DriveBackupScope) =>
   `${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup`;
@@ -4114,6 +4117,7 @@ export default function App() {
   const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
+  const [settingsHistoryExpanded, setSettingsHistoryExpanded] = useState(false);
   const [activeDeletedTodoDetailId, setActiveDeletedTodoDetailId] = useState<string | null>(null);
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
@@ -4361,10 +4365,12 @@ export default function App() {
 
   const [googleRequest, , promptGoogleAuth] = Google.useAuthRequest({
     androidClientId: GOOGLE_ANDROID_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
-    extraParams: {
-      access_type: 'offline',
-      prompt: 'consent select_account',
-    },
+    extraParams: Platform.OS === 'web'
+      ? { prompt: 'select_account' }
+      : {
+          access_type: 'offline',
+          prompt: 'consent select_account',
+        },
     iosClientId: GOOGLE_IOS_CLIENT_ID || MISSING_GOOGLE_CLIENT_ID,
     redirectUri: makeRedirectUri({ scheme: GOOGLE_REDIRECT_SCHEME }),
     scopes: GOOGLE_AUTH_SCOPES,
@@ -11914,6 +11920,7 @@ export default function App() {
     setSettingsDateLabelsExpanded(false);
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
+    setSettingsHistoryExpanded(false);
     setSettingsListsExpanded(false);
     setSettingsPresetsExpanded(false);
     setSettingsListReorderCancelNonce((current) => current + 1);
@@ -12605,23 +12612,12 @@ export default function App() {
     }
   }, []);
 
-  const uploadBackupWithToken = useCallback(async (
-    accessToken: string,
-    options: {
-      notify?: boolean;
-      scope?: DriveBackupScope;
-    } = {},
-  ) => {
-    const backupScope = options.scope ?? 'main';
-    setGoogleDriveBackupStatus(
-      `Creating ${formatDriveBackupScopeLabel(backupScope)} snapshot...`,
-    );
-
-      const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
-      const payload = createBackupPayload(backupTodos, {
-        collapsedTodoGroupIds: [...collapsedTodoGroupIds],
-        customTags,
-        dateLabelDisplayMode,
+  const createCurrentBackupPayload = useCallback(() => {
+    const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
+    const payload = createBackupPayload(backupTodos, {
+      collapsedTodoGroupIds: [...collapsedTodoGroupIds],
+      customTags,
+      dateLabelDisplayMode,
       deletedTodos,
       filterConfigUiState,
       filterColors,
@@ -12645,18 +12641,11 @@ export default function App() {
       metaTagVisibility,
       presetLabelTagsSeeded,
     });
-    const uploadResult = await uploadDriveBackup(accessToken, payload, undefined, backupScope);
-    if (backupScope === 'main') {
-      setGoogleDriveLastBackupAt(payload.exportedAt);
-    }
-    setGoogleDriveBackupStatus(
-      `${DRIVE_BACKUP_VARIANT_LABEL} backup ${uploadResult.file.name} created · ${
-        backupTodos.length
-      } items · ${formatBackupTime(payload.exportedAt)}`,
-    );
-    if (options.notify !== false) {
-      triggerSubtleHaptic();
-    }
+
+    return {
+      payload,
+      todoCount: backupTodos.length,
+    };
   }, [
     collapsedTodoGroupIds,
     customTags,
@@ -12685,6 +12674,188 @@ export default function App() {
     todoSortMode,
     todos,
   ]);
+
+  const uploadBackupWithToken = useCallback(async (
+    accessToken: string,
+    options: {
+      notify?: boolean;
+      scope?: DriveBackupScope;
+    } = {},
+  ) => {
+    const backupScope = options.scope ?? 'main';
+    setGoogleDriveBackupStatus(
+      `Creating ${formatDriveBackupScopeLabel(backupScope)} snapshot...`,
+    );
+
+    const { payload, todoCount } = createCurrentBackupPayload();
+    const uploadResult = await uploadDriveBackup(accessToken, payload, undefined, backupScope);
+    if (backupScope === 'main') {
+      setGoogleDriveLastBackupAt(payload.exportedAt);
+    }
+    setGoogleDriveBackupStatus(
+      `${DRIVE_BACKUP_VARIANT_LABEL} backup ${uploadResult.file.name} created · ${
+        todoCount
+      } items · ${formatBackupTime(payload.exportedAt)}`,
+    );
+    if (options.notify !== false) {
+      triggerSubtleHaptic();
+    }
+  }, [createCurrentBackupPayload]);
+
+  const applyBackupPayload = useCallback(async (
+    payload: LocalTodoBackup,
+    sourceLabel: string,
+  ) => {
+    const restoredAt = new Date().toISOString();
+    recordUndo('Restore backup');
+    autoBackupStateKeyRef.current = null;
+    autoBackupFailedStateKeyRef.current = null;
+    setPendingDeleteIds(new Set());
+    clearNotificationTodoReveal();
+
+    const restoredTodos = payload.todos.map(cloneTodo);
+    const restoredDeletedTodos = cloneDeletedTodos(payload.settings.deletedTodos);
+    const restoredMenuPresets = cloneMenuPresets(payload.settings.menuPresets);
+    const restoredCustomTags = payload.settings.presetLabelTagsSeeded
+      ? normalizeCustomTags(payload.settings.customTags)
+      : addPresetLabelTagsToCustomTags(
+          payload.settings.customTags,
+          restoredMenuPresets,
+        );
+    const restoredSelectedFilters = normalizeTodoFilters(payload.settings.selectedFilters);
+    const restoredRequiredFilters = pruneTodoFilters(
+      payload.settings.requiredFilters,
+      restoredSelectedFilters,
+    );
+    const restoredAvoidedFilters = normalizeTodoFilters(payload.settings.avoidedFilters);
+    const restoredFilterConfigUiState = cloneFilterConfigUiState(payload.settings.filterConfigUiState);
+    const restoredFilterColors = cloneFilterColors(payload.settings.filterColors);
+    const restoredListMenuTree = cloneListMenuTree(
+      payload.settings.listMenuTree.length > 0
+        ? payload.settings.listMenuTree
+        : DEFAULT_LIST_MENU_TREE,
+    );
+    const restoredLastCreateTodoFilters = getRememberedCreateDraftFilters(
+      restoredListMenuTree,
+      payload.settings.lastCreateTodoFilters,
+    );
+    const restoredQuickPresetNavIconNames = cloneQuickPresetNavIconNames(
+      payload.settings.quickPresetNavIconNames,
+    );
+    const restoredQuickPresetNavPresetIds = cloneQuickPresetNavPresetIds(
+      payload.settings.quickPresetNavPresetIds,
+    );
+    const restoredMetaTagVisibility = cloneMetaTagVisibility(payload.settings.metaTagVisibility);
+    const restoredTodoIds = new Set(restoredTodos.map((todo) => todo.id));
+    const restoredDeletedTodoIds = new Set(restoredDeletedTodos.map((todo) => todo.id));
+    const restoredPresetIds = new Set(restoredMenuPresets.map((preset) => preset.id));
+    const restoredSettings = createSettingsSnapshot({
+      collapsedTodoGroupIds: payload.settings.collapsedTodoGroupIds,
+      customTags: restoredCustomTags,
+      dateLabelDisplayMode: payload.settings.dateLabelDisplayMode,
+      deletedTodos: restoredDeletedTodos,
+      filterConfigUiState: restoredFilterConfigUiState,
+      filterColors: restoredFilterColors,
+      googleDriveBackupEnabled: payload.settings.googleDriveBackupEnabled,
+      googleDriveLastBackupAt: payload.settings.googleDriveLastBackupAt,
+      googleDriveLastRestoreAt: restoredAt,
+      hideDoneTodos: payload.settings.hideDoneTodos,
+      lastCreateTodoFilters: restoredLastCreateTodoFilters,
+      listMenuTree: restoredListMenuTree,
+      listOrderMode: payload.settings.listOrderMode,
+      menuPresets: restoredMenuPresets,
+      metaTagVisibility: restoredMetaTagVisibility,
+      presetLabelTagsSeeded: true,
+      quickPresetNavIconNames: restoredQuickPresetNavIconNames,
+      quickPresetNavPresetIds: restoredQuickPresetNavPresetIds,
+      avoidedFilters: restoredAvoidedFilters,
+      requiredFilters: restoredRequiredFilters,
+      selectedFilters: restoredSelectedFilters,
+      showOverdueMetaTags: payload.settings.showOverdueMetaTags,
+      todoGroupMode: payload.settings.todoGroupMode,
+      todoSortMode: payload.settings.todoSortMode,
+    });
+
+    todosRef.current = restoredTodos;
+    customTagsRef.current = restoredCustomTags;
+    dateLabelDisplayModeRef.current = payload.settings.dateLabelDisplayMode;
+    deletedTodosRef.current = restoredDeletedTodos;
+    filterColorsRef.current = restoredFilterColors;
+    googleDriveBackupEnabledRef.current = payload.settings.googleDriveBackupEnabled;
+    hideDoneTodosRef.current = payload.settings.hideDoneTodos;
+    lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
+    listMenuTreeRef.current = restoredListMenuTree;
+    listOrderModeRef.current = payload.settings.listOrderMode;
+    menuPresetsRef.current = restoredMenuPresets;
+    metaTagVisibilityRef.current = restoredMetaTagVisibility;
+    presetLabelTagsSeededRef.current = true;
+    quickPresetNavIconNamesRef.current = restoredQuickPresetNavIconNames;
+    quickPresetNavPresetIdsRef.current = restoredQuickPresetNavPresetIds;
+    selectedFiltersRef.current = restoredSelectedFilters;
+    requiredFiltersRef.current = restoredRequiredFilters;
+    avoidedFiltersRef.current = restoredAvoidedFilters;
+    showOverdueMetaTagsRef.current = payload.settings.showOverdueMetaTags;
+    todoGroupModeRef.current = payload.settings.todoGroupMode;
+    todoSortModeRef.current = payload.settings.todoSortMode;
+    pendingDeleteIdsRef.current = new Set();
+
+    await localTodoStore.replaceAll(restoredTodos);
+    await appSettingsStore.save(restoredSettings);
+    reconcileTodoAlarms(restoredTodos).catch(() => undefined);
+
+    setTodos(restoredTodos);
+    setDeletedTodos(restoredDeletedTodos);
+    setCustomTags(restoredCustomTags);
+    setPresetLabelTagsSeeded(true);
+    setSelectedFilters(restoredSelectedFilters);
+    setRequiredFilters(restoredRequiredFilters);
+    setAvoidedFilters(restoredAvoidedFilters);
+    setFilterConfigUiState(restoredFilterConfigUiState);
+    setFilterColors(restoredFilterColors);
+    setGoogleDriveBackupEnabled(payload.settings.googleDriveBackupEnabled);
+    setGoogleDriveLastBackupAt(payload.settings.googleDriveLastBackupAt);
+    setGoogleDriveLastRestoreAt(restoredAt);
+    setHideDoneTodos(payload.settings.hideDoneTodos);
+    setShowOverdueMetaTags(payload.settings.showOverdueMetaTags);
+    setDateLabelDisplayMode(normalizeDateLabelDisplayMode(
+      payload.settings.dateLabelDisplayMode,
+    ));
+    setListMenuTree(restoredListMenuTree);
+    setListOrderMode(payload.settings.listOrderMode);
+    setMenuPresets(restoredMenuPresets);
+    setQuickPresetNavIconNames(restoredQuickPresetNavIconNames);
+    setQuickPresetNavPresetIds(restoredQuickPresetNavPresetIds);
+    setTodoGroupMode(payload.settings.todoGroupMode);
+    setCollapsedTodoGroupIds(new Set(payload.settings.collapsedTodoGroupIds));
+    setTodoSortMode(payload.settings.todoSortMode);
+    setMetaTagVisibility(restoredMetaTagVisibility);
+    setLastCreateTodoFilters(restoredLastCreateTodoFilters);
+    setCreateDraftFilters(restoredLastCreateTodoFilters);
+    setCreateDraftPriorityFromPicker(
+      shouldHighlightCreatePriorityPicker(restoredLastCreateTodoFilters),
+    );
+    setActiveTodoMenuId((current) => (current && restoredTodoIds.has(current) ? current : null));
+    setActiveTodoDetailId((current) => (current && restoredTodoIds.has(current) ? current : null));
+    setActiveDeletedTodoDetailId((current) => (
+      current && restoredDeletedTodoIds.has(current) ? current : null
+    ));
+    setSelectedTodoIds((current) => {
+      const next = new Set([...current].filter((id) => restoredTodoIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setEditingMenuPresetId((current) => (
+      current && restoredPresetIds.has(current) ? current : null
+    ));
+    setOpenMenuPresetId((current) => (
+      current && restoredPresetIds.has(current) ? current : null
+    ));
+    setOpenQuickPresetNavSlotNumber(null);
+    itemSearchResultsCacheRef.current.clear();
+    setGoogleDriveBackupStatus(
+      `Restored ${sourceLabel} ${restoredTodos.length} items · ${formatBackupTime(restoredAt)}`,
+    );
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, createSettingsSnapshot, recordUndo]);
 
   const restoreBackupWithToken = useCallback(async (
     accessToken: string,
@@ -12716,78 +12887,8 @@ export default function App() {
       return;
     }
 
-    const restoredAt = new Date().toISOString();
-    recordUndo('Restore backup');
-    autoBackupStateKeyRef.current = null;
-    autoBackupFailedStateKeyRef.current = null;
-    setPendingDeleteIds(new Set());
-    await localTodoStore.replaceAll(backup.payload.todos);
-    setTodos(backup.payload.todos);
-    reconcileTodoAlarms(backup.payload.todos).catch(() => undefined);
-    clearNotificationTodoReveal();
-    setDeletedTodos(backup.payload.settings.deletedTodos);
-    const restoredMenuPresets = cloneMenuPresets(backup.payload.settings.menuPresets);
-    const restoredCustomTags = backup.payload.settings.presetLabelTagsSeeded
-      ? normalizeCustomTags(backup.payload.settings.customTags)
-      : addPresetLabelTagsToCustomTags(
-          backup.payload.settings.customTags,
-          restoredMenuPresets,
-        );
-    customTagsRef.current = restoredCustomTags;
-    presetLabelTagsSeededRef.current = true;
-    setCustomTags(restoredCustomTags);
-    setPresetLabelTagsSeeded(true);
-    const restoredSelectedFilters = normalizeTodoFilters(backup.payload.settings.selectedFilters);
-    setSelectedFilters(restoredSelectedFilters);
-    setRequiredFilters(pruneTodoFilters(
-      backup.payload.settings.requiredFilters,
-      restoredSelectedFilters,
-    ));
-    setAvoidedFilters(normalizeTodoFilters(backup.payload.settings.avoidedFilters));
-    setFilterConfigUiState(cloneFilterConfigUiState(backup.payload.settings.filterConfigUiState));
-    setFilterColors(backup.payload.settings.filterColors);
-    setGoogleDriveBackupEnabled(backup.payload.settings.googleDriveBackupEnabled);
-    setGoogleDriveLastBackupAt(backup.payload.settings.googleDriveLastBackupAt);
-    setGoogleDriveLastRestoreAt(restoredAt);
-    setHideDoneTodos(backup.payload.settings.hideDoneTodos);
-    setShowOverdueMetaTags(backup.payload.settings.showOverdueMetaTags);
-    setDateLabelDisplayMode(normalizeDateLabelDisplayMode(
-      backup.payload.settings.dateLabelDisplayMode,
-    ));
-    const restoredListMenuTree = cloneListMenuTree(
-      backup.payload.settings.listMenuTree.length > 0
-        ? backup.payload.settings.listMenuTree
-        : DEFAULT_LIST_MENU_TREE,
-    );
-    const restoredLastCreateTodoFilters = getRememberedCreateDraftFilters(
-      restoredListMenuTree,
-      backup.payload.settings.lastCreateTodoFilters,
-    );
-    setListMenuTree(restoredListMenuTree);
-    setListOrderMode(backup.payload.settings.listOrderMode);
-    setMenuPresets(restoredMenuPresets);
-    setQuickPresetNavIconNames(
-      cloneQuickPresetNavIconNames(backup.payload.settings.quickPresetNavIconNames),
-    );
-    setQuickPresetNavPresetIds(
-      cloneQuickPresetNavPresetIds(backup.payload.settings.quickPresetNavPresetIds),
-    );
-    setTodoGroupMode(backup.payload.settings.todoGroupMode);
-    setCollapsedTodoGroupIds(new Set(backup.payload.settings.collapsedTodoGroupIds));
-    setTodoSortMode(backup.payload.settings.todoSortMode);
-    setMetaTagVisibility(cloneMetaTagVisibility(backup.payload.settings.metaTagVisibility));
-    setLastCreateTodoFilters(restoredLastCreateTodoFilters);
-    setCreateDraftFilters(restoredLastCreateTodoFilters);
-    setCreateDraftPriorityFromPicker(
-      shouldHighlightCreatePriorityPicker(restoredLastCreateTodoFilters),
-    );
-    setGoogleDriveBackupStatus(
-      `Restored ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup ${
-        backup.payload.todos.length
-      } items · ${formatBackupTime(restoredAt)}`,
-    );
-    triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, recordUndo, requestGoogleDriveBackupPickerSelection]);
+    await applyBackupPayload(backup.payload, `${DRIVE_BACKUP_VARIANT_LOWER_LABEL} backup`);
+  }, [applyBackupPayload, requestGoogleDriveBackupPickerSelection]);
 
   const runGoogleDriveAction = useCallback(async (
     action: GoogleDriveAction,
@@ -13902,7 +14003,8 @@ export default function App() {
     [deleteNotificationLogEntry, openNotificationLogEntry],
   );
 
-  const googleDriveNavDisabled = googleDriveBusy || !googleDriveActionReady;
+  const backupActionReady = googleDriveActionReady;
+  const googleDriveNavDisabled = googleDriveBusy || !backupActionReady;
   const googleDriveNavIconColor = googleDriveBusy
     ? NAV_ACCENT
     : googleDriveNavDisabled
@@ -15984,154 +16086,176 @@ export default function App() {
                       {undoHistoryCount} undo · {redoHistoryCount} redo · {UNDO_HISTORY_LIMIT} kept
                     </Text>
                   </View>
-                </View>
-                <View style={styles.settingsCard}>
-                  {undoHistoryCount === 0 && redoHistoryCount === 0 ? (
-                    <Text style={styles.settingsEmptyText}>No recent changes</Text>
-                  ) : null}
-
-                  {undoHistoryCount > 0 ? (
-                    <View style={styles.settingsHistoryGroup}>
-                      <Text style={styles.settingsHistoryGroupLabel}>Undo</Text>
-                      {undoHistoryDisplayEntries.map((historyEntry, index) => {
-                        const visibleDetails = historyEntry.details.slice(
-                          0,
-                          HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
-                        );
-                        const hiddenDetailCount = Math.max(
-                          0,
-                          historyEntry.details.length - visibleDetails.length,
-                        );
-
-                        return (
-                          <Pressable
-                            accessibilityLabel={`Undo ${historyEntry.entry.label}`}
-                            accessibilityRole="button"
-                            key={`undo-${historyEntry.entry.id}`}
-                            onPress={() => applyUndoHistoryEntry(historyEntry.entry)}
-                            style={({ pressed }) => [
-                              styles.settingsHistoryRow,
-                              index > 0 && styles.settingsHistoryRowSeparated,
-                              pressed && styles.settingsHistoryRowPressed,
-                            ]}
-                          >
-                            <View style={styles.settingsHistoryIconWrap}>
-                              <Ionicons color={NAV_ACCENT} name="arrow-undo" size={18} />
-                            </View>
-                            <View style={styles.settingsHistoryTextWrap}>
-                              <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
-                                {historyEntry.entry.label}
-                              </Text>
-                              <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
-                                {index === 0 ? 'Latest change' : `${index + 1} changes back`}
-                              </Text>
-                              <View style={styles.settingsHistoryDetailList}>
-                                {visibleDetails.map((detail, detailIndex) => (
-                                  <View
-                                    key={`${historyEntry.entry.id}-undo-detail-${detailIndex}`}
-                                    style={styles.settingsHistoryDetail}
-                                  >
-                                    <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
-                                      {detail.item}
-                                    </Text>
-                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
-                                      Current: {detail.after}
-                                    </Text>
-                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
-                                      Undo to: {detail.before}
-                                    </Text>
-                                  </View>
-                                ))}
-                                {hiddenDetailCount > 0 ? (
-                                  <Text style={styles.settingsHistoryMoreText}>
-                                    +{hiddenDetailCount} more changes
-                                  </Text>
-                                ) : null}
-                              </View>
-                            </View>
-                            <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ) : null}
-
-                  {redoHistoryCount > 0 ? (
-                    <View
+                  <Pressable
+                    accessibilityLabel={`${settingsHistoryExpanded ? 'Collapse' : 'Expand'} Change history section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsHistoryExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsHistoryExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
                       style={[
-                        styles.settingsHistoryGroup,
-                        undoHistoryCount > 0 && styles.settingsHistoryGroupSpaced,
+                        styles.settingsSectionChevron,
+                        settingsHistoryExpanded && styles.settingsSectionChevronExpanded,
                       ]}
                     >
-                      <Text style={styles.settingsHistoryGroupLabel}>Redo</Text>
-                      {redoHistoryDisplayEntries.map((historyEntry, index) => {
-                        const visibleDetails = historyEntry.details.slice(
-                          0,
-                          HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
-                        );
-                        const hiddenDetailCount = Math.max(
-                          0,
-                          historyEntry.details.length - visibleDetails.length,
-                        );
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+                {settingsHistoryExpanded ? (
+                  <View style={styles.settingsCard}>
+                    {undoHistoryCount === 0 && redoHistoryCount === 0 ? (
+                      <Text style={styles.settingsEmptyText}>No recent changes</Text>
+                    ) : null}
 
-                        return (
-                          <Pressable
-                            accessibilityLabel={`Redo ${historyEntry.entry.label}`}
-                            accessibilityRole="button"
-                            key={`redo-${historyEntry.entry.id}`}
-                            onPress={() => applyRedoHistoryEntry(historyEntry.entry)}
-                            style={({ pressed }) => [
-                              styles.settingsHistoryRow,
-                              index > 0 && styles.settingsHistoryRowSeparated,
-                              pressed && styles.settingsHistoryRowPressed,
-                            ]}
-                          >
-                            <View
-                              style={[
-                                styles.settingsHistoryIconWrap,
-                                styles.settingsHistoryRedoIconWrap,
+                    {undoHistoryCount > 0 ? (
+                      <View style={styles.settingsHistoryGroup}>
+                        <Text style={styles.settingsHistoryGroupLabel}>Undo</Text>
+                        {undoHistoryDisplayEntries.map((historyEntry, index) => {
+                          const visibleDetails = historyEntry.details.slice(
+                            0,
+                            HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
+                          );
+                          const hiddenDetailCount = Math.max(
+                            0,
+                            historyEntry.details.length - visibleDetails.length,
+                          );
+
+                          return (
+                            <Pressable
+                              accessibilityLabel={`Undo ${historyEntry.entry.label}`}
+                              accessibilityRole="button"
+                              key={`undo-${historyEntry.entry.id}`}
+                              onPress={() => applyUndoHistoryEntry(historyEntry.entry)}
+                              style={({ pressed }) => [
+                                styles.settingsHistoryRow,
+                                index > 0 && styles.settingsHistoryRowSeparated,
+                                pressed && styles.settingsHistoryRowPressed,
                               ]}
                             >
-                              <Ionicons color={THEME_ACCENT} name="arrow-redo" size={18} />
-                            </View>
-                            <View style={styles.settingsHistoryTextWrap}>
-                              <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
-                                {historyEntry.entry.label}
-                              </Text>
-                              <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
-                                {index === 0 ? 'Next redo' : `${index + 1} redo steps forward`}
-                              </Text>
-                              <View style={styles.settingsHistoryDetailList}>
-                                {visibleDetails.map((detail, detailIndex) => (
-                                  <View
-                                    key={`${historyEntry.entry.id}-redo-detail-${detailIndex}`}
-                                    style={styles.settingsHistoryDetail}
-                                  >
-                                    <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
-                                      {detail.item}
-                                    </Text>
-                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
-                                      Current: {detail.before}
-                                    </Text>
-                                    <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
-                                      Redo to: {detail.after}
-                                    </Text>
-                                  </View>
-                                ))}
-                                {hiddenDetailCount > 0 ? (
-                                  <Text style={styles.settingsHistoryMoreText}>
-                                    +{hiddenDetailCount} more changes
-                                  </Text>
-                                ) : null}
+                              <View style={styles.settingsHistoryIconWrap}>
+                                <Ionicons color={NAV_ACCENT} name="arrow-undo" size={18} />
                               </View>
-                            </View>
-                            <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ) : null}
-                </View>
+                              <View style={styles.settingsHistoryTextWrap}>
+                                <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
+                                  {historyEntry.entry.label}
+                                </Text>
+                                <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
+                                  {index === 0 ? 'Latest change' : `${index + 1} changes back`}
+                                </Text>
+                                <View style={styles.settingsHistoryDetailList}>
+                                  {visibleDetails.map((detail, detailIndex) => (
+                                    <View
+                                      key={`${historyEntry.entry.id}-undo-detail-${detailIndex}`}
+                                      style={styles.settingsHistoryDetail}
+                                    >
+                                      <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
+                                        {detail.item}
+                                      </Text>
+                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
+                                        Current: {detail.after}
+                                      </Text>
+                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
+                                        Undo to: {detail.before}
+                                      </Text>
+                                    </View>
+                                  ))}
+                                  {hiddenDetailCount > 0 ? (
+                                    <Text style={styles.settingsHistoryMoreText}>
+                                      +{hiddenDetailCount} more changes
+                                    </Text>
+                                  ) : null}
+                                </View>
+                              </View>
+                              <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : null}
+
+                    {redoHistoryCount > 0 ? (
+                      <View
+                        style={[
+                          styles.settingsHistoryGroup,
+                          undoHistoryCount > 0 && styles.settingsHistoryGroupSpaced,
+                        ]}
+                      >
+                        <Text style={styles.settingsHistoryGroupLabel}>Redo</Text>
+                        {redoHistoryDisplayEntries.map((historyEntry, index) => {
+                          const visibleDetails = historyEntry.details.slice(
+                            0,
+                            HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
+                          );
+                          const hiddenDetailCount = Math.max(
+                            0,
+                            historyEntry.details.length - visibleDetails.length,
+                          );
+
+                          return (
+                            <Pressable
+                              accessibilityLabel={`Redo ${historyEntry.entry.label}`}
+                              accessibilityRole="button"
+                              key={`redo-${historyEntry.entry.id}`}
+                              onPress={() => applyRedoHistoryEntry(historyEntry.entry)}
+                              style={({ pressed }) => [
+                                styles.settingsHistoryRow,
+                                index > 0 && styles.settingsHistoryRowSeparated,
+                                pressed && styles.settingsHistoryRowPressed,
+                              ]}
+                            >
+                              <View
+                                style={[
+                                  styles.settingsHistoryIconWrap,
+                                  styles.settingsHistoryRedoIconWrap,
+                                ]}
+                              >
+                                <Ionicons color={THEME_ACCENT} name="arrow-redo" size={18} />
+                              </View>
+                              <View style={styles.settingsHistoryTextWrap}>
+                                <Text numberOfLines={1} style={styles.settingsHistoryTitle}>
+                                  {historyEntry.entry.label}
+                                </Text>
+                                <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
+                                  {index === 0 ? 'Next redo' : `${index + 1} redo steps forward`}
+                                </Text>
+                                <View style={styles.settingsHistoryDetailList}>
+                                  {visibleDetails.map((detail, detailIndex) => (
+                                    <View
+                                      key={`${historyEntry.entry.id}-redo-detail-${detailIndex}`}
+                                      style={styles.settingsHistoryDetail}
+                                    >
+                                      <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
+                                        {detail.item}
+                                      </Text>
+                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
+                                        Current: {detail.before}
+                                      </Text>
+                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
+                                        Redo to: {detail.after}
+                                      </Text>
+                                    </View>
+                                  ))}
+                                  {hiddenDetailCount > 0 ? (
+                                    <Text style={styles.settingsHistoryMoreText}>
+                                      +{hiddenDetailCount} more changes
+                                    </Text>
+                                  ) : null}
+                                </View>
+                              </View>
+                              <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
 
               <View style={styles.settingsSection}>
@@ -16300,26 +16424,28 @@ export default function App() {
 
                     <Pressable
                       accessibilityRole="button"
-                      disabled={googleDriveBusy || !googleDriveActionReady}
+                      disabled={googleDriveBusy || !backupActionReady}
                       onPress={backupToGoogleDrive}
                       style={({ pressed }) => [
                         styles.settingsPrimaryButton,
-                        (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                        (googleDriveBusy || !backupActionReady) && styles.settingsButtonDisabled,
                         pressed && styles.settingsPrimaryButtonPressed,
                       ]}
                     >
                       <Text style={styles.settingsPrimaryButtonText}>
-                        {googleDriveBusy ? 'Working...' : `Backup ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} data`}
+                        {googleDriveBusy
+                          ? 'Working...'
+                          : `Backup ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} data`}
                       </Text>
                     </Pressable>
 
                     <Pressable
                       accessibilityRole="button"
-                      disabled={googleDriveBusy || !googleDriveActionReady}
+                      disabled={googleDriveBusy || !backupActionReady}
                       onPress={restoreFromGoogleDrive}
                       style={({ pressed }) => [
                         styles.settingsRestoreButton,
-                        (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
+                        (googleDriveBusy || !backupActionReady) && styles.settingsButtonDisabled,
                         pressed && styles.settingsSecondaryButtonPressed,
                       ]}
                     >

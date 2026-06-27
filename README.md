@@ -86,7 +86,7 @@ separate OAuth clients in Google Cloud for:
 - iOS prod bundle ID: `com.localtodo.app`
 - Android dev package: `com.localtodo.app.dev`
 - Android prod package: `com.localtodo.app`
-- Web, if you run the web target
+- Web/desktop, if you run the web target or packaged desktop app
 
 Then copy `.env.example` to `.env` and fill:
 
@@ -97,6 +97,11 @@ EXPO_PUBLIC_GOOGLE_ANDROID_DEV_CLIENT_ID=...
 EXPO_PUBLIC_GOOGLE_ANDROID_PROD_CLIENT_ID=...
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...
 ```
+
+For the packaged desktop app, create a Web OAuth client and add this authorized
+JavaScript origin:
+
+- `http://127.0.0.1:17873`
 
 For the local dev APK installed with `make android-dev`, use this Android OAuth
 client setup in Google Cloud:

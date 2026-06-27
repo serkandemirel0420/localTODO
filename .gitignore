@@ -23,6 +23,8 @@ web_modules/
 # Expo / React Native
 .expo/
 dist/
+dist-desktop-check/
+desktop-release/
 
 # TypeScript cache
 *.tsbuildinfo

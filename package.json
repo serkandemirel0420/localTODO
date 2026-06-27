@@ -10,7 +10,37 @@
     "start:lan": "expo start --dev-client --host lan",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "desktop:export": "expo export --platform web --output-dir dist --clear",
+    "desktop:dev": "npm run desktop:export && npm run desktop:prepare-electron && electron desktop/main.cjs",
+    "desktop:prepare-electron": "electron_config_cache=\"$PWD/.cache/electron\" node node_modules/electron/install.js",
+    "desktop:build": "npm run desktop:export && npm run desktop:prepare-electron && ELECTRON_BUILDER_CACHE=\"$PWD/.cache/electron-builder\" electron-builder --mac dir --publish never",
+    "desktop:install": "npm run desktop:build && node desktop/install-macos.cjs",
     "typecheck": "tsc --noEmit"
+  },
+  "build": {
+    "appId": "com.localtodo.desktop",
+    "productName": "Local Todo",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "dist/**/*",
+      "assets/icon.png",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "desktop/main.cjs"
+    },
+    "directories": {
+      "output": "desktop-release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null
+    }
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -27,11 +57,15 @@
     "expo-sqlite": "~16.0.10",
     "expo-web-browser": "~15.0.11",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0"
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-web": "^0.21.0"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "typescript": "~5.9.2"
   }
 }

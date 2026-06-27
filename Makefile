@@ -1,7 +1,7 @@
 PORT ?= 8083
 ANDROID_DEV_PACKAGE ?= com.localtodo.app.dev
 
-.PHONY: install start start-clear start-dev start-dev-tunnel start-dev-usb start-local start-tunnel ios android android-dev android-open-metro android-release android-release-install android-dev-cloud android-preview-cloud web typecheck check audit clean
+.PHONY: install start start-clear start-dev start-dev-tunnel start-dev-usb start-local start-tunnel ios android android-dev android-open-metro android-release android-release-install android-dev-cloud android-preview-cloud web desktop-build desktop-install typecheck check audit clean
 
 install:
 	npm install
@@ -56,6 +56,12 @@ android-preview-cloud:
 
 web:
 	npm run web -- --lan --port $(PORT)
+
+desktop-build:
+	npm run desktop:build
+
+desktop-install:
+	npm run desktop:install
 
 typecheck:
 	npm run typecheck

@@ -57,7 +57,9 @@ const sendFile = (response, filePath) => {
   response.writeHead(200, {
     'Content-Type': mimeTypes.get(extension) || 'application/octet-stream',
     'Cross-Origin-Embedder-Policy': 'require-corp',
-    'Cross-Origin-Opener-Policy': 'same-origin',
+    // Expo AuthSession's web flow completes by posting the Google callback
+    // URL from the popup back to window.opener.
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     'Cross-Origin-Resource-Policy': 'same-origin',
   });
   fs.createReadStream(filePath).pipe(response);

@@ -312,6 +312,10 @@ type UndoHistoryDisplayEntry = {
 };
 
 type UndoHistoryMode = 'redo' | 'undo';
+type UndoHistoryPreviewTarget = {
+  entryId: number;
+  mode: UndoHistoryMode;
+};
 
 const HISTORY_FILTER_KEYS = ['list', 'tag', 'date', 'priority', 'reminder'] as const;
 type HistoryFilterKey = typeof HISTORY_FILTER_KEYS[number];
@@ -406,8 +410,8 @@ const formatHistoryDetailTransition = (
   mode: UndoHistoryMode,
   detail: UndoHistoryChangeDetail,
 ) => {
-  const from = mode === 'undo' ? detail.after : detail.before;
-  const to = mode === 'undo' ? detail.before : detail.after;
+  const from = getHistoryDetailCurrentValue(mode, detail);
+  const to = getHistoryDetailTargetValue(mode, detail);
   const maxLength = isHistoryTodoSettingsDetail(detail.item)
     ? HISTORY_TODO_SETTINGS_VALUE_MAX_LENGTH
     : HISTORY_CHANGE_VALUE_MAX_LENGTH;
@@ -417,6 +421,20 @@ const formatHistoryDetailTransition = (
     maxLength,
   )}`;
 };
+
+const getHistoryDetailCurrentValue = (
+  mode: UndoHistoryMode,
+  detail: UndoHistoryChangeDetail,
+) => (mode === 'undo' ? detail.after : detail.before);
+
+const getHistoryDetailTargetValue = (
+  mode: UndoHistoryMode,
+  detail: UndoHistoryChangeDetail,
+) => (mode === 'undo' ? detail.before : detail.after);
+
+const getHistoryPreviewTargetLabel = (mode: UndoHistoryMode) => (
+  mode === 'undo' ? 'Undo version' : 'Redo version'
+);
 
 const formatHistoryValues = (values: string[], emptyLabel = 'None') => {
   if (values.length === 0) {
@@ -4233,6 +4251,8 @@ export default function App() {
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
   const [settingsHistoryExpanded, setSettingsHistoryExpanded] = useState(false);
+  const [settingsHistoryPreviewTarget, setSettingsHistoryPreviewTarget] =
+    useState<UndoHistoryPreviewTarget | null>(null);
   const [activeDeletedTodoDetailId, setActiveDeletedTodoDetailId] = useState<string | null>(null);
   const [settingsDeletedExpanded, setSettingsDeletedExpanded] = useState(false);
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
@@ -5432,6 +5452,40 @@ export default function App() {
   const redoHistoryDisplayEntries = currentHistorySnapshot
     ? buildUndoHistoryDisplayEntries('redo', redoHistory, currentHistorySnapshot)
     : [];
+  const settingsHistoryPreviewEntry = settingsHistoryPreviewTarget
+    ? (settingsHistoryPreviewTarget.mode === 'undo'
+      ? undoHistoryDisplayEntries
+      : redoHistoryDisplayEntries
+    ).find((historyEntry) => historyEntry.entry.id === settingsHistoryPreviewTarget.entryId) ?? null
+    : null;
+  const settingsHistoryPreviewTargetLabel = settingsHistoryPreviewTarget
+    ? getHistoryPreviewTargetLabel(settingsHistoryPreviewTarget.mode)
+    : 'Undo version';
+  const closeSettingsHistoryPreview = useCallback(() => {
+    setSettingsHistoryPreviewTarget(null);
+  }, []);
+  const applySettingsHistoryPreview = useCallback(() => {
+    if (!settingsHistoryPreviewTarget || !settingsHistoryPreviewEntry) {
+      setSettingsHistoryPreviewTarget(null);
+      return;
+    }
+
+    const { entry } = settingsHistoryPreviewEntry;
+    const { mode } = settingsHistoryPreviewTarget;
+    setSettingsHistoryPreviewTarget(null);
+
+    if (mode === 'undo') {
+      applyUndoHistoryEntry(entry);
+      return;
+    }
+
+    applyRedoHistoryEntry(entry);
+  }, [
+    applyRedoHistoryEntry,
+    applyUndoHistoryEntry,
+    settingsHistoryPreviewEntry,
+    settingsHistoryPreviewTarget,
+  ]);
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -5985,6 +6039,7 @@ export default function App() {
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     void persistAppSettings();
+    setSettingsHistoryPreviewTarget(null);
     setSettingsModalVisible(false);
     setNavTab((current) => (current === 'settings' ? null : current));
     triggerSubtleHaptic();
@@ -12087,6 +12142,7 @@ export default function App() {
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
     setSettingsHistoryExpanded(false);
+    setSettingsHistoryPreviewTarget(null);
     setSettingsListsExpanded(false);
     setSettingsPresetsExpanded(false);
     setSettingsListReorderCancelNonce((current) => current + 1);
@@ -16381,11 +16437,14 @@ export default function App() {
 
                           return (
                             <Pressable
-                              accessibilityLabel={`Undo ${historyEntry.entry.label}`}
-                              accessibilityHint="Restores the state shown in this row"
+                              accessibilityLabel={`Preview undo ${historyEntry.entry.label}`}
+                              accessibilityHint="Shows the current version and undo version before applying"
                               accessibilityRole="button"
                               key={`undo-${historyEntry.entry.id}`}
-                              onPress={() => applyUndoHistoryEntry(historyEntry.entry)}
+                              onPress={() => setSettingsHistoryPreviewTarget({
+                                entryId: historyEntry.entry.id,
+                                mode: 'undo',
+                              })}
                               style={({ pressed }) => [
                                 styles.settingsHistoryRow,
                                 index > 0 && styles.settingsHistoryRowSeparated,
@@ -16427,8 +16486,8 @@ export default function App() {
                                 </View>
                               </View>
                               <View style={styles.settingsHistoryActionPill}>
-                                <Ionicons color="#FFFFFF" name="arrow-undo" size={14} />
-                                <Text style={styles.settingsHistoryActionText}>Undo</Text>
+                                <Ionicons color={NAV_ACCENT} name="eye-outline" size={14} />
+                                <Text style={styles.settingsHistoryActionText}>Preview</Text>
                               </View>
                             </Pressable>
                           );
@@ -16456,11 +16515,14 @@ export default function App() {
 
                           return (
                             <Pressable
-                              accessibilityLabel={`Redo ${historyEntry.entry.label}`}
-                              accessibilityHint="Reapplies the state shown in this row"
+                              accessibilityLabel={`Preview redo ${historyEntry.entry.label}`}
+                              accessibilityHint="Shows the current version and redo version before applying"
                               accessibilityRole="button"
                               key={`redo-${historyEntry.entry.id}`}
-                              onPress={() => applyRedoHistoryEntry(historyEntry.entry)}
+                              onPress={() => setSettingsHistoryPreviewTarget({
+                                entryId: historyEntry.entry.id,
+                                mode: 'redo',
+                              })}
                               style={({ pressed }) => [
                                 styles.settingsHistoryRow,
                                 index > 0 && styles.settingsHistoryRowSeparated,
@@ -16512,8 +16574,8 @@ export default function App() {
                                   styles.settingsHistoryRedoActionPill,
                                 ]}
                               >
-                                <Ionicons color="#FFFFFF" name="arrow-redo" size={14} />
-                                <Text style={styles.settingsHistoryActionText}>Redo</Text>
+                                <Ionicons color={THEME_ACCENT} name="eye-outline" size={14} />
+                                <Text style={styles.settingsHistoryActionText}>Preview</Text>
                               </View>
                             </Pressable>
                           );
@@ -17413,6 +17475,158 @@ export default function App() {
             </View>
           </View>
         ) : null}
+        <Modal
+          animationType="fade"
+          onRequestClose={closeSettingsHistoryPreview}
+          presentationStyle="overFullScreen"
+          transparent
+          visible={settingsHistoryPreviewTarget !== null && settingsHistoryPreviewEntry !== null}
+        >
+          <GestureHandlerRootView style={styles.settingsHistoryPreviewRoot}>
+            <View style={styles.settingsHistoryPreviewBackdrop}>
+              <Pressable
+                accessibilityLabel="Close change preview"
+                accessibilityRole="button"
+                onPress={closeSettingsHistoryPreview}
+                style={StyleSheet.absoluteFill}
+              />
+              <View
+                accessibilityViewIsModal
+                style={styles.settingsHistoryPreviewSheet}
+              >
+                {settingsHistoryPreviewEntry && settingsHistoryPreviewTarget ? (
+                  <>
+                    <View style={styles.settingsHistoryPreviewHeader}>
+                      <View style={styles.settingsHistoryPreviewHeaderText}>
+                        <Text style={styles.settingsHistoryPreviewTitle}>Preview change</Text>
+                        <Text numberOfLines={1} style={styles.settingsHistoryPreviewSubtitle}>
+                          {settingsHistoryPreviewEntry.entry.label} · {settingsHistoryPreviewTargetLabel}
+                        </Text>
+                      </View>
+                      <Pressable
+                        accessibilityLabel="Close change preview"
+                        accessibilityRole="button"
+                        onPress={closeSettingsHistoryPreview}
+                        style={({ pressed }) => [
+                          styles.settingsHistoryPreviewCloseButton,
+                          pressed && styles.settingsOptionRowPressed,
+                        ]}
+                      >
+                        <Ionicons color={THEME_TEXT_SECONDARY} name="close" size={20} />
+                      </Pressable>
+                    </View>
+
+                    <GestureScrollView
+                      contentContainerStyle={styles.settingsHistoryPreviewScrollContent}
+                      showsVerticalScrollIndicator={false}
+                      style={styles.settingsHistoryPreviewScroll}
+                    >
+                      <View style={styles.settingsHistoryPreviewVersions}>
+                        <View style={styles.settingsHistoryPreviewVersionCard}>
+                          <Text style={styles.settingsHistoryPreviewVersionTitle}>
+                            Current version
+                          </Text>
+                          {settingsHistoryPreviewEntry.details.map((detail, detailIndex) => (
+                            <View
+                              key={`${settingsHistoryPreviewEntry.entry.id}-current-${detailIndex}`}
+                              style={styles.settingsHistoryPreviewDetail}
+                            >
+                              <Text
+                                numberOfLines={1}
+                                style={styles.settingsHistoryPreviewDetailItem}
+                              >
+                                {formatHistoryDetailSubject(detail.item)}
+                              </Text>
+                              <Text
+                                numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 6 : 2}
+                                style={styles.settingsHistoryPreviewDetailValue}
+                              >
+                                {getHistoryDetailCurrentValue(
+                                  settingsHistoryPreviewTarget.mode,
+                                  detail,
+                                )}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+
+                        <View
+                          style={[
+                            styles.settingsHistoryPreviewVersionCard,
+                            styles.settingsHistoryPreviewTargetCard,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.settingsHistoryPreviewVersionTitle,
+                              styles.settingsHistoryPreviewTargetTitle,
+                            ]}
+                          >
+                            {settingsHistoryPreviewTargetLabel}
+                          </Text>
+                          {settingsHistoryPreviewEntry.details.map((detail, detailIndex) => (
+                            <View
+                              key={`${settingsHistoryPreviewEntry.entry.id}-target-${detailIndex}`}
+                              style={styles.settingsHistoryPreviewDetail}
+                            >
+                              <Text
+                                numberOfLines={1}
+                                style={styles.settingsHistoryPreviewDetailItem}
+                              >
+                                {formatHistoryDetailSubject(detail.item)}
+                              </Text>
+                              <Text
+                                numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 6 : 2}
+                                style={[
+                                  styles.settingsHistoryPreviewDetailValue,
+                                  styles.settingsHistoryPreviewTargetValue,
+                                ]}
+                              >
+                                {getHistoryDetailTargetValue(
+                                  settingsHistoryPreviewTarget.mode,
+                                  detail,
+                                )}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    </GestureScrollView>
+
+                    <View style={styles.settingsHistoryPreviewActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={closeSettingsHistoryPreview}
+                        style={({ pressed }) => [
+                          styles.settingsHistoryPreviewButton,
+                          styles.settingsHistoryPreviewButtonSecondary,
+                          pressed && styles.presetSaveModalButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsHistoryPreviewButtonSecondaryText}>
+                          Keep current
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={applySettingsHistoryPreview}
+                        style={({ pressed }) => [
+                          styles.settingsHistoryPreviewButton,
+                          styles.settingsHistoryPreviewButtonPrimary,
+                          pressed && styles.presetSaveModalButtonPressed,
+                        ]}
+                      >
+                        <Text style={styles.settingsHistoryPreviewButtonPrimaryText}>
+                          Use {settingsHistoryPreviewTargetLabel.toLowerCase()}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : null}
+              </View>
+            </View>
+          </GestureHandlerRootView>
+        </Modal>
         <Modal
           animationType="fade"
           onRequestClose={closeGoogleDriveBackupPicker}
@@ -18382,7 +18596,7 @@ const styles = StyleSheet.create({
   settingsHistoryGroupLabel: {
     color: THEME_TEXT_SECONDARY,
     fontSize: 12,
-    fontWeight: FONT_SEMIBOLD,
+    fontWeight: FONT_REGULAR,
     lineHeight: 16,
     marginBottom: 4,
     paddingHorizontal: 2,
@@ -18406,15 +18620,18 @@ const styles = StyleSheet.create({
   },
   settingsHistoryIconWrap: {
     alignItems: 'center',
-    backgroundColor: THEME_ACCENT_SOFT,
-    borderRadius: 16,
-    height: 32,
+    backgroundColor: '#F7F8FA',
+    borderColor: '#EBEEF2',
+    borderRadius: 15,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 30,
     justifyContent: 'center',
     marginTop: 2,
-    width: 32,
+    width: 30,
   },
   settingsHistoryRedoIconWrap: {
-    backgroundColor: '#E7F0EB',
+    backgroundColor: '#F6FAF8',
+    borderColor: '#E5EEE9',
   },
   settingsHistoryTextWrap: {
     flex: 1,
@@ -18423,7 +18640,7 @@ const styles = StyleSheet.create({
   settingsHistoryTitle: {
     color: THEME_TEXT,
     fontSize: 15,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_REGULAR,
     lineHeight: 20,
   },
   settingsHistorySubtitle: {
@@ -18442,15 +18659,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   settingsHistoryDetailItem: {
-    color: THEME_TEXT,
+    color: '#504A43',
     fontSize: 13,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_REGULAR,
     lineHeight: 17,
   },
   settingsHistoryDetailTarget: {
-    color: THEME_ACCENT,
+    color: THEME_TEXT_SECONDARY,
     fontSize: 12,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_REGULAR,
     lineHeight: 16,
     marginTop: 1,
   },
@@ -18463,7 +18680,9 @@ const styles = StyleSheet.create({
   },
   settingsHistoryActionPill: {
     alignItems: 'center',
-    backgroundColor: THEME_ACCENT,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DFE5F4',
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 14,
     flexDirection: 'row',
     flexShrink: 0,
@@ -18475,13 +18694,148 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   settingsHistoryRedoActionPill: {
-    backgroundColor: '#3A7255',
+    borderColor: '#DCEAE3',
   },
   settingsHistoryActionText: {
-    color: '#FFFFFF',
+    color: THEME_ACCENT,
     fontSize: 12,
-    fontWeight: FONT_SEMIBOLD,
+    fontWeight: FONT_REGULAR,
     lineHeight: 16,
+  },
+  settingsHistoryPreviewRoot: {
+    flex: 1,
+  },
+  settingsHistoryPreviewBackdrop: {
+    backgroundColor: 'rgba(30, 27, 24, 0.36)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  settingsHistoryPreviewSheet: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E7E0D8',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxHeight: '86%',
+    paddingBottom: 16,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 18,
+  },
+  settingsHistoryPreviewHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  settingsHistoryPreviewHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsHistoryPreviewTitle: {
+    color: THEME_TEXT,
+    fontSize: 18,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 24,
+  },
+  settingsHistoryPreviewSubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  settingsHistoryPreviewCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#F7F5F2',
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  settingsHistoryPreviewScroll: {
+    marginTop: 14,
+  },
+  settingsHistoryPreviewScrollContent: {
+    paddingBottom: 2,
+  },
+  settingsHistoryPreviewVersions: {
+    gap: 12,
+  },
+  settingsHistoryPreviewVersionCard: {
+    backgroundColor: '#FBFAF8',
+    borderColor: '#EEE7DE',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  settingsHistoryPreviewTargetCard: {
+    backgroundColor: '#F8FAFF',
+    borderColor: '#DDE6FF',
+  },
+  settingsHistoryPreviewVersionTitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginBottom: 2,
+  },
+  settingsHistoryPreviewTargetTitle: {
+    color: THEME_ACCENT,
+  },
+  settingsHistoryPreviewDetail: {
+    borderTopColor: '#EFE9E2',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 9,
+    marginTop: 9,
+  },
+  settingsHistoryPreviewDetailItem: {
+    color: '#5D554D',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+  },
+  settingsHistoryPreviewDetailValue: {
+    color: THEME_TEXT,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  settingsHistoryPreviewTargetValue: {
+    color: '#2F4B9B',
+  },
+  settingsHistoryPreviewActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  settingsHistoryPreviewButton: {
+    alignItems: 'center',
+    borderRadius: 14,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingHorizontal: 12,
+  },
+  settingsHistoryPreviewButtonSecondary: {
+    backgroundColor: '#F7F5F2',
+    borderColor: '#E8E2DA',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  settingsHistoryPreviewButtonPrimary: {
+    backgroundColor: THEME_ACCENT,
+  },
+  settingsHistoryPreviewButtonSecondaryText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 19,
+  },
+  settingsHistoryPreviewButtonPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 19,
   },
   settingsDeletedList: {
     borderTopColor: '#F2EBE3',

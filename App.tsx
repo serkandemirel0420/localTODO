@@ -335,6 +335,8 @@ const formatHistoryDetailSubject = (item: string) => {
   return item.replace(' - ', ': ');
 };
 
+const isHistoryTodoSettingsDetail = (item: string) => /^Todo: .+ - Settings$/.test(item);
+
 const formatHistoryStepLabel = (mode: UndoHistoryMode, index: number) => {
   if (mode === 'undo') {
     return index === 0 ? 'Latest change' : `${index + 1} changes back`;
@@ -367,9 +369,10 @@ const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
   todos: true,
 };
 
-const HISTORY_CHANGE_DETAIL_DISPLAY_LIMIT = 2;
+const HISTORY_CHANGE_DETAIL_DISPLAY_LIMIT = 3;
 const HISTORY_VALUE_MAX_LENGTH = 96;
-const HISTORY_CHANGE_VALUE_MAX_LENGTH = 64;
+const HISTORY_CHANGE_VALUE_MAX_LENGTH = 72;
+const HISTORY_TODO_SETTINGS_VALUE_MAX_LENGTH = 280;
 
 const stableStringifyForHistory = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -405,10 +408,13 @@ const formatHistoryDetailTransition = (
 ) => {
   const from = mode === 'undo' ? detail.after : detail.before;
   const to = mode === 'undo' ? detail.before : detail.after;
+  const maxLength = isHistoryTodoSettingsDetail(detail.item)
+    ? HISTORY_TODO_SETTINGS_VALUE_MAX_LENGTH
+    : HISTORY_CHANGE_VALUE_MAX_LENGTH;
 
-  return `${truncateHistoryValue(from, HISTORY_CHANGE_VALUE_MAX_LENGTH)} -> ${truncateHistoryValue(
+  return `${truncateHistoryValue(from, maxLength)} -> ${truncateHistoryValue(
     to,
-    HISTORY_CHANGE_VALUE_MAX_LENGTH,
+    maxLength,
   )}`;
 };
 
@@ -561,6 +567,34 @@ const formatHistoryTodoStatus = (record: HistoryTodoRecord) => {
   return record.todo.done ? 'Done' : 'Active';
 };
 
+const formatHistoryTodoSettings = (record: HistoryTodoRecord) => {
+  if (record.status === 'missing') {
+    return 'Missing';
+  }
+
+  const { todo } = record;
+  const filters = todo.filters;
+  const settings = [
+    `Title: ${formatHistoryTodoTitle(todo)}`,
+    `Status: ${formatHistoryTodoStatus(record)}`,
+    `Pin: ${formatHistoryToggle(todo.pinned, 'Pinned', 'Unpinned')}`,
+    `Notes: ${formatHistoryTodoContent(todo.content)}`,
+    `Tags: ${formatHistoryValues(todo.tags)}`,
+    `Lists: ${formatHistoryValues(filters.list)}`,
+    `Dates: ${formatHistoryValues(filters.date)}`,
+    `Priority: ${formatHistoryValues(filters.priority)}`,
+    `Reminders: ${formatHistoryValues(filters.reminder)}`,
+    `Filter tags: ${formatHistoryValues(filters.tag)}`,
+    `Created: ${formatHistoryTimestamp(todo.createdAt)}`,
+  ];
+
+  if (record.status === 'deleted') {
+    settings.push(`Deleted: ${formatHistoryTimestamp(record.todo.deletedAt)}`);
+  }
+
+  return settings.join(' · ');
+};
+
 const addTodoHistoryDetails = (
   details: UndoHistoryChangeDetail[],
   before: UndoSnapshot,
@@ -580,6 +614,13 @@ const addTodoHistoryDetails = (
     const afterRecord = getHistoryTodoRecord(afterLookup, id);
     const title = formatHistoryTodoTitle(afterRecord.todo ?? beforeRecord.todo);
     const todoItemLabel = `Todo: ${title}`;
+
+    addHistoryDetail(
+      details,
+      `${todoItemLabel} - Settings`,
+      formatHistoryTodoSettings(beforeRecord),
+      formatHistoryTodoSettings(afterRecord),
+    );
 
     if (beforeRecord.status !== afterRecord.status) {
       addHistoryDetail(
@@ -16370,7 +16411,10 @@ export default function App() {
                                       <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
                                         {formatHistoryDetailSubject(detail.item)}
                                       </Text>
-                                      <Text numberOfLines={1} style={styles.settingsHistoryDetailTarget}>
+                                      <Text
+                                        numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 3 : 1}
+                                        style={styles.settingsHistoryDetailTarget}
+                                      >
                                         {formatHistoryDetailTransition('undo', detail)}
                                       </Text>
                                     </View>
@@ -16447,7 +16491,10 @@ export default function App() {
                                       <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
                                         {formatHistoryDetailSubject(detail.item)}
                                       </Text>
-                                      <Text numberOfLines={1} style={styles.settingsHistoryDetailTarget}>
+                                      <Text
+                                        numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 3 : 1}
+                                        style={styles.settingsHistoryDetailTarget}
+                                      >
                                         {formatHistoryDetailTransition('redo', detail)}
                                       </Text>
                                     </View>

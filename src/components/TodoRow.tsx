@@ -1738,9 +1738,7 @@ const styles = StyleSheet.create({
     width: 8,
   },
   textPressable: {
-    alignSelf: 'stretch',
-    flex: 1,
-    flexBasis: 0,
+    alignSelf: 'flex-start',
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,

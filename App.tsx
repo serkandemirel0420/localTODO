@@ -60,6 +60,7 @@ import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { FilterConfigScreen } from './src/components/FilterConfigScreen';
 import { QuickPresetNav } from './src/components/QuickPresetNav';
 import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
+import { TodoMetaTags } from './src/components/TodoMetaTags';
 import { TodoRow } from './src/components/TodoRow';
 
 import {
@@ -69,6 +70,7 @@ import {
   formatDateFilterLabel,
   formatDateFilterValue,
   formatRemainingDaysLabel,
+  getDateFilterSortRank,
   getDateMenuClearValue,
   getDateMenuColorLookupValue,
   getDateMenuItemsForDateLabels,
@@ -238,6 +240,7 @@ import {
 import {
   DATE_MENU_ITEMS,
   DATE_PICKER_MENU_ITEMS,
+  getBestOrderedFilterLabel,
   PRIORITY_MENU_ITEMS,
   TODO_GROUP_LABELS,
   TODO_GROUP_OPTIONS,
@@ -300,10 +303,34 @@ type UndoHistoryEntry = {
   snapshot: UndoSnapshot;
 };
 
+type HistoryTodoRecord = {
+  status: 'active';
+  todo: Todo;
+} | {
+  status: 'deleted';
+  todo: DeletedTodo;
+} | {
+  status: 'missing';
+  todo: null;
+};
+
+type HistoryTodoPreviewVersion = {
+  dateLabelDisplayMode: DateLabelDisplayMode;
+  filterColors: FilterColorSettings;
+  record: HistoryTodoRecord;
+  showOverdueMetaTags: boolean;
+};
+
+type HistoryTodoPreview = {
+  after: HistoryTodoPreviewVersion;
+  before: HistoryTodoPreviewVersion;
+};
+
 type UndoHistoryChangeDetail = {
   after: string;
   before: string;
   item: string;
+  todoPreview?: HistoryTodoPreview;
 };
 
 type UndoHistoryDisplayEntry = {
@@ -377,6 +404,15 @@ const HISTORY_CHANGE_DETAIL_DISPLAY_LIMIT = 3;
 const HISTORY_VALUE_MAX_LENGTH = 96;
 const HISTORY_CHANGE_VALUE_MAX_LENGTH = 72;
 const HISTORY_TODO_SETTINGS_VALUE_MAX_LENGTH = 280;
+const HISTORY_TODO_PREVIEW_CONTENT_MAX_LENGTH = 120;
+const HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY: MetaTagVisibility = {
+  createdAt: true,
+  date: true,
+  list: true,
+  priority: true,
+  tags: true,
+};
+const ZERO_WIDTH_SPACER_PATTERN = /[\u200B\uFEFF]/g;
 
 const stableStringifyForHistory = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -473,6 +509,7 @@ const addHistoryDetail = (
   item: string,
   before: string,
   after: string,
+  todoPreview?: HistoryTodoPreview,
 ) => {
   const normalizedBefore = before || 'None';
   const normalizedAfter = after || 'None';
@@ -485,6 +522,7 @@ const addHistoryDetail = (
     after: normalizedAfter,
     before: normalizedBefore,
     item: truncateHistoryValue(item, 72),
+    ...(todoPreview ? { todoPreview } : {}),
   });
 };
 
@@ -536,17 +574,6 @@ const addFilterHistoryDetails = (
       formatHistoryFilterValue(after, key),
     );
   });
-};
-
-type HistoryTodoRecord = {
-  status: 'active';
-  todo: Todo;
-} | {
-  status: 'deleted';
-  todo: DeletedTodo;
-} | {
-  status: 'missing';
-  todo: null;
 };
 
 const buildHistoryTodoLookup = (snapshot: UndoSnapshot) => ({
@@ -613,6 +640,51 @@ const formatHistoryTodoSettings = (record: HistoryTodoRecord) => {
   return settings.join(' · ');
 };
 
+const buildHistoryTodoPreviewVersion = (
+  snapshot: UndoSnapshot,
+  record: HistoryTodoRecord,
+): HistoryTodoPreviewVersion => ({
+  dateLabelDisplayMode: snapshot.dateLabelDisplayMode,
+  filterColors: snapshot.filterColors,
+  record,
+  showOverdueMetaTags: snapshot.showOverdueMetaTags,
+});
+
+const getHistoryTodoPreviewDetails = (details: UndoHistoryChangeDetail[]) =>
+  details.filter((detail) => detail.todoPreview !== undefined);
+
+const getHistoryTodoPreviewCurrentVersion = (
+  mode: UndoHistoryMode,
+  preview: HistoryTodoPreview,
+) => (mode === 'undo' ? preview.after : preview.before);
+
+const getHistoryTodoPreviewTargetVersion = (
+  mode: UndoHistoryMode,
+  preview: HistoryTodoPreview,
+) => (mode === 'undo' ? preview.before : preview.after);
+
+const getHistoryTodoPreviewDateLabel = (todo: Todo, now: Date): string => {
+  let bestLabel = '';
+  let bestRank = getDateFilterSortRank('', now, todo.createdAt);
+
+  getEffectiveTodoDateLabels(todo, now).forEach((label, index) => {
+    const rank = getDateFilterSortRank(label, now, todo.createdAt);
+
+    if (rank < bestRank || (rank === bestRank && !bestLabel && index === 0)) {
+      bestLabel = label;
+      bestRank = rank;
+    }
+  });
+
+  return bestLabel;
+};
+
+const formatHistoryTodoPreviewContent = (content: string) =>
+  truncateHistoryValue(
+    content.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim().replace(/\s+/g, ' '),
+    HISTORY_TODO_PREVIEW_CONTENT_MAX_LENGTH,
+  );
+
 const addTodoHistoryDetails = (
   details: UndoHistoryChangeDetail[],
   before: UndoSnapshot,
@@ -638,6 +710,10 @@ const addTodoHistoryDetails = (
       `${todoItemLabel} - Settings`,
       formatHistoryTodoSettings(beforeRecord),
       formatHistoryTodoSettings(afterRecord),
+      {
+        after: buildHistoryTodoPreviewVersion(after, afterRecord),
+        before: buildHistoryTodoPreviewVersion(before, beforeRecord),
+      },
     );
 
     if (beforeRecord.status !== afterRecord.status) {
@@ -5461,6 +5537,11 @@ export default function App() {
   const settingsHistoryPreviewTargetLabel = settingsHistoryPreviewTarget
     ? getHistoryPreviewTargetLabel(settingsHistoryPreviewTarget.mode)
     : 'Undo version';
+  const settingsHistoryPreviewTodoDetails = settingsHistoryPreviewEntry
+    ? getHistoryTodoPreviewDetails(settingsHistoryPreviewEntry.details)
+    : [];
+  const settingsHistoryPreviewHasTodoPreview =
+    settingsHistoryPreviewTodoDetails.length > 0;
   const closeSettingsHistoryPreview = useCallback(() => {
     setSettingsHistoryPreviewTarget(null);
   }, []);
@@ -5486,6 +5567,170 @@ export default function App() {
     settingsHistoryPreviewEntry,
     settingsHistoryPreviewTarget,
   ]);
+
+  const renderSettingsHistoryTodoPreviewCard = useCallback((
+    version: HistoryTodoPreviewVersion,
+    versionLabel: string,
+    isTargetVersion: boolean,
+  ) => {
+    const { record } = version;
+
+    if (record.status === 'missing') {
+      return (
+        <View
+          style={[
+            styles.settingsHistoryTodoPreviewCard,
+            isTargetVersion && styles.settingsHistoryTodoPreviewTargetCard,
+            styles.settingsHistoryTodoPreviewMissingCard,
+          ]}
+        >
+          <Text
+            style={[
+              styles.settingsHistoryTodoPreviewVersionLabel,
+              isTargetVersion && styles.settingsHistoryTodoPreviewTargetLabel,
+            ]}
+          >
+            {versionLabel}
+          </Text>
+          <View style={styles.settingsHistoryTodoPreviewMissingBody}>
+            <Ionicons color="#AAA19A" name="remove-circle-outline" size={20} />
+            <Text style={styles.settingsHistoryTodoPreviewMissingText}>
+              Item does not exist in this version
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    const { todo } = record;
+    const displayTitle = todo.text.trim().replace(/\s+/g, ' ') || 'Untitled todo';
+    const contentPreview = formatHistoryTodoPreviewContent(todo.content);
+    const dateLabel = getHistoryTodoPreviewDateLabel(todo, dateStatusNow);
+    const listLabel = todo.filters.list[0] ?? '';
+    const priorityLabel = getBestOrderedFilterLabel(
+      todo.filters.priority,
+      PRIORITY_MENU_ITEMS,
+      '',
+    );
+    const listTheme = listLabel
+      ? getFilterColorTheme(version.filterColors, 'list', listLabel)
+      : null;
+    const priorityRailTheme = priorityLabel && priorityLabel !== 'None'
+      ? getFilterColorTheme(version.filterColors, 'priorityBorder', priorityLabel)
+      : null;
+
+    return (
+      <View
+        style={[
+          styles.settingsHistoryTodoPreviewCard,
+          isTargetVersion && styles.settingsHistoryTodoPreviewTargetCard,
+          record.status === 'deleted' && styles.settingsHistoryTodoPreviewDeletedCard,
+        ]}
+      >
+        <View style={styles.settingsHistoryTodoPreviewTopRow}>
+          <Text
+            style={[
+              styles.settingsHistoryTodoPreviewVersionLabel,
+              isTargetVersion && styles.settingsHistoryTodoPreviewTargetLabel,
+            ]}
+          >
+            {versionLabel}
+          </Text>
+          <View
+            style={[
+              styles.settingsHistoryTodoPreviewStatusPill,
+              todo.done && styles.settingsHistoryTodoPreviewStatusPillDone,
+              record.status === 'deleted' && styles.settingsHistoryTodoPreviewStatusPillDeleted,
+            ]}
+          >
+            <Text
+              style={[
+                styles.settingsHistoryTodoPreviewStatusText,
+                todo.done && styles.settingsHistoryTodoPreviewStatusTextDone,
+                record.status === 'deleted' && styles.settingsHistoryTodoPreviewStatusTextDeleted,
+              ]}
+            >
+              {formatHistoryTodoStatus(record)}
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.settingsHistoryTodoPreviewItem,
+            listTheme && {
+              backgroundColor: listTheme.tint,
+              borderColor: listTheme.border,
+            },
+          ]}
+        >
+          {priorityRailTheme ? (
+            <View
+              style={[
+                styles.settingsHistoryTodoPreviewPriorityRail,
+                { backgroundColor: priorityRailTheme.accent },
+              ]}
+            />
+          ) : null}
+          <View
+            style={[
+              styles.settingsHistoryTodoPreviewCheckbox,
+              todo.done && styles.settingsHistoryTodoPreviewCheckboxChecked,
+            ]}
+          >
+            {todo.done ? <Ionicons color="#FFFFFF" name="checkmark" size={13} /> : null}
+          </View>
+          <View style={styles.settingsHistoryTodoPreviewTextColumn}>
+            <Text
+              numberOfLines={2}
+              style={[
+                styles.settingsHistoryTodoPreviewTitle,
+                todo.done && styles.settingsHistoryTodoPreviewTitleDone,
+              ]}
+            >
+              {displayTitle}
+            </Text>
+            {contentPreview ? (
+              <Text
+                numberOfLines={2}
+                style={[
+                  styles.settingsHistoryTodoPreviewContent,
+                  todo.done && styles.settingsHistoryTodoPreviewContentDone,
+                ]}
+              >
+                {contentPreview}
+              </Text>
+            ) : null}
+            <TodoMetaTags
+              createdAt={todo.createdAt}
+              dateLabel={dateLabel || undefined}
+              dateLabelAnchor={todo.createdAt}
+              dateLabelDisplayMode={version.dateLabelDisplayMode}
+              dateStatusKey={dateStatusKey}
+              done={todo.done}
+              filterColors={version.filterColors}
+              listLabel={listLabel || undefined}
+              pinned={todo.pinned}
+              priorityLabel={
+                priorityLabel && priorityLabel !== 'None'
+                  ? priorityLabel
+                  : undefined
+              }
+              reminderValues={todo.filters.reminder}
+              showOverdueMetaTags={version.showOverdueMetaTags}
+              tagLabels={todo.tags}
+              visibility={HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY}
+            />
+            {record.status === 'deleted' ? (
+              <Text style={styles.settingsHistoryTodoPreviewDeletedText}>
+                Deleted {formatHistoryTimestamp(record.todo.deletedAt)}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      </View>
+    );
+  }, [dateStatusKey, dateStatusNow]);
 
   const scheduleRepeatingTodoRollForward = useCallback((id: string) => {
     clearRepeatingTodoCompletionFeedback(id);
@@ -17522,74 +17767,112 @@ export default function App() {
                       style={styles.settingsHistoryPreviewScroll}
                     >
                       <View style={styles.settingsHistoryPreviewVersions}>
-                        <View style={styles.settingsHistoryPreviewVersionCard}>
-                          <Text style={styles.settingsHistoryPreviewVersionTitle}>
-                            Current version
-                          </Text>
-                          {settingsHistoryPreviewEntry.details.map((detail, detailIndex) => (
-                            <View
-                              key={`${settingsHistoryPreviewEntry.entry.id}-current-${detailIndex}`}
-                              style={styles.settingsHistoryPreviewDetail}
-                            >
-                              <Text
-                                numberOfLines={1}
-                                style={styles.settingsHistoryPreviewDetailItem}
-                              >
-                                {formatHistoryDetailSubject(detail.item)}
-                              </Text>
-                              <Text
-                                numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 6 : 2}
-                                style={styles.settingsHistoryPreviewDetailValue}
-                              >
-                                {getHistoryDetailCurrentValue(
-                                  settingsHistoryPreviewTarget.mode,
-                                  detail,
-                                )}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
+                        {settingsHistoryPreviewHasTodoPreview ? (
+                          <>
+                            {settingsHistoryPreviewTodoDetails.map((detail, detailIndex) => {
+                              const preview = detail.todoPreview;
 
-                        <View
-                          style={[
-                            styles.settingsHistoryPreviewVersionCard,
-                            styles.settingsHistoryPreviewTargetCard,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.settingsHistoryPreviewVersionTitle,
-                              styles.settingsHistoryPreviewTargetTitle,
-                            ]}
-                          >
-                            {settingsHistoryPreviewTargetLabel}
-                          </Text>
-                          {settingsHistoryPreviewEntry.details.map((detail, detailIndex) => (
+                              if (!preview) {
+                                return null;
+                              }
+
+                              return (
+                                <View
+                                  key={`${settingsHistoryPreviewEntry.entry.id}-todo-preview-${detailIndex}`}
+                                  style={styles.settingsHistoryTodoPreviewPair}
+                                >
+                                  {renderSettingsHistoryTodoPreviewCard(
+                                    getHistoryTodoPreviewCurrentVersion(
+                                      settingsHistoryPreviewTarget.mode,
+                                      preview,
+                                    ),
+                                    'Current item',
+                                    false,
+                                  )}
+                                  {renderSettingsHistoryTodoPreviewCard(
+                                    getHistoryTodoPreviewTargetVersion(
+                                      settingsHistoryPreviewTarget.mode,
+                                      preview,
+                                    ),
+                                    settingsHistoryPreviewTargetLabel,
+                                    true,
+                                  )}
+                                </View>
+                              );
+                            })}
+                          </>
+                        ) : (
+                          <>
+                            <View style={styles.settingsHistoryPreviewVersionCard}>
+                              <Text style={styles.settingsHistoryPreviewVersionTitle}>
+                                Current version
+                              </Text>
+                              {settingsHistoryPreviewEntry.details.map((detail, detailIndex) => (
+                                <View
+                                  key={`${settingsHistoryPreviewEntry.entry.id}-current-${detailIndex}`}
+                                  style={styles.settingsHistoryPreviewDetail}
+                                >
+                                  <Text
+                                    numberOfLines={1}
+                                    style={styles.settingsHistoryPreviewDetailItem}
+                                  >
+                                    {formatHistoryDetailSubject(detail.item)}
+                                  </Text>
+                                  <Text
+                                    numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 6 : 2}
+                                    style={styles.settingsHistoryPreviewDetailValue}
+                                  >
+                                    {getHistoryDetailCurrentValue(
+                                      settingsHistoryPreviewTarget.mode,
+                                      detail,
+                                    )}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+
                             <View
-                              key={`${settingsHistoryPreviewEntry.entry.id}-target-${detailIndex}`}
-                              style={styles.settingsHistoryPreviewDetail}
+                              style={[
+                                styles.settingsHistoryPreviewVersionCard,
+                                styles.settingsHistoryPreviewTargetCard,
+                              ]}
                             >
                               <Text
-                                numberOfLines={1}
-                                style={styles.settingsHistoryPreviewDetailItem}
-                              >
-                                {formatHistoryDetailSubject(detail.item)}
-                              </Text>
-                              <Text
-                                numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 6 : 2}
                                 style={[
-                                  styles.settingsHistoryPreviewDetailValue,
-                                  styles.settingsHistoryPreviewTargetValue,
+                                  styles.settingsHistoryPreviewVersionTitle,
+                                  styles.settingsHistoryPreviewTargetTitle,
                                 ]}
                               >
-                                {getHistoryDetailTargetValue(
-                                  settingsHistoryPreviewTarget.mode,
-                                  detail,
-                                )}
+                                {settingsHistoryPreviewTargetLabel}
                               </Text>
+                              {settingsHistoryPreviewEntry.details.map((detail, detailIndex) => (
+                                <View
+                                  key={`${settingsHistoryPreviewEntry.entry.id}-target-${detailIndex}`}
+                                  style={styles.settingsHistoryPreviewDetail}
+                                >
+                                  <Text
+                                    numberOfLines={1}
+                                    style={styles.settingsHistoryPreviewDetailItem}
+                                  >
+                                    {formatHistoryDetailSubject(detail.item)}
+                                  </Text>
+                                  <Text
+                                    numberOfLines={isHistoryTodoSettingsDetail(detail.item) ? 6 : 2}
+                                    style={[
+                                      styles.settingsHistoryPreviewDetailValue,
+                                      styles.settingsHistoryPreviewTargetValue,
+                                    ]}
+                                  >
+                                    {getHistoryDetailTargetValue(
+                                      settingsHistoryPreviewTarget.mode,
+                                      detail,
+                                    )}
+                                  </Text>
+                                </View>
+                              ))}
                             </View>
-                          ))}
-                        </View>
+                          </>
+                        )}
                       </View>
                     </GestureScrollView>
 
@@ -18803,6 +19086,157 @@ const styles = StyleSheet.create({
   },
   settingsHistoryPreviewTargetValue: {
     color: '#2F4B9B',
+  },
+  settingsHistoryTodoPreviewPair: {
+    gap: 9,
+  },
+  settingsHistoryTodoPreviewCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E9E2DA',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 11,
+    paddingVertical: 11,
+  },
+  settingsHistoryTodoPreviewTargetCard: {
+    backgroundColor: '#F8FAFF',
+    borderColor: '#D8E4FF',
+  },
+  settingsHistoryTodoPreviewDeletedCard: {
+    backgroundColor: '#FAFAF9',
+    borderColor: '#E4DDD5',
+  },
+  settingsHistoryTodoPreviewMissingCard: {
+    backgroundColor: '#FBFAF8',
+  },
+  settingsHistoryTodoPreviewTopRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 9,
+  },
+  settingsHistoryTodoPreviewVersionLabel: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+  },
+  settingsHistoryTodoPreviewTargetLabel: {
+    color: THEME_ACCENT,
+  },
+  settingsHistoryTodoPreviewStatusPill: {
+    backgroundColor: '#F4F6F9',
+    borderColor: '#E3E7EE',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  settingsHistoryTodoPreviewStatusPillDone: {
+    backgroundColor: '#ECF9F1',
+    borderColor: '#BFE6CD',
+  },
+  settingsHistoryTodoPreviewStatusPillDeleted: {
+    backgroundColor: '#FFF0EE',
+    borderColor: '#F0C8C3',
+  },
+  settingsHistoryTodoPreviewStatusText: {
+    color: '#626A73',
+    fontSize: 11,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 14,
+  },
+  settingsHistoryTodoPreviewStatusTextDone: {
+    color: '#237A43',
+  },
+  settingsHistoryTodoPreviewStatusTextDeleted: {
+    color: '#CF413A',
+  },
+  settingsHistoryTodoPreviewItem: {
+    alignItems: 'flex-start',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    minHeight: 62,
+    overflow: 'hidden',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    position: 'relative',
+  },
+  settingsHistoryTodoPreviewPriorityRail: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+    width: 4,
+  },
+  settingsHistoryTodoPreviewCheckbox: {
+    alignItems: 'center',
+    borderColor: '#C9D0DA',
+    borderRadius: 11,
+    borderWidth: 1.4,
+    height: 22,
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 1,
+    width: 22,
+  },
+  settingsHistoryTodoPreviewCheckboxChecked: {
+    backgroundColor: THEME_ACCENT,
+    borderColor: THEME_ACCENT,
+  },
+  settingsHistoryTodoPreviewTextColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  settingsHistoryTodoPreviewTitle: {
+    color: THEME_TEXT,
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+  },
+  settingsHistoryTodoPreviewTitleDone: {
+    color: '#868B92',
+    textDecorationLine: 'line-through',
+  },
+  settingsHistoryTodoPreviewContent: {
+    color: '#6F7782',
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  settingsHistoryTodoPreviewContentDone: {
+    color: '#9BA1AA',
+  },
+  settingsHistoryTodoPreviewDeletedText: {
+    color: '#B25C55',
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 7,
+  },
+  settingsHistoryTodoPreviewMissingBody: {
+    alignItems: 'center',
+    borderColor: '#E9E2DA',
+    borderRadius: 12,
+    borderStyle: 'dashed',
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 58,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  settingsHistoryTodoPreviewMissingText: {
+    color: '#7B736B',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 18,
   },
   settingsHistoryPreviewActions: {
     flexDirection: 'row',

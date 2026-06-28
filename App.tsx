@@ -324,6 +324,25 @@ const HISTORY_FILTER_LABELS: Record<HistoryFilterKey, string> = {
   tag: 'Tags',
 };
 
+const formatHistoryDetailSubject = (item: string) => {
+  const todoMatch = item.match(/^Todo: (.+?)(?: - (.+))?$/);
+
+  if (todoMatch) {
+    const [, title, field] = todoMatch;
+    return field ? `${field} - ${title}` : `Todo - ${title}`;
+  }
+
+  return item.replace(' - ', ': ');
+};
+
+const formatHistoryStepLabel = (mode: UndoHistoryMode, index: number) => {
+  if (mode === 'undo') {
+    return index === 0 ? 'Latest change' : `${index + 1} changes back`;
+  }
+
+  return index === 0 ? 'Next redo' : `${index + 1} redo steps forward`;
+};
+
 const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
   avoidedFilters: true,
   customTags: true,
@@ -348,8 +367,9 @@ const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
   todos: true,
 };
 
-const HISTORY_TODO_DETAIL_DISPLAY_LIMIT = 3;
+const HISTORY_CHANGE_DETAIL_DISPLAY_LIMIT = 2;
 const HISTORY_VALUE_MAX_LENGTH = 96;
+const HISTORY_CHANGE_VALUE_MAX_LENGTH = 64;
 
 const stableStringifyForHistory = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -377,6 +397,19 @@ const truncateHistoryValue = (value: string, maxLength = HISTORY_VALUE_MAX_LENGT
   }
 
   return `${trimmedValue.slice(0, maxLength - 1).trimEnd()}...`;
+};
+
+const formatHistoryDetailTransition = (
+  mode: UndoHistoryMode,
+  detail: UndoHistoryChangeDetail,
+) => {
+  const from = mode === 'undo' ? detail.after : detail.before;
+  const to = mode === 'undo' ? detail.before : detail.after;
+
+  return `${truncateHistoryValue(from, HISTORY_CHANGE_VALUE_MAX_LENGTH)} -> ${truncateHistoryValue(
+    to,
+    HISTORY_CHANGE_VALUE_MAX_LENGTH,
+  )}`;
 };
 
 const formatHistoryValues = (values: string[], emptyLabel = 'None') => {
@@ -16262,7 +16295,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Change history</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {undoHistoryCount} undo · {redoHistoryCount} redo · {UNDO_HISTORY_LIMIT} kept
+                      {undoHistoryCount} to undo · {redoHistoryCount} to redo
                     </Text>
                   </View>
                   <Pressable
@@ -16294,11 +16327,11 @@ export default function App() {
 
                     {undoHistoryCount > 0 ? (
                       <View style={styles.settingsHistoryGroup}>
-                        <Text style={styles.settingsHistoryGroupLabel}>Undo</Text>
+                        <Text style={styles.settingsHistoryGroupLabel}>Can undo</Text>
                         {undoHistoryDisplayEntries.map((historyEntry, index) => {
                           const visibleDetails = historyEntry.details.slice(
                             0,
-                            HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
+                            HISTORY_CHANGE_DETAIL_DISPLAY_LIMIT,
                           );
                           const hiddenDetailCount = Math.max(
                             0,
@@ -16308,6 +16341,7 @@ export default function App() {
                           return (
                             <Pressable
                               accessibilityLabel={`Undo ${historyEntry.entry.label}`}
+                              accessibilityHint="Restores the state shown in this row"
                               accessibilityRole="button"
                               key={`undo-${historyEntry.entry.id}`}
                               onPress={() => applyUndoHistoryEntry(historyEntry.entry)}
@@ -16325,22 +16359,19 @@ export default function App() {
                                   {historyEntry.entry.label}
                                 </Text>
                                 <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
-                                  {index === 0 ? 'Latest change' : `${index + 1} changes back`}
+                                  {formatHistoryStepLabel('undo', index)}
                                 </Text>
                                 <View style={styles.settingsHistoryDetailList}>
                                   {visibleDetails.map((detail, detailIndex) => (
                                     <View
                                       key={`${historyEntry.entry.id}-undo-detail-${detailIndex}`}
-                                      style={styles.settingsHistoryDetail}
+                                      style={styles.settingsHistoryDetailRow}
                                     >
                                       <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
-                                        {detail.item}
+                                        {formatHistoryDetailSubject(detail.item)}
                                       </Text>
-                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
-                                        Current: {detail.after}
-                                      </Text>
-                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
-                                        Undo to: {detail.before}
+                                      <Text numberOfLines={1} style={styles.settingsHistoryDetailTarget}>
+                                        {formatHistoryDetailTransition('undo', detail)}
                                       </Text>
                                     </View>
                                   ))}
@@ -16351,7 +16382,10 @@ export default function App() {
                                   ) : null}
                                 </View>
                               </View>
-                              <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                              <View style={styles.settingsHistoryActionPill}>
+                                <Ionicons color="#FFFFFF" name="arrow-undo" size={14} />
+                                <Text style={styles.settingsHistoryActionText}>Undo</Text>
+                              </View>
                             </Pressable>
                           );
                         })}
@@ -16365,11 +16399,11 @@ export default function App() {
                           undoHistoryCount > 0 && styles.settingsHistoryGroupSpaced,
                         ]}
                       >
-                        <Text style={styles.settingsHistoryGroupLabel}>Redo</Text>
+                        <Text style={styles.settingsHistoryGroupLabel}>Can redo</Text>
                         {redoHistoryDisplayEntries.map((historyEntry, index) => {
                           const visibleDetails = historyEntry.details.slice(
                             0,
-                            HISTORY_TODO_DETAIL_DISPLAY_LIMIT,
+                            HISTORY_CHANGE_DETAIL_DISPLAY_LIMIT,
                           );
                           const hiddenDetailCount = Math.max(
                             0,
@@ -16379,6 +16413,7 @@ export default function App() {
                           return (
                             <Pressable
                               accessibilityLabel={`Redo ${historyEntry.entry.label}`}
+                              accessibilityHint="Reapplies the state shown in this row"
                               accessibilityRole="button"
                               key={`redo-${historyEntry.entry.id}`}
                               onPress={() => applyRedoHistoryEntry(historyEntry.entry)}
@@ -16401,22 +16436,19 @@ export default function App() {
                                   {historyEntry.entry.label}
                                 </Text>
                                 <Text numberOfLines={1} style={styles.settingsHistorySubtitle}>
-                                  {index === 0 ? 'Next redo' : `${index + 1} redo steps forward`}
+                                  {formatHistoryStepLabel('redo', index)}
                                 </Text>
                                 <View style={styles.settingsHistoryDetailList}>
                                   {visibleDetails.map((detail, detailIndex) => (
                                     <View
                                       key={`${historyEntry.entry.id}-redo-detail-${detailIndex}`}
-                                      style={styles.settingsHistoryDetail}
+                                      style={styles.settingsHistoryDetailRow}
                                     >
                                       <Text numberOfLines={1} style={styles.settingsHistoryDetailItem}>
-                                        {detail.item}
+                                        {formatHistoryDetailSubject(detail.item)}
                                       </Text>
-                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailValue}>
-                                        Current: {detail.before}
-                                      </Text>
-                                      <Text numberOfLines={2} style={styles.settingsHistoryDetailTarget}>
-                                        Redo to: {detail.after}
+                                      <Text numberOfLines={1} style={styles.settingsHistoryDetailTarget}>
+                                        {formatHistoryDetailTransition('redo', detail)}
                                       </Text>
                                     </View>
                                   ))}
@@ -16427,7 +16459,15 @@ export default function App() {
                                   ) : null}
                                 </View>
                               </View>
-                              <Ionicons color={THEME_TEXT_TERTIARY} name="chevron-forward" size={18} />
+                              <View
+                                style={[
+                                  styles.settingsHistoryActionPill,
+                                  styles.settingsHistoryRedoActionPill,
+                                ]}
+                              >
+                                <Ionicons color="#FFFFFF" name="arrow-redo" size={14} />
+                                <Text style={styles.settingsHistoryActionText}>Redo</Text>
+                              </View>
                             </Pressable>
                           );
                         })}
@@ -18347,29 +18387,18 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   settingsHistoryDetailList: {
-    gap: 6,
+    gap: 5,
     marginTop: 8,
   },
-  settingsHistoryDetail: {
-    backgroundColor: '#FAF7F2',
-    borderColor: '#EFE6DD',
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
+  settingsHistoryDetailRow: {
+    minHeight: 35,
+    justifyContent: 'center',
   },
   settingsHistoryDetailItem: {
     color: THEME_TEXT,
     fontSize: 13,
     fontWeight: FONT_MEDIUM,
     lineHeight: 17,
-  },
-  settingsHistoryDetailValue: {
-    color: THEME_TEXT_SECONDARY,
-    fontSize: 12,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 16,
-    marginTop: 3,
   },
   settingsHistoryDetailTarget: {
     color: THEME_ACCENT,
@@ -18384,6 +18413,28 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     lineHeight: 16,
     paddingHorizontal: 2,
+  },
+  settingsHistoryActionPill: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT,
+    borderRadius: 14,
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 4,
+    justifyContent: 'center',
+    marginTop: 1,
+    minWidth: 66,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  settingsHistoryRedoActionPill: {
+    backgroundColor: '#3A7255',
+  },
+  settingsHistoryActionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 16,
   },
   settingsDeletedList: {
     borderTopColor: '#F2EBE3',

@@ -1337,7 +1337,8 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
-const UNDO_HISTORY_LIMIT = 10;
+const UNDO_HISTORY_LIMIT = 50;
+const HEADER_UNDO_VISIBLE_MS = 10000;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
@@ -4124,6 +4125,7 @@ export default function App() {
   const [undoHistory, setUndoHistory] = useState<UndoHistoryEntry[]>([]);
   const [redoHistory, setRedoHistory] = useState<UndoHistoryEntry[]>([]);
   const [undoToastEntryId, setUndoToastEntryId] = useState<number | null>(null);
+  const [headerUndoEntryId, setHeaderUndoEntryId] = useState<number | null>(null);
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
@@ -4310,6 +4312,7 @@ export default function App() {
   const filterConfigUndoPendingRef = useRef(false);
   const filterConfigUndoLabelRef = useRef('Change filters');
   const undoHistorySequenceRef = useRef(0);
+  const headerUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todoAlarmResumeSyncAtRef = useRef(0);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -4426,6 +4429,9 @@ export default function App() {
   const undoToastEntry = undoToastEntryId === null
     ? null
     : undoHistory.find((entry) => entry.id === undoToastEntryId) ?? undoHistory[0] ?? null;
+  const headerUndoEntry = headerUndoEntryId === null
+    ? null
+    : undoHistory.find((entry) => entry.id === headerUndoEntryId) ?? null;
   const getInstantPressHandlers = useInstantPress();
 
   const clearNotificationTodoReveal = useCallback(() => {
@@ -5000,6 +5006,34 @@ export default function App() {
     setUndoToastEntryId(null);
   }, []);
 
+  const clearHeaderUndoButton = useCallback(() => {
+    if (headerUndoTimerRef.current) {
+      clearTimeout(headerUndoTimerRef.current);
+      headerUndoTimerRef.current = null;
+    }
+
+    setHeaderUndoEntryId(null);
+  }, []);
+
+  const showHeaderUndoButton = useCallback((entryId: number) => {
+    if (headerUndoTimerRef.current) {
+      clearTimeout(headerUndoTimerRef.current);
+    }
+
+    setHeaderUndoEntryId(entryId);
+    headerUndoTimerRef.current = setTimeout(() => {
+      headerUndoTimerRef.current = null;
+      setHeaderUndoEntryId((current) => (current === entryId ? null : current));
+    }, HEADER_UNDO_VISIBLE_MS);
+  }, []);
+
+  useEffect(() => () => {
+    if (headerUndoTimerRef.current) {
+      clearTimeout(headerUndoTimerRef.current);
+      headerUndoTimerRef.current = null;
+    }
+  }, []);
+
   const createUndoHistoryEntry = useCallback((
     label: string,
     snapshot: UndoSnapshot,
@@ -5028,7 +5062,13 @@ export default function App() {
     } else {
       setUndoToastEntryId(null);
     }
-  }, [createUndoHistoryEntry]);
+
+    if (options.showToast === false) {
+      clearHeaderUndoButton();
+    } else {
+      showHeaderUndoButton(entry.id);
+    }
+  }, [clearHeaderUndoButton, createUndoHistoryEntry, showHeaderUndoButton]);
 
   const recordUndo = useCallback((label: string, options: { showToast?: boolean } = {}) => {
     recordUndoSnapshot(label, captureUndoSnapshot(), options);
@@ -5235,6 +5275,7 @@ export default function App() {
 
     if (entryIndex === -1) {
       clearUndoToast();
+      clearHeaderUndoButton();
       return;
     }
 
@@ -5253,9 +5294,11 @@ export default function App() {
     setUndoHistory((current) => current.slice(entryIndex + 1));
     setRedoHistory((current) => [...redoEntries, ...current].slice(0, UNDO_HISTORY_LIMIT));
     clearUndoToast();
+    clearHeaderUndoButton();
     triggerSubtleHaptic();
   }, [
     captureUndoSnapshot,
+    clearHeaderUndoButton,
     clearUndoToast,
     createUndoHistoryEntry,
     restoreUndoSnapshot,
@@ -5266,6 +5309,7 @@ export default function App() {
     const entryIndex = redoHistory.findIndex((item) => item.id === entry.id);
 
     if (entryIndex === -1) {
+      clearHeaderUndoButton();
       return;
     }
 
@@ -5284,9 +5328,11 @@ export default function App() {
     setRedoHistory((current) => current.slice(entryIndex + 1));
     setUndoHistory((current) => [...undoEntries, ...current].slice(0, UNDO_HISTORY_LIMIT));
     clearUndoToast();
+    clearHeaderUndoButton();
     triggerSubtleHaptic();
   }, [
     captureUndoSnapshot,
+    clearHeaderUndoButton,
     clearUndoToast,
     createUndoHistoryEntry,
     redoHistory,
@@ -5298,11 +5344,12 @@ export default function App() {
 
     if (!entry) {
       clearUndoToast();
+      clearHeaderUndoButton();
       return;
     }
 
     applyUndoHistoryEntry(entry);
-  }, [applyUndoHistoryEntry, clearUndoToast, undoHistory]);
+  }, [applyUndoHistoryEntry, clearHeaderUndoButton, clearUndoToast, undoHistory]);
 
   const currentHistorySnapshot = settingsModalVisible ? captureUndoSnapshot() : null;
   const undoHistoryDisplayEntries = currentHistorySnapshot
@@ -14194,6 +14241,24 @@ export default function App() {
                 </View>
               ) : null}
               <View style={styles.appHeaderActions}>
+                {headerUndoEntry ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityHint="Reverses the latest recorded change"
+                    accessibilityLabel={`Undo ${headerUndoEntry.label}`}
+                    onPress={() => applyUndoHistoryEntry(headerUndoEntry)}
+                    style={({ pressed }) => [
+                      styles.appHeaderActionButton,
+                      styles.appHeaderUndoButtonActive,
+                      pressed && styles.appHeaderSideButtonPressed,
+                    ]}
+                  >
+                    <Ionicons color={NAV_ACCENT} name="arrow-undo" size={22} />
+                    {undoHistoryCount > 1 ? (
+                      <Text style={styles.appHeaderUndoCountBadge}>{undoHistoryCount}</Text>
+                    ) : null}
+                  </Pressable>
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityHint="Opens settings"
@@ -19277,6 +19342,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     position: 'relative',
     width: 36,
+  },
+  appHeaderUndoButtonActive: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  appHeaderUndoCountBadge: {
+    backgroundColor: NAV_ACCENT,
+    borderColor: THEME_CARD,
+    borderRadius: 9,
+    borderWidth: 1,
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 14,
+    minWidth: 17,
+    overflow: 'hidden',
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -3,
+    textAlign: 'center',
+    top: -3,
   },
   appHeaderCreateFromSettingsCue: {
     alignItems: 'center',

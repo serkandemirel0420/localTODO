@@ -17,6 +17,7 @@ import {
   type RepeatPreset,
 } from './reminders';
 import { type NotificationLogEntry } from './storage/notificationLogStore';
+import { addRepeatInterval } from './todoRecurrence';
 import { type Todo } from './todos';
 
 const TODO_ALARM_CHANNEL_ID = 'todo-alarms';
@@ -307,8 +308,29 @@ const resolveTodoAlarmDate = (
   now = new Date(),
   anchor?: number,
 ): Date | null => {
-  const label = dateLabels[0]?.trim();
-  return label ? resolveDateFilterValueDate(label, now, anchor) : null;
+  for (const rawLabel of dateLabels) {
+    const label = rawLabel.trim();
+    if (!label) {
+      continue;
+    }
+
+    const date = resolveDateFilterValueDate(label, now, anchor);
+    if (date) {
+      return date;
+    }
+  }
+
+  return null;
+};
+
+const hasTodoAlarmDateLabel = (dateLabels: string[]) =>
+  dateLabels.some((label) => label.trim().length > 0);
+
+const getTimedAlarmDate = (date: Date, time: ReminderTime) => {
+  const alarmDate = new Date(date);
+  alarmDate.setHours(time.hours, time.minutes, 0, 0);
+
+  return alarmDate;
 };
 
 const getOneTimeAlarmDate = (
@@ -316,8 +338,7 @@ const getOneTimeAlarmDate = (
   explicitDate: Date | null,
   now = new Date(),
 ) => {
-  const scheduledDate = new Date(explicitDate ?? now);
-  scheduledDate.setHours(time.hours, time.minutes, 0, 0);
+  const scheduledDate = getTimedAlarmDate(explicitDate ?? now, time);
 
   if (!explicitDate && scheduledDate.getTime() <= now.getTime()) {
     scheduledDate.setDate(scheduledDate.getDate() + 1);
@@ -326,6 +347,26 @@ const getOneTimeAlarmDate = (
   return scheduledDate.getTime() - now.getTime() >= MINIMUM_ONE_TIME_DELAY_MS
     ? scheduledDate
     : null;
+};
+
+const getRepeatingAlarmDate = (
+  time: ReminderTime,
+  repeat: Exclude<RepeatPreset, 'none'>,
+  explicitDate: Date,
+  now = new Date(),
+) => {
+  const minimumAlarmTime = now.getTime() + MINIMUM_ONE_TIME_DELAY_MS;
+  let dueDate = new Date(explicitDate);
+  let alarmDate = getTimedAlarmDate(dueDate, time);
+  let safety = 0;
+
+  while (alarmDate.getTime() < minimumAlarmTime && safety < 5000) {
+    dueDate = addRepeatInterval(dueDate, repeat);
+    alarmDate = getTimedAlarmDate(dueDate, time);
+    safety += 1;
+  }
+
+  return alarmDate.getTime() >= minimumAlarmTime ? alarmDate : null;
 };
 
 const getExpoWeekday = (date: Date) => date.getDay() + 1;
@@ -396,7 +437,9 @@ const createTodoAlarmTrigger = (
 
   const date = resolveTodoAlarmDate(todo.filters.date, now, todo.createdAt);
   if (date) {
-    const alarmDate = getOneTimeAlarmDate(time, date, now);
+    const alarmDate = repeat === 'none'
+      ? getOneTimeAlarmDate(time, date, now)
+      : getRepeatingAlarmDate(time, repeat, date, now);
     if (!alarmDate) {
       return null;
     }
@@ -406,6 +449,10 @@ const createTodoAlarmTrigger = (
       date: alarmDate,
       type: Notifications.SchedulableTriggerInputTypes.DATE,
     };
+  }
+
+  if (hasTodoAlarmDateLabel(todo.filters.date)) {
+    return null;
   }
 
   if (repeat !== 'none') {

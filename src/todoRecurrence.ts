@@ -44,7 +44,10 @@ const resolveTodoDate = (
   return label ? resolveDateFilterValueDate(label, now, anchor) : null;
 };
 
-const addRepeatInterval = (date: Date, repeat: Exclude<RepeatPreset, 'none'>): Date => {
+export const addRepeatInterval = (
+  date: Date,
+  repeat: Exclude<RepeatPreset, 'none'>,
+): Date => {
   if (repeat === 'daily') {
     return addDays(date, 1);
   }

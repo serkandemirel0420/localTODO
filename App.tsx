@@ -129,6 +129,15 @@ import {
   googleAuthStore,
   type StoredGoogleAuth,
 } from './src/google/googleAuthStore';
+import { linkStoredGoogleAuthToFirebase } from './src/firebase/localTodoFirebase';
+import {
+  queueFirebaseNotificationLogSave,
+  queueFirebaseSettingsSave,
+  setFirebaseRemoteWritesEnabled,
+  subscribeFirebaseAppDataChanges,
+  syncFirebaseAppDataFromLocalSnapshot,
+  type FirebaseAppDataSnapshot,
+} from './src/firebase/firebaseRemoteStore';
 import { isDevAppVariant } from './src/appVariant';
 import {
   countDevTestListMenuNodes,
@@ -4251,6 +4260,8 @@ export default function App() {
     query: string;
   } | null>(null);
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
+  const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
+  const [firebaseRemoteSyncReady, setFirebaseRemoteSyncReady] = useState(false);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
@@ -4496,6 +4507,8 @@ export default function App() {
   const autoBackupInFlightRef = useRef(false);
   const autoBackupFailedStateKeyRef = useRef<string | null>(null);
   const autoBackupStateKeyRef = useRef<string | null>(null);
+  const firebaseInitialSyncStartedRef = useRef(false);
+  const firebaseLastAppliedRemoteAtRef = useRef(0);
   todosRef.current = todos;
   dateLabelDisplayModeRef.current = dateLabelDisplayMode;
   deletedTodosRef.current = deletedTodos;
@@ -4725,7 +4738,12 @@ export default function App() {
           setNotificationLogEntries(entries);
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (alive) {
+          setNotificationLogLoaded(true);
+        }
+      });
 
     return () => {
       alive = false;
@@ -4753,6 +4771,78 @@ export default function App() {
     };
   }, []);
 
+  const applyLoadedSettings = useCallback((settings: AppSettings) => {
+    const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
+      settings.listMenuTree,
+      settings.lastCreateTodoFilters,
+    );
+    const nextRequiredFilters = pruneTodoFilters(
+      settings.requiredFilters,
+      settings.selectedFilters,
+    );
+
+    setSelectedFilters(settings.selectedFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(settings.avoidedFilters);
+    setDeletedTodos(settings.deletedTodos);
+    setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
+    setFilterColors(settings.filterColors);
+    setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
+    setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
+    setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
+    setHideDoneTodos(settings.hideDoneTodos);
+    setDateLabelDisplayMode(settings.dateLabelDisplayMode);
+    setShowOverdueMetaTags(settings.showOverdueMetaTags);
+    setListMenuTree(cloneListMenuTree(settings.listMenuTree));
+    setCustomTags(normalizeCustomTags(settings.customTags));
+    setListOrderMode(settings.listOrderMode);
+    setMenuPresets(cloneMenuPresets(settings.menuPresets));
+    setPresetLabelTagsSeeded(settings.presetLabelTagsSeeded);
+    setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
+    setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
+    setTodoGroupMode(settings.todoGroupMode);
+    setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
+    setTodoSortMode(settings.todoSortMode);
+    setMetaTagVisibility(cloneMetaTagVisibility(settings.metaTagVisibility));
+    setLastCreateTodoFilters(nextLastCreateTodoFilters);
+    setCreateDraftFilters(nextLastCreateTodoFilters);
+    setCreateDraftPriorityFromPicker(
+      shouldHighlightCreatePriorityPicker(nextLastCreateTodoFilters),
+    );
+
+    const lastBackup = formatBackupTime(settings.googleDriveLastBackupAt);
+    setGoogleDriveBackupStatus(lastBackup ? `Last backup ${lastBackup}` : 'Not backed up');
+  }, []);
+
+  const applyFirebaseAppDataSnapshot = useCallback((
+    snapshot: FirebaseAppDataSnapshot,
+    remoteUpdatedAt: number,
+  ) => {
+    const remoteTodos = removeInitialSeedTodos(snapshot.todos);
+    const remoteNotificationLogEntries = normalizeNotificationLogEntries(
+      snapshot.notificationLogEntries,
+    );
+
+    firebaseLastAppliedRemoteAtRef.current = Math.max(
+      firebaseLastAppliedRemoteAtRef.current,
+      remoteUpdatedAt,
+    );
+    itemSearchResultsCacheRef.current.clear();
+    todosRef.current = remoteTodos;
+    pendingDeleteIdsRef.current = new Set();
+    setPendingDeleteIds(new Set());
+    setSelectedTodoIds(new Set());
+    setTodos(remoteTodos);
+    setNotificationLogEntries(remoteNotificationLogEntries);
+    applyLoadedSettings(snapshot.settings);
+    localTodoStore.replaceAllLocal(remoteTodos).catch(() => undefined);
+    appSettingsStore.save(snapshot.settings).catch(() => undefined);
+    notificationLogStore
+      .replaceAll(remoteNotificationLogEntries)
+      .catch(() => undefined);
+    reconcileTodoAlarms(remoteTodos).catch(() => undefined);
+  }, [applyLoadedSettings]);
+
   useEffect(() => {
     let alive = true;
 
@@ -4765,46 +4855,7 @@ export default function App() {
           return;
         }
 
-        const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
-          settings.listMenuTree,
-          settings.lastCreateTodoFilters,
-        );
-        const nextRequiredFilters = pruneTodoFilters(
-          settings.requiredFilters,
-          settings.selectedFilters,
-        );
-
-        setSelectedFilters(settings.selectedFilters);
-        setRequiredFilters(nextRequiredFilters);
-        setAvoidedFilters(settings.avoidedFilters);
-        setDeletedTodos(settings.deletedTodos);
-        setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
-        setFilterColors(settings.filterColors);
-        setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
-        setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
-        setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
-        setHideDoneTodos(settings.hideDoneTodos);
-        setDateLabelDisplayMode(settings.dateLabelDisplayMode);
-        setShowOverdueMetaTags(settings.showOverdueMetaTags);
-        setListMenuTree(cloneListMenuTree(settings.listMenuTree));
-        setCustomTags(normalizeCustomTags(settings.customTags));
-        setListOrderMode(settings.listOrderMode);
-        setMenuPresets(cloneMenuPresets(settings.menuPresets));
-        setPresetLabelTagsSeeded(settings.presetLabelTagsSeeded);
-        setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
-        setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
-        setTodoGroupMode(settings.todoGroupMode);
-        setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
-        setTodoSortMode(settings.todoSortMode);
-        setMetaTagVisibility(cloneMetaTagVisibility(settings.metaTagVisibility));
-        setLastCreateTodoFilters(nextLastCreateTodoFilters);
-        setCreateDraftFilters(nextLastCreateTodoFilters);
-        setCreateDraftPriorityFromPicker(
-          shouldHighlightCreatePriorityPicker(nextLastCreateTodoFilters),
-        );
-
-        const lastBackup = formatBackupTime(settings.googleDriveLastBackupAt);
-        setGoogleDriveBackupStatus(lastBackup ? `Last backup ${lastBackup}` : 'Not backed up');
+        applyLoadedSettings(settings);
         setGoogleAuth(storedGoogleAuth);
       })
       .catch(() => undefined)
@@ -4817,7 +4868,7 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [applyLoadedSettings]);
 
   const createSettingsSnapshot = useCallback((
     overrides: Partial<AppSettings> = {},
@@ -4877,6 +4928,11 @@ export default function App() {
     todoSortMode,
   ]);
 
+  const saveAppSettingsSnapshot = useCallback(async (settings: AppSettings) => {
+    await appSettingsStore.save(settings);
+    queueFirebaseSettingsSave(settings).catch(() => undefined);
+  }, []);
+
   const persistAppSettings = useCallback((
     overrides: Partial<AppSettings> = {},
   ) => {
@@ -4884,8 +4940,113 @@ export default function App() {
       return Promise.resolve();
     }
 
-    return appSettingsStore.save(createSettingsSnapshot(overrides)).catch(() => undefined);
-  }, [createSettingsSnapshot, settingsLoaded]);
+    return saveAppSettingsSnapshot(createSettingsSnapshot(overrides)).catch(() => undefined);
+  }, [createSettingsSnapshot, saveAppSettingsSnapshot, settingsLoaded]);
+
+  useEffect(() => {
+    if (!googleAuth?.idToken) {
+      return;
+    }
+
+    linkStoredGoogleAuthToFirebase(googleAuth).catch(() => undefined);
+  }, [googleAuth]);
+
+  useEffect(() => {
+    if (
+      !loaded ||
+      !settingsLoaded ||
+      !notificationLogLoaded ||
+      firebaseInitialSyncStartedRef.current
+    ) {
+      return;
+    }
+
+    firebaseInitialSyncStartedRef.current = true;
+    setFirebaseRemoteWritesEnabled(false);
+    let alive = true;
+    let initialSyncCompleted = false;
+    const localSnapshot = {
+      notificationLogEntries,
+      settings: createSettingsSnapshot(),
+      todos: todosRef.current.filter((todo) => !pendingDeleteIdsRef.current.has(todo.id)),
+    };
+
+    syncFirebaseAppDataFromLocalSnapshot(localSnapshot)
+      .then((result) => {
+        if (!alive || result.status === 'disabled') {
+          initialSyncCompleted = true;
+          setFirebaseRemoteWritesEnabled(true);
+          return;
+        }
+
+        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
+        initialSyncCompleted = true;
+        setFirebaseRemoteWritesEnabled(true);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (alive && initialSyncCompleted) {
+          setFirebaseRemoteSyncReady(true);
+        }
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    applyFirebaseAppDataSnapshot,
+    createSettingsSnapshot,
+    loaded,
+    notificationLogEntries,
+    notificationLogLoaded,
+    settingsLoaded,
+  ]);
+
+  useEffect(() => {
+    if (
+      !loaded ||
+      !settingsLoaded ||
+      !notificationLogLoaded ||
+      !firebaseRemoteSyncReady
+    ) {
+      return;
+    }
+
+    let alive = true;
+    let unsubscribe: (() => void) | null = null;
+
+    subscribeFirebaseAppDataChanges(
+      (result) => {
+        if (!alive || result.remoteUpdatedAt <= firebaseLastAppliedRemoteAtRef.current) {
+          return;
+        }
+
+        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
+      },
+      () => undefined,
+      firebaseLastAppliedRemoteAtRef.current,
+    )
+      .then((nextUnsubscribe) => {
+        if (!alive) {
+          nextUnsubscribe();
+          return;
+        }
+
+        unsubscribe = nextUnsubscribe;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      alive = false;
+      unsubscribe?.();
+    };
+  }, [
+    applyFirebaseAppDataSnapshot,
+    firebaseRemoteSyncReady,
+    loaded,
+    notificationLogLoaded,
+    settingsLoaded,
+  ]);
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {
     persistAppSettings({ listMenuTree: cloneListMenuTree(tree) });
@@ -5435,10 +5596,14 @@ export default function App() {
     setOpenQuickPresetNavSlotNumber(null);
 
     localTodoStore.replaceAll(restoredTodos).catch(() => undefined);
-    appSettingsStore.save(restoredSettings).catch(() => undefined);
+    saveAppSettingsSnapshot(restoredSettings).catch(() => undefined);
     reconcileTodoAlarms(restoredTodos).catch(() => undefined);
     itemSearchResultsCacheRef.current.clear();
-  }, [clearAllRepeatingTodoCompletionFeedback, createSettingsSnapshot]);
+  }, [
+    clearAllRepeatingTodoCompletionFeedback,
+    createSettingsSnapshot,
+    saveAppSettingsSnapshot,
+  ]);
 
   const applyUndoHistoryEntry = useCallback((entry: UndoHistoryEntry) => {
     const entryIndex = undoHistory.findIndex((item) => item.id === entry.id);
@@ -6443,7 +6608,10 @@ export default function App() {
     ));
     notificationLogStore
       .merge(entries)
-      .then(setNotificationLogEntries)
+      .then((nextEntries) => {
+        setNotificationLogEntries(nextEntries);
+        queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -6453,7 +6621,10 @@ export default function App() {
     ));
     notificationLogStore
       .append(entry)
-      .then(setNotificationLogEntries)
+      .then((nextEntries) => {
+        setNotificationLogEntries(nextEntries);
+        queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -6461,7 +6632,10 @@ export default function App() {
     setNotificationLogEntries((current) => current.filter((entry) => entry.id !== id));
     notificationLogStore
       .delete(id)
-      .then(setNotificationLogEntries)
+      .then((nextEntries) => {
+        setNotificationLogEntries(nextEntries);
+        queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
+      })
       .catch(() => undefined);
     triggerSubtleHaptic();
   }, []);
@@ -7214,13 +7388,13 @@ export default function App() {
 
     setDeletedTodos(nextDeletedTodos);
     setActiveDeletedTodoDetailId((current) => (current === id ? null : current));
-    appSettingsStore.save(
+    saveAppSettingsSnapshot(
       createSettingsSnapshot({ deletedTodos: nextDeletedTodos }),
     ).catch(() => undefined);
     localTodoStore.upsert(restoredTodo).catch(() => undefined);
     syncTodoAlarm(restoredTodo).catch(() => undefined);
     triggerSubtleHaptic();
-  }, [createSettingsSnapshot, deletedTodos, recordUndo, todos]);
+  }, [createSettingsSnapshot, deletedTodos, recordUndo, saveAppSettingsSnapshot, todos]);
 
   const addDevTestTodos = useCallback(() => {
     recordUndo('Add test data');
@@ -7309,7 +7483,7 @@ export default function App() {
             recordUndo('Delete permanently');
             setDeletedTodos(nextDeletedTodos);
             setActiveDeletedTodoDetailId((current) => (current === id ? null : current));
-            appSettingsStore.save(
+            saveAppSettingsSnapshot(
               createSettingsSnapshot({ deletedTodos: nextDeletedTodos }),
             ).catch(() => undefined);
             triggerSubtleHaptic();
@@ -7317,7 +7491,7 @@ export default function App() {
         },
       ],
     );
-  }, [createSettingsSnapshot, deletedTodos, recordUndo]);
+  }, [createSettingsSnapshot, deletedTodos, recordUndo, saveAppSettingsSnapshot]);
 
   const setTodoDone = useCallback((
     id: string,
@@ -13267,7 +13441,7 @@ export default function App() {
     pendingDeleteIdsRef.current = new Set();
 
     await localTodoStore.replaceAll(restoredTodos);
-    await appSettingsStore.save(restoredSettings);
+    await saveAppSettingsSnapshot(restoredSettings);
     reconcileTodoAlarms(restoredTodos).catch(() => undefined);
 
     setTodos(restoredTodos);
@@ -13322,7 +13496,7 @@ export default function App() {
       `Restored ${sourceLabel} ${restoredTodos.length} items · ${formatBackupTime(restoredAt)}`,
     );
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, createSettingsSnapshot, recordUndo]);
+  }, [clearNotificationTodoReveal, createSettingsSnapshot, recordUndo, saveAppSettingsSnapshot]);
 
   const restoreBackupWithToken = useCallback(async (
     accessToken: string,

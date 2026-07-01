@@ -74,9 +74,11 @@ export const normalizeNotificationLogEntries = (
 };
 
 const saveNotificationLogEntries = async (entries: NotificationLogEntry[]) => {
+  const normalized = normalizeNotificationLogEntries(entries);
+
   await AsyncStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify(normalizeNotificationLogEntries(entries)),
+    JSON.stringify(normalized),
   );
 };
 
@@ -106,6 +108,11 @@ export const notificationLogStore = {
   async merge(entries: NotificationLogEntry[]) {
     const current = await this.load();
     await saveNotificationLogEntries([...entries, ...current]);
+    return this.load();
+  },
+
+  async replaceAll(entries: NotificationLogEntry[]) {
+    await saveNotificationLogEntries(entries);
     return this.load();
   },
 };

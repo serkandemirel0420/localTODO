@@ -136,6 +136,7 @@ const attachAuthWindowHandlers = (authWindow) => {
 const sendFile = (response, filePath) => {
   const extension = path.extname(filePath).toLowerCase();
   response.writeHead(200, {
+    'Cache-Control': 'no-store, max-age=0',
     'Content-Type': mimeTypes.get(extension) || 'application/octet-stream',
     'Cross-Origin-Embedder-Policy': 'require-corp',
     // Google OAuth needs popup opener access until the Electron wrapper relays

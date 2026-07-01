@@ -1,5 +1,13 @@
 import { type Todo } from '../todos';
 import {
+  queueFirebaseTodoDelete,
+  queueFirebaseTodoDoneUpdate,
+  queueFirebaseTodoFiltersUpdate,
+  queueFirebaseTodoUpsert,
+  queueFirebaseTodosReplaceAll,
+  queueFirebaseTodosUpsertMany,
+} from '../firebase/firebaseRemoteStore';
+import {
   deleteTodoFromDatabase,
   loadTodosFromDatabase,
   replaceAllTodosInDatabase,
@@ -14,6 +22,7 @@ export type TodoStore = {
   delete: (id: string) => Promise<void>;
   load: () => Promise<Todo[]>;
   replaceAll: (todos: Todo[]) => Promise<void>;
+  replaceAllLocal: (todos: Todo[]) => Promise<void>;
   search: (query: string) => Promise<Todo[]>;
   updateDone: (id: string, done: boolean) => Promise<void>;
   updateFilters: (id: string, filters: Todo['filters']) => Promise<void>;
@@ -22,12 +31,31 @@ export type TodoStore = {
 };
 
 export const localTodoStore: TodoStore = {
-  delete: deleteTodoFromDatabase,
+  async delete(id) {
+    await deleteTodoFromDatabase(id);
+    queueFirebaseTodoDelete(id).catch(() => undefined);
+  },
   load: loadTodosFromDatabase,
-  replaceAll: replaceAllTodosInDatabase,
+  async replaceAll(todos) {
+    await replaceAllTodosInDatabase(todos);
+    queueFirebaseTodosReplaceAll(todos).catch(() => undefined);
+  },
+  replaceAllLocal: replaceAllTodosInDatabase,
   search: searchTodosInDatabase,
-  updateDone: updateTodoDoneInDatabase,
-  updateFilters: updateTodoFiltersInDatabase,
-  upsert: upsertTodoInDatabase,
-  upsertMany: upsertTodosInDatabase,
+  async updateDone(id, done) {
+    await updateTodoDoneInDatabase(id, done);
+    queueFirebaseTodoDoneUpdate(id, done).catch(() => undefined);
+  },
+  async updateFilters(id, filters) {
+    await updateTodoFiltersInDatabase(id, filters);
+    queueFirebaseTodoFiltersUpdate(id, filters).catch(() => undefined);
+  },
+  async upsert(todo) {
+    await upsertTodoInDatabase(todo);
+    queueFirebaseTodoUpsert(todo).catch(() => undefined);
+  },
+  async upsertMany(todos) {
+    await upsertTodosInDatabase(todos);
+    queueFirebaseTodosUpsertMany(todos).catch(() => undefined);
+  },
 };

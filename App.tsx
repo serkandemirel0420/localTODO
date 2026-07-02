@@ -4787,7 +4787,7 @@ export default function App() {
     setDeletedTodos(settings.deletedTodos);
     setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
     setFilterColors(settings.filterColors);
-    setGoogleDriveBackupEnabled(settings.googleDriveBackupEnabled);
+    setGoogleDriveBackupEnabled(false);
     setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
     setHideDoneTodos(settings.hideDoneTodos);
@@ -4810,8 +4810,7 @@ export default function App() {
       shouldHighlightCreatePriorityPicker(nextLastCreateTodoFilters),
     );
 
-    const lastBackup = formatBackupTime(settings.googleDriveLastBackupAt);
-    setGoogleDriveBackupStatus(lastBackup ? `Last backup ${lastBackup}` : 'Not backed up');
+    setGoogleDriveBackupStatus('Firebase sync enabled');
   }, []);
 
   const applyFirebaseAppDataSnapshot = useCallback((
@@ -4878,7 +4877,6 @@ export default function App() {
     deletedTodos,
     filterConfigUiState,
     filterColors,
-    googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
     dateLabelDisplayMode,
@@ -4898,6 +4896,7 @@ export default function App() {
     todoGroupMode,
     todoSortMode,
     ...overrides,
+    googleDriveBackupEnabled: false,
     listMenuTree: cloneListMenuTree(
       overrides.listMenuTree ?? listMenuTree,
     ),
@@ -5513,7 +5512,7 @@ export default function App() {
       dateLabelDisplayMode: snapshot.dateLabelDisplayMode,
       deletedTodos: restoredDeletedTodos,
       filterColors: restoredFilterColors,
-      googleDriveBackupEnabled: snapshot.googleDriveBackupEnabled,
+      googleDriveBackupEnabled: false,
       hideDoneTodos: snapshot.hideDoneTodos,
       lastCreateTodoFilters: restoredLastCreateTodoFilters,
       listMenuTree: restoredListMenuTree,
@@ -5537,7 +5536,7 @@ export default function App() {
     customTagsRef.current = restoredCustomTags;
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
-    googleDriveBackupEnabledRef.current = snapshot.googleDriveBackupEnabled;
+    googleDriveBackupEnabledRef.current = false;
     hideDoneTodosRef.current = snapshot.hideDoneTodos;
     lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
     listMenuTreeRef.current = restoredListMenuTree;
@@ -5561,7 +5560,7 @@ export default function App() {
     setCustomTags(restoredCustomTags);
     setDeletedTodos(restoredDeletedTodos);
     setFilterColors(restoredFilterColors);
-    setGoogleDriveBackupEnabled(snapshot.googleDriveBackupEnabled);
+    setGoogleDriveBackupEnabled(false);
     setHideDoneTodos(snapshot.hideDoneTodos);
     setDateLabelDisplayMode(snapshot.dateLabelDisplayMode);
     setShowOverdueMetaTags(snapshot.showOverdueMetaTags);
@@ -13397,7 +13396,7 @@ export default function App() {
       deletedTodos: restoredDeletedTodos,
       filterConfigUiState: restoredFilterConfigUiState,
       filterColors: restoredFilterColors,
-      googleDriveBackupEnabled: payload.settings.googleDriveBackupEnabled,
+      googleDriveBackupEnabled: false,
       googleDriveLastBackupAt: payload.settings.googleDriveLastBackupAt,
       googleDriveLastRestoreAt: restoredAt,
       hideDoneTodos: payload.settings.hideDoneTodos,
@@ -13422,7 +13421,7 @@ export default function App() {
     dateLabelDisplayModeRef.current = payload.settings.dateLabelDisplayMode;
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
-    googleDriveBackupEnabledRef.current = payload.settings.googleDriveBackupEnabled;
+    googleDriveBackupEnabledRef.current = false;
     hideDoneTodosRef.current = payload.settings.hideDoneTodos;
     lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
     listMenuTreeRef.current = restoredListMenuTree;
@@ -13453,7 +13452,7 @@ export default function App() {
     setAvoidedFilters(restoredAvoidedFilters);
     setFilterConfigUiState(restoredFilterConfigUiState);
     setFilterColors(restoredFilterColors);
-    setGoogleDriveBackupEnabled(payload.settings.googleDriveBackupEnabled);
+    setGoogleDriveBackupEnabled(false);
     setGoogleDriveLastBackupAt(payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
     setHideDoneTodos(payload.settings.hideDoneTodos);
@@ -15140,25 +15139,6 @@ export default function App() {
             selectedBackgroundColor={THEME_ACCENT_SOFT}
           />
           <View style={styles.bottomNavPrimary}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityHint="Backs up todos and settings to Google Drive"
-              accessibilityLabel="Back up to Google Drive"
-              accessibilityState={{ disabled: googleDriveNavDisabled }}
-              disabled={googleDriveNavDisabled}
-              onPress={backupToGoogleDrive}
-              style={({ pressed }) => [
-                styles.bottomNavItem,
-                googleDriveNavDisabled && styles.bottomNavItemDisabled,
-                pressed && styles.bottomNavItemPressed,
-              ]}
-            >
-              <Ionicons
-                color={googleDriveNavIconColor}
-                name="cloud-upload-outline"
-                size={23}
-              />
-            </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityHint="Shows filtered results; quick double tap opens filters"
@@ -17088,154 +17068,6 @@ export default function App() {
                   </View>
                 ) : null}
                 </View>
-                <View style={styles.settingsSection}>
-                  <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Backup</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      Google Drive · up to {DRIVE_BACKUP_SLOT_LIMIT} {DRIVE_BACKUP_VARIANT_LOWER_LABEL} backups
-                    </Text>
-                  </View>
-                  <Pressable
-                    accessibilityLabel={`${settingsBackupExpanded ? 'Collapse' : 'Expand'} Backup section`}
-                    accessibilityRole="button"
-                    accessibilityState={{ expanded: settingsBackupExpanded }}
-                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
-                    onPress={() => setSettingsBackupExpanded((current) => !current)}
-                    style={({ pressed }) => [
-                      styles.settingsSectionChevronButton,
-                      pressed && styles.settingsSectionChevronButtonPressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.settingsSectionChevron,
-                        settingsBackupExpanded && styles.settingsSectionChevronExpanded,
-                      ]}
-                    >
-                      ›
-                    </Text>
-                  </Pressable>
-                </View>
-
-                {settingsBackupExpanded ? (
-                  <View style={styles.settingsCard}>
-                    <View style={styles.settingsRow}>
-                      <View style={styles.settingsRowTextWrap}>
-                        <Text style={styles.settingsRowTitle}>Backup all data</Text>
-                        <Text style={styles.settingsRowSubtitle}>
-                          {activeTodoCount} items · {countFilters(selectedFilters)} filters · restore any backup
-                        </Text>
-                      </View>
-                      <View
-                        style={[
-                          styles.settingsStatusPill,
-                          googleConnected && styles.settingsStatusPillEnabled,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.settingsStatusText,
-                            googleConnected && styles.settingsStatusTextEnabled,
-                          ]}
-                        >
-                          {googleConnected ? 'Connected' : 'Not signed in'}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {!googleOAuthConfigured ? (
-                      <Text style={styles.settingsWarningText}>
-                        Google sign-in is not configured for this {DRIVE_BACKUP_VARIANT_LOWER_LABEL} build. {DRIVE_BACKUP_CONFIG_HINT}
-                      </Text>
-                    ) : null}
-
-                    <Pressable
-                      accessibilityRole="switch"
-                      accessibilityState={{ checked: googleDriveBackupEnabled }}
-                      disabled={googleDriveBusy}
-                      onPress={toggleGoogleDriveBackup}
-                      style={({ pressed }) => [
-                        styles.settingsOptionRow,
-                        googleDriveBusy && styles.settingsButtonDisabled,
-                        pressed && styles.settingsOptionRowPressed,
-                      ]}
-                    >
-                      <Text style={styles.settingsOptionText}>
-                        Auto backup new snapshots
-                      </Text>
-                      <Text style={styles.settingsOptionValue}>
-                        {googleDriveBackupEnabled ? 'Enabled' : 'Disabled'}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={googleDriveBusy || !backupActionReady}
-                      onPress={backupToGoogleDrive}
-                      style={({ pressed }) => [
-                        styles.settingsPrimaryButton,
-                        (googleDriveBusy || !backupActionReady) && styles.settingsButtonDisabled,
-                        pressed && styles.settingsPrimaryButtonPressed,
-                      ]}
-                    >
-                      <Text style={styles.settingsPrimaryButtonText}>
-                        {googleDriveBusy
-                          ? 'Working...'
-                          : `Backup ${DRIVE_BACKUP_VARIANT_LOWER_LABEL} data`}
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={googleDriveBusy || !backupActionReady}
-                      onPress={restoreFromGoogleDrive}
-                      style={({ pressed }) => [
-                        styles.settingsRestoreButton,
-                        (googleDriveBusy || !backupActionReady) && styles.settingsButtonDisabled,
-                        pressed && styles.settingsSecondaryButtonPressed,
-                      ]}
-                    >
-                      <Text style={styles.settingsRestoreButtonText}>
-                        Restore {DRIVE_BACKUP_VARIANT_LOWER_LABEL} data
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={googleDriveBusy || !googleDriveActionReady}
-                      onPress={showGoogleDriveBackups}
-                      style={({ pressed }) => [
-                        styles.settingsRestoreButton,
-                        (googleDriveBusy || !googleDriveActionReady) && styles.settingsButtonDisabled,
-                        pressed && styles.settingsSecondaryButtonPressed,
-                      ]}
-                    >
-                      <Text style={styles.settingsRestoreButtonText}>
-                        Show {DRIVE_BACKUP_VARIANT_LOWER_LABEL} backups
-                      </Text>
-                    </Pressable>
-
-                    {googleConnected ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        disabled={googleDriveBusy}
-                        onPress={disconnectGoogleDrive}
-                        style={({ pressed }) => [
-                          styles.settingsDisconnectButton,
-                          googleDriveBusy && styles.settingsButtonDisabled,
-                          pressed && styles.settingsSecondaryButtonPressed,
-                        ]}
-                      >
-                        <Text style={styles.settingsDisconnectButtonText}>Disconnect Google Drive</Text>
-                      </Pressable>
-                    ) : null}
-
-                    <Text style={styles.settingsBackupStatus}>{googleDriveBackupStatus}</Text>
-                  </View>
-                ) : null}
-                </View>
-
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                     <View style={styles.settingsRowTextWrap}>

@@ -14750,6 +14750,22 @@ export default function App() {
                     </Text>
                   </View>
                 }
+                ListFooterComponent={
+                  todoListOneHandedOffset > 0 ? (
+                    <View
+                      pointerEvents="none"
+                      style={{ height: todoListOneHandedOffset }}
+                    />
+                  ) : null
+                }
+                ListHeaderComponent={
+                  todoListOneHandedOffset > 0 ? (
+                    <View
+                      pointerEvents="none"
+                      style={{ height: todoListOneHandedOffset }}
+                    />
+                  ) : null
+                }
                 renderItem={renderNotificationLogItem}
                 showsVerticalScrollIndicator={false}
               />

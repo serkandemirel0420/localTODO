@@ -72,8 +72,43 @@ export type FirebaseAppDataChangeResult = {
   status: 'loaded-remote';
 };
 
+export type FirebaseActivityKind = 'read' | 'write';
+export type FirebaseActivityEvent = {
+  kind: FirebaseActivityKind;
+  phase: 'end' | 'start';
+};
+type FirebaseActivityListener = (event: FirebaseActivityEvent) => void;
+
 let firebaseWriteQueue = Promise.resolve();
 let firebaseWritesEnabled = false;
+const firebaseActivityListeners = new Set<FirebaseActivityListener>();
+
+const emitFirebaseActivity = (event: FirebaseActivityEvent) => {
+  firebaseActivityListeners.forEach((listener) => {
+    listener(event);
+  });
+};
+
+const withFirebaseActivity = async <T,>(
+  kind: FirebaseActivityKind,
+  task: () => Promise<T>,
+) => {
+  emitFirebaseActivity({ kind, phase: 'start' });
+
+  try {
+    return await task();
+  } finally {
+    emitFirebaseActivity({ kind, phase: 'end' });
+  }
+};
+
+export const subscribeFirebaseActivity = (listener: FirebaseActivityListener) => {
+  firebaseActivityListeners.add(listener);
+
+  return () => {
+    firebaseActivityListeners.delete(listener);
+  };
+};
 
 const toFirestoreJson = <T,>(value: T): T => (
   JSON.parse(JSON.stringify(value)) as T
@@ -140,7 +175,7 @@ const enqueueFirebaseWrite = (write: () => Promise<void>) => {
         return;
       }
 
-      await write();
+      await withFirebaseActivity('write', write);
     })
     .catch(() => undefined);
 
@@ -206,32 +241,34 @@ const writeFirebaseAppDataSnapshotForUser = async (
   snapshot: FirebaseAppDataSnapshot,
   reason: string,
 ) => {
-  const database = getLocalTodoFirestore();
-  const normalizedSettings = normalizeAppSettings({
-    ...snapshot.settings,
-    deletedTodos: cloneDeletedTodos(snapshot.settings.deletedTodos),
-  });
+  await withFirebaseActivity('write', async () => {
+    const database = getLocalTodoFirestore();
+    const normalizedSettings = normalizeAppSettings({
+      ...snapshot.settings,
+      deletedTodos: cloneDeletedTodos(snapshot.settings.deletedTodos),
+    });
 
-  await writeTodosSnapshotForUser(database, userId, snapshot.todos);
-  await Promise.all([
-    setDoc(
-      settingsDocRef(database, userId),
-      {
-        ...toFirestoreJson(normalizedSettings),
-        schemaVersion: FIREBASE_SCHEMA_VERSION,
-      },
-      { merge: false },
-    ),
-    setDoc(
-      notificationLogDocRef(database, userId),
-      {
-        entries: toFirestoreJson(normalizeNotificationLogEntries(snapshot.notificationLogEntries)),
-        schemaVersion: FIREBASE_SCHEMA_VERSION,
-      },
-      { merge: false },
-    ),
-  ]);
-  await touchRemoteMeta(database, userId, reason);
+    await writeTodosSnapshotForUser(database, userId, snapshot.todos);
+    await Promise.all([
+      setDoc(
+        settingsDocRef(database, userId),
+        {
+          ...toFirestoreJson(normalizedSettings),
+          schemaVersion: FIREBASE_SCHEMA_VERSION,
+        },
+        { merge: false },
+      ),
+      setDoc(
+        notificationLogDocRef(database, userId),
+        {
+          entries: toFirestoreJson(normalizeNotificationLogEntries(snapshot.notificationLogEntries)),
+          schemaVersion: FIREBASE_SCHEMA_VERSION,
+        },
+        { merge: false },
+      ),
+    ]);
+    await touchRemoteMeta(database, userId, reason);
+  });
 };
 
 const normalizeRemoteMeta = (data: DocumentData | undefined): FirebaseRemoteMeta | null => {
@@ -261,12 +298,12 @@ const loadFirebaseAppDataForUser = async (
     settingsSnapshot,
     notificationLogSnapshot,
     syncMetaSnapshot,
-  ] = await Promise.all([
+  ] = await withFirebaseActivity('read', () => Promise.all([
     getDocs(todosCollectionRef(database, userId)),
     getDoc(settingsDocRef(database, userId)),
     getDoc(notificationLogDocRef(database, userId)),
     getDoc(syncMetaDocRef(database, userId)),
-  ]);
+  ]));
   const todos = todosSnapshot.docs
     .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
     .filter((todo): todo is Todo => Boolean(todo))

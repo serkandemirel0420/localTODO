@@ -134,8 +134,10 @@ import {
   queueFirebaseNotificationLogSave,
   queueFirebaseSettingsSave,
   setFirebaseRemoteWritesEnabled,
+  subscribeFirebaseActivity,
   subscribeFirebaseAppDataChanges,
   syncFirebaseAppDataFromLocalSnapshot,
+  type FirebaseActivityKind,
   type FirebaseAppDataSnapshot,
 } from './src/firebase/firebaseRemoteStore';
 import { isDevAppVariant } from './src/appVariant';
@@ -1520,7 +1522,6 @@ const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
-const AUTO_BACKUP_DEBOUNCE_MS = 2500;
 const EMPTY_VISIBLE_TODO_LIST_ROWS: VisibleTodoListRow[] = [];
 const EMPTY_LIST_GROUP_LABELS: string[] = [];
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
@@ -4262,6 +4263,8 @@ export default function App() {
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
   const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
   const [firebaseRemoteSyncReady, setFirebaseRemoteSyncReady] = useState(false);
+  const [firebaseActivityKind, setFirebaseActivityKind] = useState<FirebaseActivityKind | null>(null);
+  const firebaseActivityPulse = useRef(new Animated.Value(0)).current;
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
@@ -4334,7 +4337,6 @@ export default function App() {
   const [heldQuickPresetNavSlotNumber, setHeldQuickPresetNavSlotNumber] = useState<number | null>(
     null,
   );
-  const [settingsBackupExpanded, setSettingsBackupExpanded] = useState(false);
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
   const [settingsHistoryExpanded, setSettingsHistoryExpanded] = useState(false);
@@ -4503,10 +4505,6 @@ export default function App() {
   const loadedRef = useRef(loaded);
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
   const pendingTodoAlarmOpenIdRef = useRef<string | null>(null);
-  const googleDriveBusyRef = useRef(googleDriveBusy);
-  const autoBackupInFlightRef = useRef(false);
-  const autoBackupFailedStateKeyRef = useRef<string | null>(null);
-  const autoBackupStateKeyRef = useRef<string | null>(null);
   const firebaseInitialSyncStartedRef = useRef(false);
   const firebaseLastAppliedRemoteAtRef = useRef(0);
   todosRef.current = todos;
@@ -4534,7 +4532,6 @@ export default function App() {
   menuEditOwnerRef.current = menuEditOwner;
   pendingDeleteIdsRef.current = pendingDeleteIds;
   repeatingTodoCompletionFeedbackIdsRef.current = repeatingTodoCompletionFeedbackIds;
-  googleDriveBusyRef.current = googleDriveBusy;
   const menuDismissPullRef = useRef(0);
   const menuDismissHapticRef = useRef(0);
   const didApplyTodoListInitialOffsetRef = useRef(false);
@@ -4951,6 +4948,52 @@ export default function App() {
   }, [googleAuth]);
 
   useEffect(() => {
+    const activeCounts: Record<FirebaseActivityKind, number> = {
+      read: 0,
+      write: 0,
+    };
+
+    const flashFirebaseActivityIcon = () => {
+      firebaseActivityPulse.stopAnimation();
+      firebaseActivityPulse.setValue(0);
+      Animated.sequence([
+        Animated.timing(firebaseActivityPulse, {
+          duration: 130,
+          easing: Easing.out(Easing.quad),
+          toValue: 1,
+          useNativeDriver: true,
+        }),
+        Animated.timing(firebaseActivityPulse, {
+          duration: 520,
+          easing: Easing.out(Easing.quad),
+          toValue: 0,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    };
+
+    const unsubscribe = subscribeFirebaseActivity(({ kind, phase }) => {
+      activeCounts[kind] = Math.max(
+        0,
+        activeCounts[kind] + (phase === 'start' ? 1 : -1),
+      );
+      setFirebaseActivityKind(
+        activeCounts.write > 0
+          ? 'write'
+          : activeCounts.read > 0
+            ? 'read'
+            : null,
+      );
+      flashFirebaseActivityIcon();
+    });
+
+    return () => {
+      unsubscribe();
+      firebaseActivityPulse.stopAnimation();
+    };
+  }, [firebaseActivityPulse]);
+
+  useEffect(() => {
     if (
       !loaded ||
       !settingsLoaded ||
@@ -5106,29 +5149,6 @@ export default function App() {
     persistAppSettings,
     settingsLoaded,
     createSettingsSnapshot,
-  ]);
-
-  const autoBackupStateKey = useMemo(() => {
-    if (!loaded || !settingsLoaded) {
-      return null;
-    }
-
-    const backupTodos = todos.filter((todo) => !pendingDeleteIds.has(todo.id));
-    const backupSettings = createSettingsSnapshot({
-      googleDriveLastBackupAt: null,
-      googleDriveLastRestoreAt: null,
-    });
-
-    return JSON.stringify({
-      settings: backupSettings,
-      todos: backupTodos,
-    });
-  }, [
-    createSettingsSnapshot,
-    loaded,
-    pendingDeleteIds,
-    settingsLoaded,
-    todos,
   ]);
 
   const devTestTodoCount = useMemo(
@@ -5530,8 +5550,6 @@ export default function App() {
       todoSortMode: snapshot.todoSortMode,
     });
 
-    autoBackupFailedStateKeyRef.current = null;
-    autoBackupStateKeyRef.current = null;
     todosRef.current = restoredTodos;
     customTagsRef.current = restoredCustomTags;
     deletedTodosRef.current = restoredDeletedTodos;
@@ -12554,7 +12572,6 @@ export default function App() {
     flushFilterConfigUndoBatch();
     setFilterConfigModalVisible(false);
     exitTodoSelectMode();
-    setSettingsBackupExpanded(false);
     setSettingsColorsExpanded(false);
     setSettingsDateLabelsExpanded(false);
     setSettingsDeletedExpanded(false);
@@ -13348,8 +13365,6 @@ export default function App() {
   ) => {
     const restoredAt = new Date().toISOString();
     recordUndo('Restore backup');
-    autoBackupStateKeyRef.current = null;
-    autoBackupFailedStateKeyRef.current = null;
     setPendingDeleteIds(new Set());
     clearNotificationTodoReveal();
 
@@ -13741,93 +13756,6 @@ export default function App() {
     googleDriveBusy,
     handleGoogleDriveError,
     runGoogleDriveAction,
-  ]);
-
-  const backupToGoogleDrive = useCallback(async () => {
-    await performGoogleDriveAction('backup');
-  }, [performGoogleDriveAction]);
-
-  const restoreFromGoogleDrive = useCallback(async () => {
-    await performGoogleDriveAction('restore');
-  }, [performGoogleDriveAction]);
-
-  const showGoogleDriveBackups = useCallback(async () => {
-    await performGoogleDriveAction('manage');
-  }, [performGoogleDriveAction]);
-
-  useEffect(() => {
-    if (!loaded || !settingsLoaded || autoBackupStateKey === null) {
-      return undefined;
-    }
-
-    if (autoBackupStateKeyRef.current === null) {
-      autoBackupStateKeyRef.current = autoBackupStateKey;
-      return undefined;
-    }
-
-    if (autoBackupStateKeyRef.current === autoBackupStateKey) {
-      return undefined;
-    }
-
-    if (!googleDriveBackupEnabled) {
-      autoBackupStateKeyRef.current = autoBackupStateKey;
-      autoBackupFailedStateKeyRef.current = null;
-      return undefined;
-    }
-
-    if (
-      !googleAuth?.accessToken ||
-      !googleDriveActionReady ||
-      googleDriveBusy ||
-      autoBackupInFlightRef.current ||
-      autoBackupFailedStateKeyRef.current === autoBackupStateKey
-    ) {
-      return undefined;
-    }
-
-    const stateKey = autoBackupStateKey;
-    const backupTimer = setTimeout(() => {
-      if (googleDriveBusyRef.current || autoBackupInFlightRef.current) {
-        return;
-      }
-
-      autoBackupInFlightRef.current = true;
-      setGoogleDriveBusy(true);
-      getFreshGoogleAccessToken()
-        .then((accessToken) => uploadBackupWithToken(accessToken, { notify: false }))
-        .then(() => {
-          autoBackupStateKeyRef.current = stateKey;
-          autoBackupFailedStateKeyRef.current = null;
-        })
-        .catch((error: unknown) => {
-          autoBackupFailedStateKeyRef.current = stateKey;
-          if (isGoogleAuthRecoveryError(error)) {
-            googleAuthStore.clear().catch(() => undefined);
-            setGoogleAuth(null);
-            setGoogleDriveBackupStatus('Google session expired. Sign in to back up again.');
-            return;
-          }
-
-          handleGoogleDriveError(error, 'Google Drive auto backup failed', false);
-        })
-        .finally(() => {
-          autoBackupInFlightRef.current = false;
-          setGoogleDriveBusy(false);
-        });
-    }, AUTO_BACKUP_DEBOUNCE_MS);
-
-    return () => clearTimeout(backupTimer);
-  }, [
-    autoBackupStateKey,
-    getFreshGoogleAccessToken,
-    googleAuth?.accessToken,
-    googleDriveActionReady,
-    googleDriveBackupEnabled,
-    googleDriveBusy,
-    handleGoogleDriveError,
-    loaded,
-    settingsLoaded,
-    uploadBackupWithToken,
   ]);
 
   const scrollTodoAboveMenu = useCallback((id: string) => {
@@ -14712,13 +14640,44 @@ export default function App() {
     [deleteNotificationLogEntry, openNotificationLogEntry],
   );
 
-  const backupActionReady = googleDriveActionReady;
-  const googleDriveNavDisabled = googleDriveBusy || !backupActionReady;
-  const googleDriveNavIconColor = googleDriveBusy
-    ? NAV_ACCENT
-    : googleDriveNavDisabled
-      ? THEME_TEXT_TERTIARY
-      : NAV_ICON_INACTIVE;
+  const firebaseSyncIconName =
+    firebaseActivityKind === 'write'
+      ? 'cloud-upload-outline'
+      : firebaseActivityKind === 'read'
+        ? 'cloud-download-outline'
+        : firebaseRemoteSyncReady
+          ? 'cloud-done-outline'
+          : 'cloud-outline';
+  const firebaseSyncIconColor =
+    firebaseActivityKind === 'write'
+      ? NAV_ACCENT
+      : firebaseActivityKind === 'read'
+        ? '#5B7F95'
+        : firebaseRemoteSyncReady
+          ? NAV_ICON_INACTIVE
+          : THEME_TEXT_TERTIARY;
+  const firebaseSyncAccessibilityLabel =
+    firebaseActivityKind === 'write'
+      ? 'Writing to Firebase'
+      : firebaseActivityKind === 'read'
+        ? 'Reading from Firebase'
+        : firebaseRemoteSyncReady
+          ? 'Firebase synced'
+          : 'Firebase sync starting';
+  const firebaseSyncAnimatedStyle = {
+    opacity: firebaseActivityPulse.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.72, 1],
+    }),
+    transform: [
+      {
+        scale: firebaseActivityPulse.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.16],
+        }),
+      },
+    ],
+  };
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -15172,6 +15131,31 @@ export default function App() {
                 size={23}
               />
             </Pressable>
+            <Animated.View
+              accessible
+              accessibilityLabel={firebaseSyncAccessibilityLabel}
+              accessibilityRole="image"
+              style={[
+                styles.bottomNavItem,
+                styles.bottomNavSyncItem,
+                firebaseActivityKind && styles.bottomNavSyncItemActive,
+                firebaseSyncAnimatedStyle,
+              ]}
+            >
+              <Ionicons
+                color={firebaseSyncIconColor}
+                name={firebaseSyncIconName}
+                size={23}
+              />
+              {firebaseActivityKind ? (
+                <View
+                  style={[
+                    styles.bottomNavSyncDot,
+                    firebaseActivityKind === 'write' && styles.bottomNavSyncDotWrite,
+                  ]}
+                />
+              ) : null}
+            </Animated.View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Open filter menu"
@@ -20380,6 +20364,24 @@ const styles = StyleSheet.create({
     height: '100%',
     justifyContent: 'center',
     paddingTop: 0,
+  },
+  bottomNavSyncItem: {
+    position: 'relative',
+  },
+  bottomNavSyncItemActive: {
+    backgroundColor: '#F2F7FA',
+  },
+  bottomNavSyncDot: {
+    backgroundColor: '#5B7F95',
+    borderRadius: 3,
+    height: 6,
+    position: 'absolute',
+    right: '31%',
+    top: 11,
+    width: 6,
+  },
+  bottomNavSyncDotWrite: {
+    backgroundColor: NAV_ACCENT,
   },
   bottomNavAddIcon: {
     transform: [{ translateY: -3 }],

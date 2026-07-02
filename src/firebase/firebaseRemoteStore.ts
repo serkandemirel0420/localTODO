@@ -77,6 +77,18 @@ export type FirebaseAppDataPullResult =
       status: 'loaded-remote';
     };
 
+export type FirebaseTodosPullResult =
+  | {
+      reason?: 'local-pending' | 'no-remote-data';
+      status: 'skipped';
+    }
+  | {
+      firebaseUserId: string;
+      remoteUpdatedAt: number;
+      status: 'loaded-remote';
+      todos: Todo[];
+    };
+
 let firebaseWriteQueue = Promise.resolve();
 let firebaseWritesEnabled = false;
 
@@ -315,6 +327,30 @@ const loadFirebaseAppDataForUser = async (
   };
 };
 
+const loadFirebaseTodosForUser = async (
+  userId: string,
+): Promise<{
+  meta: FirebaseRemoteMeta | null;
+  todos: Todo[];
+}> => {
+  const database = getLocalTodoFirestore();
+  const [
+    todosSnapshot,
+    syncMetaSnapshot,
+  ] = await Promise.all([
+    getDocs(todosCollectionRef(database, userId)),
+    getDoc(syncMetaDocRef(database, userId)),
+  ]);
+  const todos = todosSnapshot.docs
+    .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
+    .filter((todo): todo is Todo => Boolean(todo));
+
+  return {
+    meta: normalizeRemoteMeta(syncMetaSnapshot.data()),
+    todos: sortTodos(todos),
+  };
+};
+
 const localSnapshotHasUserData = (snapshot: FirebaseAppDataSnapshot) => (
   snapshot.todos.length > 0 ||
   snapshot.notificationLogEntries.length > 0 ||
@@ -527,15 +563,25 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
     remoteHasData &&
     localSnapshotHasUserData(localSnapshot)
   );
+  const shouldMergeSharedLocalIntoRemote = (
+    usesSharedDataProfile &&
+    remoteHasData &&
+    localSnapshot.todos.length > remote.snapshot.todos.length
+  );
   const shouldUploadLocal = (
-    !usesSharedDataProfile &&
     !remoteHasData &&
     localSnapshotHasUserData(localSnapshot)
   );
 
-  if (shouldMergeLocalIntoRemote) {
+  if (shouldMergeLocalIntoRemote || shouldMergeSharedLocalIntoRemote) {
     const mergedSnapshot = mergeAppDataSnapshots(remote.snapshot, localSnapshot);
-    await writeFirebaseAppDataSnapshotForUser(userId, mergedSnapshot, 'merge-local-remote-sync');
+    await writeFirebaseAppDataSnapshotForUser(
+      userId,
+      mergedSnapshot,
+      shouldMergeSharedLocalIntoRemote
+        ? 'merge-shared-local-remote-sync'
+        : 'merge-local-remote-sync',
+    );
     return {
       firebaseUserId: userId,
       remoteUpdatedAt: Date.now(),
@@ -593,6 +639,38 @@ export const loadFirebaseAppDataFromBackend = async (): Promise<FirebaseAppDataP
     remoteUpdatedAt,
     snapshot: remote.snapshot,
     status: 'loaded-remote',
+  };
+};
+
+export const loadFirebaseTodosFromBackend = async (): Promise<FirebaseTodosPullResult> => {
+  if (!isFirebaseConfigured()) {
+    return { status: 'skipped' };
+  }
+
+  const userId = await getLocalTodoFirebaseDataUserId();
+  const syncMeta = await loadFirebaseSyncMeta();
+
+  if (
+    syncMeta.firebaseUserId === userId &&
+    syncMeta.lastLocalChangeAt > syncMeta.lastRemoteWriteAt
+  ) {
+    return { reason: 'local-pending', status: 'skipped' };
+  }
+
+  const remote = await loadFirebaseTodosForUser(userId);
+  const remoteUpdatedAt = remote.meta?.updatedAt ?? 0;
+
+  if (!remote.meta && remote.todos.length === 0) {
+    return { reason: 'no-remote-data', status: 'skipped' };
+  }
+
+  await markRemoteFirebaseRead(userId, remoteUpdatedAt);
+
+  return {
+    firebaseUserId: userId,
+    remoteUpdatedAt,
+    status: 'loaded-remote',
+    todos: remote.todos,
   };
 };
 

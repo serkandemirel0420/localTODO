@@ -131,7 +131,7 @@ import {
 } from './src/google/googleAuthStore';
 import { linkStoredGoogleAuthToFirebase } from './src/firebase/localTodoFirebase';
 import {
-  loadFirebaseAppDataFromBackend,
+  loadFirebaseTodosFromBackend,
   queueFirebaseNotificationLogSave,
   queueFirebaseSettingsSave,
   setFirebaseRemoteWritesEnabled,
@@ -4837,6 +4837,26 @@ export default function App() {
     reconcileTodoAlarms(remoteTodos).catch(() => undefined);
   }, [applyLoadedSettings]);
 
+  const applyFirebaseTodosSnapshot = useCallback((
+    remoteTodosSnapshot: Todo[],
+    remoteUpdatedAt: number,
+  ) => {
+    const remoteTodos = removeInitialSeedTodos(remoteTodosSnapshot);
+
+    firebaseLastAppliedRemoteAtRef.current = Math.max(
+      firebaseLastAppliedRemoteAtRef.current,
+      remoteUpdatedAt,
+    );
+    itemSearchResultsCacheRef.current.clear();
+    todosRef.current = remoteTodos;
+    pendingDeleteIdsRef.current = new Set();
+    setPendingDeleteIds(new Set());
+    setSelectedTodoIds(new Set());
+    setTodos(remoteTodos);
+    localTodoStore.replaceAllLocal(remoteTodos).catch(() => undefined);
+    reconcileTodoAlarms(remoteTodos).catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     let alive = true;
 
@@ -5015,7 +5035,7 @@ export default function App() {
     lastFirebaseBackendPullStartedAtRef.current = now;
     firebaseBackendPullInFlightRef.current = true;
 
-    loadFirebaseAppDataFromBackend()
+    loadFirebaseTodosFromBackend()
       .then((result) => {
         if (
           result.status !== 'loaded-remote' ||
@@ -5024,14 +5044,14 @@ export default function App() {
           return;
         }
 
-        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
+        applyFirebaseTodosSnapshot(result.todos, result.remoteUpdatedAt);
       })
       .catch(() => undefined)
       .finally(() => {
         firebaseBackendPullInFlightRef.current = false;
       });
   }, [
-    applyFirebaseAppDataSnapshot,
+    applyFirebaseTodosSnapshot,
   ]);
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {

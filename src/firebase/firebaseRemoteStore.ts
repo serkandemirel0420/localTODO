@@ -42,6 +42,8 @@ import {
 
 const FIREBASE_SCHEMA_VERSION = 1;
 const FIRESTORE_BATCH_LIMIT = 450;
+const FIREBASE_WRITE_RETRY_BASE_DELAY_MS = 1000;
+const FIREBASE_WRITE_RETRY_MAX_DELAY_MS = 30000;
 
 type FirebaseRemoteMeta = {
   schemaVersion: number;
@@ -99,6 +101,31 @@ const withFirebaseActivity = async <T,>(
     return await task();
   } finally {
     emitFirebaseActivity({ kind, phase: 'end' });
+  }
+};
+
+const waitForFirebaseWriteRetry = (attempt: number) => (
+  new Promise((resolve) => {
+    const delay = Math.min(
+      FIREBASE_WRITE_RETRY_MAX_DELAY_MS,
+      FIREBASE_WRITE_RETRY_BASE_DELAY_MS * (2 ** Math.min(attempt, 5)),
+    );
+
+    setTimeout(resolve, delay);
+  })
+);
+
+const runFirebaseWriteUntilSynced = async (write: () => Promise<void>) => {
+  let attempt = 0;
+
+  for (;;) {
+    try {
+      await withFirebaseActivity('write', write);
+      return;
+    } catch {
+      await waitForFirebaseWriteRetry(attempt);
+      attempt += 1;
+    }
   }
 };
 
@@ -175,7 +202,7 @@ const enqueueFirebaseWrite = (write: () => Promise<void>) => {
         return;
       }
 
-      await withFirebaseActivity('write', write);
+      await runFirebaseWriteUntilSynced(write);
     })
     .catch(() => undefined);
 

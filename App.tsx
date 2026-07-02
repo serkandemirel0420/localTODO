@@ -131,13 +131,11 @@ import {
 } from './src/google/googleAuthStore';
 import { linkStoredGoogleAuthToFirebase } from './src/firebase/localTodoFirebase';
 import {
+  loadFirebaseAppDataFromBackend,
   queueFirebaseNotificationLogSave,
   queueFirebaseSettingsSave,
   setFirebaseRemoteWritesEnabled,
-  subscribeFirebaseActivity,
-  subscribeFirebaseAppDataChanges,
   syncFirebaseAppDataFromLocalSnapshot,
-  type FirebaseActivityKind,
   type FirebaseAppDataSnapshot,
 } from './src/firebase/firebaseRemoteStore';
 import { isDevAppVariant } from './src/appVariant';
@@ -4262,9 +4260,6 @@ export default function App() {
   } | null>(null);
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
   const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
-  const [firebaseRemoteSyncReady, setFirebaseRemoteSyncReady] = useState(false);
-  const [firebaseActivityKind, setFirebaseActivityKind] = useState<FirebaseActivityKind | null>(null);
-  const firebaseActivityPulse = useRef(new Animated.Value(0)).current;
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
@@ -4507,6 +4502,9 @@ export default function App() {
   const pendingTodoAlarmOpenIdRef = useRef<string | null>(null);
   const firebaseInitialSyncStartedRef = useRef(false);
   const firebaseLastAppliedRemoteAtRef = useRef(0);
+  const firebaseBackendPullInFlightRef = useRef(false);
+  const firebaseBackendPullReadyRef = useRef(false);
+  const lastFirebaseBackendPullStartedAtRef = useRef(0);
   todosRef.current = todos;
   dateLabelDisplayModeRef.current = dateLabelDisplayMode;
   deletedTodosRef.current = deletedTodos;
@@ -4948,52 +4946,6 @@ export default function App() {
   }, [googleAuth]);
 
   useEffect(() => {
-    const activeCounts: Record<FirebaseActivityKind, number> = {
-      read: 0,
-      write: 0,
-    };
-
-    const flashFirebaseActivityIcon = () => {
-      firebaseActivityPulse.stopAnimation();
-      firebaseActivityPulse.setValue(0);
-      Animated.sequence([
-        Animated.timing(firebaseActivityPulse, {
-          duration: 130,
-          easing: Easing.out(Easing.quad),
-          toValue: 1,
-          useNativeDriver: true,
-        }),
-        Animated.timing(firebaseActivityPulse, {
-          duration: 520,
-          easing: Easing.out(Easing.quad),
-          toValue: 0,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    };
-
-    const unsubscribe = subscribeFirebaseActivity(({ kind, phase }) => {
-      activeCounts[kind] = Math.max(
-        0,
-        activeCounts[kind] + (phase === 'start' ? 1 : -1),
-      );
-      setFirebaseActivityKind(
-        activeCounts.write > 0
-          ? 'write'
-          : activeCounts.read > 0
-            ? 'read'
-            : null,
-      );
-      flashFirebaseActivityIcon();
-    });
-
-    return () => {
-      unsubscribe();
-      firebaseActivityPulse.stopAnimation();
-    };
-  }, [firebaseActivityPulse]);
-
-  useEffect(() => {
     if (
       !loaded ||
       !settingsLoaded ||
@@ -5025,10 +4977,13 @@ export default function App() {
         initialSyncCompleted = true;
         setFirebaseRemoteWritesEnabled(true);
       })
-      .catch(() => undefined)
+      .catch(() => {
+        initialSyncCompleted = true;
+        setFirebaseRemoteWritesEnabled(true);
+      })
       .finally(() => {
         if (alive && initialSyncCompleted) {
-          setFirebaseRemoteSyncReady(true);
+          firebaseBackendPullReadyRef.current = true;
         }
       });
 
@@ -5044,50 +4999,39 @@ export default function App() {
     settingsLoaded,
   ]);
 
-  useEffect(() => {
+  const pullFirebaseAppDataFromBackend = useCallback(() => {
     if (
-      !loaded ||
-      !settingsLoaded ||
-      !notificationLogLoaded ||
-      !firebaseRemoteSyncReady
+      !firebaseBackendPullReadyRef.current ||
+      firebaseBackendPullInFlightRef.current
     ) {
       return;
     }
 
-    let alive = true;
-    let unsubscribe: (() => void) | null = null;
+    const now = Date.now();
+    if (now - lastFirebaseBackendPullStartedAtRef.current < 1200) {
+      return;
+    }
 
-    subscribeFirebaseAppDataChanges(
-      (result) => {
-        if (!alive || result.remoteUpdatedAt <= firebaseLastAppliedRemoteAtRef.current) {
+    lastFirebaseBackendPullStartedAtRef.current = now;
+    firebaseBackendPullInFlightRef.current = true;
+
+    loadFirebaseAppDataFromBackend()
+      .then((result) => {
+        if (
+          result.status !== 'loaded-remote' ||
+          result.remoteUpdatedAt <= firebaseLastAppliedRemoteAtRef.current
+        ) {
           return;
         }
 
         applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
-      },
-      () => undefined,
-      firebaseLastAppliedRemoteAtRef.current,
-    )
-      .then((nextUnsubscribe) => {
-        if (!alive) {
-          nextUnsubscribe();
-          return;
-        }
-
-        unsubscribe = nextUnsubscribe;
       })
-      .catch(() => undefined);
-
-    return () => {
-      alive = false;
-      unsubscribe?.();
-    };
+      .catch(() => undefined)
+      .finally(() => {
+        firebaseBackendPullInFlightRef.current = false;
+      });
   }, [
     applyFirebaseAppDataSnapshot,
-    firebaseRemoteSyncReady,
-    loaded,
-    notificationLogLoaded,
-    settingsLoaded,
   ]);
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {
@@ -11257,10 +11201,15 @@ export default function App() {
     if (options?.haptic ?? true) {
       triggerSubtleHaptic();
     }
+
+    if (!hasTodoEditTargets) {
+      requestAnimationFrame(pullFirebaseAppDataFromBackend);
+    }
   }, [
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
+    pullFirebaseAppDataFromBackend,
     removeMeaninglessPresetSelfListFilter,
     updateCurrentTodoTargetFilters,
   ]);
@@ -14640,45 +14589,6 @@ export default function App() {
     [deleteNotificationLogEntry, openNotificationLogEntry],
   );
 
-  const firebaseSyncIconName =
-    firebaseActivityKind === 'write'
-      ? 'cloud-upload-outline'
-      : firebaseActivityKind === 'read'
-        ? 'cloud-download-outline'
-        : firebaseRemoteSyncReady
-          ? 'cloud-done-outline'
-          : 'cloud-outline';
-  const firebaseSyncIconColor =
-    firebaseActivityKind === 'write'
-      ? NAV_ACCENT
-      : firebaseActivityKind === 'read'
-        ? '#5B7F95'
-        : firebaseRemoteSyncReady
-          ? NAV_ICON_INACTIVE
-          : THEME_TEXT_TERTIARY;
-  const firebaseSyncAccessibilityLabel =
-    firebaseActivityKind === 'write'
-      ? 'Writing to Firebase'
-      : firebaseActivityKind === 'read'
-        ? 'Reading from Firebase'
-        : firebaseRemoteSyncReady
-          ? 'Firebase synced'
-          : 'Firebase sync starting';
-  const firebaseSyncAnimatedStyle = {
-    opacity: firebaseActivityPulse.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0.72, 1],
-    }),
-    transform: [
-      {
-        scale: firebaseActivityPulse.interpolate({
-          inputRange: [0, 1],
-          outputRange: [1, 1.16],
-        }),
-      },
-    ],
-  };
-
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaView style={styles.safeArea}>
@@ -15131,31 +15041,6 @@ export default function App() {
                 size={23}
               />
             </Pressable>
-            <Animated.View
-              accessible
-              accessibilityLabel={firebaseSyncAccessibilityLabel}
-              accessibilityRole="image"
-              style={[
-                styles.bottomNavItem,
-                styles.bottomNavSyncItem,
-                firebaseActivityKind && styles.bottomNavSyncItemActive,
-                firebaseSyncAnimatedStyle,
-              ]}
-            >
-              <Ionicons
-                color={firebaseSyncIconColor}
-                name={firebaseSyncIconName}
-                size={23}
-              />
-              {firebaseActivityKind ? (
-                <View
-                  style={[
-                    styles.bottomNavSyncDot,
-                    firebaseActivityKind === 'write' && styles.bottomNavSyncDotWrite,
-                  ]}
-                />
-              ) : null}
-            </Animated.View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Open filter menu"
@@ -20364,24 +20249,6 @@ const styles = StyleSheet.create({
     height: '100%',
     justifyContent: 'center',
     paddingTop: 0,
-  },
-  bottomNavSyncItem: {
-    position: 'relative',
-  },
-  bottomNavSyncItemActive: {
-    backgroundColor: '#F2F7FA',
-  },
-  bottomNavSyncDot: {
-    backgroundColor: '#5B7F95',
-    borderRadius: 3,
-    height: 6,
-    position: 'absolute',
-    right: '31%',
-    top: 11,
-    width: 6,
-  },
-  bottomNavSyncDotWrite: {
-    backgroundColor: NAV_ACCENT,
   },
   bottomNavAddIcon: {
     transform: [{ translateY: -3 }],

@@ -4,12 +4,10 @@ import {
   doc,
   getDoc,
   getDocs,
-  onSnapshot,
   setDoc,
   writeBatch,
   type DocumentData,
   type Firestore,
-  type Unsubscribe,
   type WriteBatch,
 } from 'firebase/firestore';
 
@@ -67,42 +65,20 @@ export type FirebaseAppDataSyncResult =
       status: 'loaded-remote' | 'uploaded-local';
     };
 
-export type FirebaseAppDataChangeResult = {
-  firebaseUserId: string;
-  remoteUpdatedAt: number;
-  snapshot: FirebaseAppDataSnapshot;
-  status: 'loaded-remote';
-};
-
-export type FirebaseActivityKind = 'read' | 'write';
-export type FirebaseActivityEvent = {
-  kind: FirebaseActivityKind;
-  phase: 'end' | 'start';
-};
-type FirebaseActivityListener = (event: FirebaseActivityEvent) => void;
+export type FirebaseAppDataPullResult =
+  | {
+      reason?: 'local-pending' | 'no-remote-data';
+      status: 'skipped';
+    }
+  | {
+      firebaseUserId: string;
+      remoteUpdatedAt: number;
+      snapshot: FirebaseAppDataSnapshot;
+      status: 'loaded-remote';
+    };
 
 let firebaseWriteQueue = Promise.resolve();
 let firebaseWritesEnabled = false;
-const firebaseActivityListeners = new Set<FirebaseActivityListener>();
-
-const emitFirebaseActivity = (event: FirebaseActivityEvent) => {
-  firebaseActivityListeners.forEach((listener) => {
-    listener(event);
-  });
-};
-
-const withFirebaseActivity = async <T,>(
-  kind: FirebaseActivityKind,
-  task: () => Promise<T>,
-) => {
-  emitFirebaseActivity({ kind, phase: 'start' });
-
-  try {
-    return await task();
-  } finally {
-    emitFirebaseActivity({ kind, phase: 'end' });
-  }
-};
 
 const waitForFirebaseWriteRetry = (attempt: number) => (
   new Promise((resolve) => {
@@ -120,21 +96,13 @@ const runFirebaseWriteUntilSynced = async (write: () => Promise<void>) => {
 
   for (;;) {
     try {
-      await withFirebaseActivity('write', write);
+      await write();
       return;
     } catch {
       await waitForFirebaseWriteRetry(attempt);
       attempt += 1;
     }
   }
-};
-
-export const subscribeFirebaseActivity = (listener: FirebaseActivityListener) => {
-  firebaseActivityListeners.add(listener);
-
-  return () => {
-    firebaseActivityListeners.delete(listener);
-  };
 };
 
 const toFirestoreJson = <T,>(value: T): T => (
@@ -268,34 +236,32 @@ const writeFirebaseAppDataSnapshotForUser = async (
   snapshot: FirebaseAppDataSnapshot,
   reason: string,
 ) => {
-  await withFirebaseActivity('write', async () => {
-    const database = getLocalTodoFirestore();
-    const normalizedSettings = normalizeAppSettings({
-      ...snapshot.settings,
-      deletedTodos: cloneDeletedTodos(snapshot.settings.deletedTodos),
-    });
-
-    await writeTodosSnapshotForUser(database, userId, snapshot.todos);
-    await Promise.all([
-      setDoc(
-        settingsDocRef(database, userId),
-        {
-          ...toFirestoreJson(normalizedSettings),
-          schemaVersion: FIREBASE_SCHEMA_VERSION,
-        },
-        { merge: false },
-      ),
-      setDoc(
-        notificationLogDocRef(database, userId),
-        {
-          entries: toFirestoreJson(normalizeNotificationLogEntries(snapshot.notificationLogEntries)),
-          schemaVersion: FIREBASE_SCHEMA_VERSION,
-        },
-        { merge: false },
-      ),
-    ]);
-    await touchRemoteMeta(database, userId, reason);
+  const database = getLocalTodoFirestore();
+  const normalizedSettings = normalizeAppSettings({
+    ...snapshot.settings,
+    deletedTodos: cloneDeletedTodos(snapshot.settings.deletedTodos),
   });
+
+  await writeTodosSnapshotForUser(database, userId, snapshot.todos);
+  await Promise.all([
+    setDoc(
+      settingsDocRef(database, userId),
+      {
+        ...toFirestoreJson(normalizedSettings),
+        schemaVersion: FIREBASE_SCHEMA_VERSION,
+      },
+      { merge: false },
+    ),
+    setDoc(
+      notificationLogDocRef(database, userId),
+      {
+        entries: toFirestoreJson(normalizeNotificationLogEntries(snapshot.notificationLogEntries)),
+        schemaVersion: FIREBASE_SCHEMA_VERSION,
+      },
+      { merge: false },
+    ),
+  ]);
+  await touchRemoteMeta(database, userId, reason);
 };
 
 const normalizeRemoteMeta = (data: DocumentData | undefined): FirebaseRemoteMeta | null => {
@@ -325,12 +291,12 @@ const loadFirebaseAppDataForUser = async (
     settingsSnapshot,
     notificationLogSnapshot,
     syncMetaSnapshot,
-  ] = await withFirebaseActivity('read', () => Promise.all([
+  ] = await Promise.all([
     getDocs(todosCollectionRef(database, userId)),
     getDoc(settingsDocRef(database, userId)),
     getDoc(notificationLogDocRef(database, userId)),
     getDoc(syncMetaDocRef(database, userId)),
-  ]));
+  ]);
   const todos = todosSnapshot.docs
     .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
     .filter((todo): todo is Todo => Boolean(todo))
@@ -598,53 +564,35 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
   };
 };
 
-export const subscribeFirebaseAppDataChanges = async (
-  onChange: (result: FirebaseAppDataChangeResult) => void,
-  onError: (error: unknown) => void = () => undefined,
-  initialRemoteUpdatedAt = 0,
-): Promise<Unsubscribe> => {
+export const loadFirebaseAppDataFromBackend = async (): Promise<FirebaseAppDataPullResult> => {
   if (!isFirebaseConfigured()) {
-    return () => undefined;
+    return { status: 'skipped' };
   }
 
   const userId = await getLocalTodoFirebaseDataUserId();
-  const database = getLocalTodoFirestore();
-  let active = true;
-  let lastDeliveredUpdatedAt = initialRemoteUpdatedAt;
+  const syncMeta = await loadFirebaseSyncMeta();
 
-  const unsubscribe = onSnapshot(
-    syncMetaDocRef(database, userId),
-    (syncSnapshot) => {
-      const remoteMeta = normalizeRemoteMeta(syncSnapshot.data());
-      const remoteUpdatedAt = remoteMeta?.updatedAt ?? 0;
+  if (
+    syncMeta.firebaseUserId === userId &&
+    syncMeta.lastLocalChangeAt > syncMeta.lastRemoteWriteAt
+  ) {
+    return { reason: 'local-pending', status: 'skipped' };
+  }
 
-      if (!active || remoteUpdatedAt <= lastDeliveredUpdatedAt) {
-        return;
-      }
+  const remote = await loadFirebaseAppDataForUser(userId);
+  const remoteUpdatedAt = remote.meta?.updatedAt ?? 0;
 
-      lastDeliveredUpdatedAt = remoteUpdatedAt;
-      loadFirebaseAppDataForUser(userId)
-        .then((remote) => {
-          if (!active) {
-            return;
-          }
+  if (!remote.meta && !localSnapshotHasUserData(remote.snapshot)) {
+    return { reason: 'no-remote-data', status: 'skipped' };
+  }
 
-          markRemoteFirebaseRead(userId, remoteUpdatedAt).catch(() => undefined);
-          onChange({
-            firebaseUserId: userId,
-            remoteUpdatedAt,
-            snapshot: remote.snapshot,
-            status: 'loaded-remote',
-          });
-        })
-        .catch(onError);
-    },
-    onError,
-  );
+  await markRemoteFirebaseRead(userId, remoteUpdatedAt);
 
-  return () => {
-    active = false;
-    unsubscribe();
+  return {
+    firebaseUserId: userId,
+    remoteUpdatedAt,
+    snapshot: remote.snapshot,
+    status: 'loaded-remote',
   };
 };
 

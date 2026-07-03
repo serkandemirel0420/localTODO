@@ -131,7 +131,7 @@ import {
 } from './src/google/googleAuthStore';
 import { linkStoredGoogleAuthToFirebase } from './src/firebase/localTodoFirebase';
 import {
-  loadFirebaseTodosFromBackend,
+  loadFirebaseAppDataFromBackend,
   queueFirebaseNotificationLogSave,
   queueFirebaseSettingsSave,
   setFirebaseRemoteWritesEnabled,
@@ -173,6 +173,8 @@ import { resolveMaterialCommunityIconName } from './src/materialCommunityIconNam
 import { triggerSubtleHaptic } from './src/haptics';
 import {
   appSettingsStore,
+  APP_HISTORY_LIMIT,
+  cloneAppHistoryState,
   clearListNodeDisplaySettings,
   cloneFilterConfigUiState,
   cloneListMenuTree,
@@ -191,6 +193,8 @@ import {
   todoMatchesSelectedListFilters,
   updateListNodeDisplaySettings,
   type AppSettings,
+  type AppHistoryEntry,
+  type AppHistorySnapshot,
   type FilterConfigUiState,
   type ListOrderMode,
   type StoredListMenuNode,
@@ -282,35 +286,8 @@ type SearchKeywordEditTarget =
   | { kind: 'navbar'; navIndex: number }
   | { kind: 'preset'; presetId: string };
 
-type UndoSnapshot = {
-  customTags: string[];
-  dateLabelDisplayMode: DateLabelDisplayMode;
-  deletedTodos: DeletedTodo[];
-  filterColors: FilterColorSettings;
-  googleDriveBackupEnabled: boolean;
-  hideDoneTodos: boolean;
-  lastCreateTodoFilters: TodoFilters;
-  listMenuTree: ListMenuNode[];
-  listOrderMode: ListOrderMode;
-  menuPresets: MenuPreset[];
-  metaTagVisibility: MetaTagVisibility;
-  presetLabelTagsSeeded: boolean;
-  quickPresetNavIconNames: string[];
-  quickPresetNavPresetIds: Array<string | null>;
-  avoidedFilters: TodoFilters;
-  requiredFilters: TodoFilters;
-  selectedFilters: TodoFilters;
-  showOverdueMetaTags: boolean;
-  todoGroupMode: TodoGroupMode;
-  todoSortMode: TodoSortMode;
-  todos: Todo[];
-};
-
-type UndoHistoryEntry = {
-  id: number;
-  label: string;
-  snapshot: UndoSnapshot;
-};
+type UndoSnapshot = AppHistorySnapshot;
+type UndoHistoryEntry = AppHistoryEntry;
 
 type HistoryTodoRecord = {
   status: 'active';
@@ -1514,7 +1491,7 @@ const TODO_MENU_TARGET_HIGHLIGHT_OFFSET_TOLERANCE = 4;
 const EDITED_TODO_HIGHLIGHT_DURATION_MS = 650;
 const NEW_TODO_HIGHLIGHT_DURATION_MS = EDITED_TODO_HIGHLIGHT_DURATION_MS;
 const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
-const UNDO_HISTORY_LIMIT = 50;
+const UNDO_HISTORY_LIMIT = APP_HISTORY_LIMIT;
 const HEADER_UNDO_VISIBLE_MS = 10000;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
@@ -4767,6 +4744,21 @@ export default function App() {
       settings.requiredFilters,
       settings.selectedFilters,
     );
+    const nextHistory = cloneAppHistoryState(settings.history);
+    const nextHistorySequence = Math.max(
+      0,
+      ...nextHistory.undo.map((entry) => entry.id),
+      ...nextHistory.redo.map((entry) => entry.id),
+    );
+
+    undoHistorySequenceRef.current = Math.max(
+      undoHistorySequenceRef.current,
+      nextHistorySequence,
+    );
+    if (headerUndoTimerRef.current) {
+      clearTimeout(headerUndoTimerRef.current);
+      headerUndoTimerRef.current = null;
+    }
 
     setSelectedFilters(settings.selectedFilters);
     setRequiredFilters(nextRequiredFilters);
@@ -4796,6 +4788,11 @@ export default function App() {
     setCreateDraftPriorityFromPicker(
       shouldHighlightCreatePriorityPicker(nextLastCreateTodoFilters),
     );
+    setUndoHistory(nextHistory.undo);
+    setRedoHistory(nextHistory.redo);
+    setUndoToastEntryId(null);
+    setHeaderUndoEntryId(null);
+    setSettingsHistoryPreviewTarget(null);
 
     setGoogleDriveBackupStatus('Firebase sync enabled');
   }, []);
@@ -4828,26 +4825,6 @@ export default function App() {
       .catch(() => undefined);
     reconcileTodoAlarms(remoteTodos).catch(() => undefined);
   }, [applyLoadedSettings]);
-
-  const applyFirebaseTodosSnapshot = useCallback((
-    remoteTodosSnapshot: Todo[],
-    remoteUpdatedAt: number,
-  ) => {
-    const remoteTodos = removeInitialSeedTodos(remoteTodosSnapshot);
-
-    firebaseLastAppliedRemoteAtRef.current = Math.max(
-      firebaseLastAppliedRemoteAtRef.current,
-      remoteUpdatedAt,
-    );
-    itemSearchResultsCacheRef.current.clear();
-    todosRef.current = remoteTodos;
-    pendingDeleteIdsRef.current = new Set();
-    setPendingDeleteIds(new Set());
-    setSelectedTodoIds(new Set());
-    setTodos(remoteTodos);
-    localTodoStore.replaceAllLocal(remoteTodos).catch(() => undefined);
-    reconcileTodoAlarms(remoteTodos).catch(() => undefined);
-  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -4886,6 +4863,10 @@ export default function App() {
     filterColors,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    history: cloneAppHistoryState({
+      redo: redoHistory,
+      undo: undoHistory,
+    }),
     dateLabelDisplayMode,
     hideDoneTodos,
     lastCreateTodoFilters,
@@ -4926,12 +4907,14 @@ export default function App() {
     presetLabelTagsSeeded,
     quickPresetNavIconNames,
     quickPresetNavPresetIds,
+    redoHistory,
     avoidedFilters,
     requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
     todoGroupMode,
     todoSortMode,
+    undoHistory,
   ]);
 
   const saveAppSettingsSnapshot = useCallback(async (settings: AppSettings) => {
@@ -5027,7 +5010,7 @@ export default function App() {
     lastFirebaseBackendPullStartedAtRef.current = now;
     firebaseBackendPullInFlightRef.current = true;
 
-    loadFirebaseTodosFromBackend()
+    loadFirebaseAppDataFromBackend()
       .then((result) => {
         if (
           result.status !== 'loaded-remote' ||
@@ -5036,14 +5019,14 @@ export default function App() {
           return;
         }
 
-        applyFirebaseTodosSnapshot(result.todos, result.remoteUpdatedAt);
+        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
       })
       .catch(() => undefined)
       .finally(() => {
         firebaseBackendPullInFlightRef.current = false;
       });
   }, [
-    applyFirebaseTodosSnapshot,
+    applyFirebaseAppDataSnapshot,
   ]);
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {

@@ -355,7 +355,14 @@ const localSnapshotHasUserData = (snapshot: FirebaseAppDataSnapshot) => (
   snapshot.todos.length > 0 ||
   snapshot.notificationLogEntries.length > 0 ||
   snapshot.settings.deletedTodos.length > 0 ||
-  snapshot.settings.customTags.length > 0
+  snapshot.settings.customTags.length > 0 ||
+  snapshot.settings.history.undo.length > 0 ||
+  snapshot.settings.history.redo.length > 0
+);
+
+const settingsHistoryHasEntries = (settings: AppSettings) => (
+  settings.history.undo.length > 0 ||
+  settings.history.redo.length > 0
 );
 
 const sortTodos = (todos: Todo[]) => (
@@ -400,6 +407,9 @@ const mergeAppDataSnapshots = (
         ...cloneDeletedTodos(remoteSettings.deletedTodos),
         ...cloneDeletedTodos(localSettings.deletedTodos),
       ],
+      history: settingsHistoryHasEntries(localSettings)
+        ? localSettings.history
+        : remoteSettings.history,
     }),
     todos: mergeTodos(remoteSnapshot.todos, localSnapshot.todos),
   };
@@ -552,7 +562,9 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
     remote.snapshot.todos.length > 0 ||
     remote.snapshot.notificationLogEntries.length > 0 ||
     remote.snapshot.settings.deletedTodos.length > 0 ||
-    remote.snapshot.settings.customTags.length > 0
+    remote.snapshot.settings.customTags.length > 0 ||
+    remote.snapshot.settings.history.undo.length > 0 ||
+    remote.snapshot.settings.history.redo.length > 0
   );
   const syncMeta = await loadFirebaseSyncMeta();
   const usesSharedDataProfile = hasLocalTodoFirebaseDataUserId();

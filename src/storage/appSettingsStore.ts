@@ -20,13 +20,16 @@ import {
 } from '../materialCommunityIconNames';
 import {
   cloneDeletedTodos,
+  cloneTodo,
   cloneTodoFilters,
   formatListLabel,
   normalizeTodoTags,
   normalizeDeletedTodos,
+  normalizeTodo,
   normalizeTodoFilters,
   pruneTodoFilters,
   type DeletedTodo,
+  type Todo,
   type TodoFilters,
 } from '../todos';
 
@@ -94,6 +97,7 @@ export type StoredMenuPresetSection = {
 export const QUICK_PRESET_NAV_SLOT_COUNT = 10;
 export const QUICK_PRESET_NAV_MAX_SLOT_COUNT = 50;
 export const QUICK_PRESET_DEFAULTS_VERSION = 2;
+export const APP_HISTORY_LIMIT = 10;
 export type QuickPresetNavPresetIds = Array<string | null>;
 export type QuickPresetNavIconNames = string[];
 
@@ -128,6 +132,41 @@ export type FilterConfigExpandedSections = {
 export type FilterConfigUiState = {
   expandedSections: FilterConfigExpandedSections;
   scrollOffsetY: number | null;
+};
+
+export type AppHistorySnapshot = {
+  customTags: string[];
+  dateLabelDisplayMode: DateLabelDisplayMode;
+  deletedTodos: DeletedTodo[];
+  filterColors: FilterColorSettings;
+  googleDriveBackupEnabled: boolean;
+  hideDoneTodos: boolean;
+  lastCreateTodoFilters: TodoFilters;
+  listMenuTree: StoredListMenuNode[];
+  listOrderMode: ListOrderMode;
+  menuPresets: StoredMenuPreset[];
+  metaTagVisibility: MetaTagVisibility;
+  presetLabelTagsSeeded: boolean;
+  quickPresetNavIconNames: QuickPresetNavIconNames;
+  quickPresetNavPresetIds: QuickPresetNavPresetIds;
+  avoidedFilters: TodoFilters;
+  requiredFilters: TodoFilters;
+  selectedFilters: TodoFilters;
+  showOverdueMetaTags: boolean;
+  todoGroupMode: TodoGroupMode;
+  todoSortMode: TodoSortMode;
+  todos: Todo[];
+};
+
+export type AppHistoryEntry = {
+  id: number;
+  label: string;
+  snapshot: AppHistorySnapshot;
+};
+
+export type AppHistoryState = {
+  redo: AppHistoryEntry[];
+  undo: AppHistoryEntry[];
 };
 
 export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
@@ -177,6 +216,7 @@ export type AppSettings = {
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
+  history: AppHistoryState;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
   listMenuTree: StoredListMenuNode[];
@@ -367,6 +407,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   googleDriveBackupEnabled: false,
   googleDriveLastBackupAt: null,
   googleDriveLastRestoreAt: null,
+  history: {
+    redo: [],
+    undo: [],
+  },
   hideDoneTodos: false,
   lastCreateTodoFilters: cloneTodoFilters(),
   listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
@@ -850,6 +894,124 @@ export const normalizeMenuPresets = (value: unknown): StoredMenuPreset[] => {
     .filter((item): item is StoredMenuPreset => Boolean(item));
 };
 
+const normalizeAppHistoryEntryLabel = (value: unknown): string => {
+  if (typeof value !== 'string') {
+    return 'Change';
+  }
+
+  const label = value.replace(/\s+/g, ' ').trim();
+  return label || 'Change';
+};
+
+const normalizeAppHistorySnapshotRecord = (
+  value: Record<string, unknown>,
+): AppHistorySnapshot => {
+  const selectedFilters = normalizeTodoFilters(value.selectedFilters);
+  const quickPresetNavPresetIds = normalizeQuickPresetNavPresetIds(
+    value.quickPresetNavPresetIds,
+  );
+
+  return {
+    customTags: normalizeCustomTags(value.customTags),
+    dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
+    deletedTodos: normalizeDeletedTodos(value.deletedTodos),
+    filterColors: normalizeFilterColors(value.filterColors),
+    googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
+    hideDoneTodos: value.hideDoneTodos === true,
+    lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
+    listMenuTree: normalizeListMenuTree(value.listMenuTree),
+    listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
+    menuPresets: normalizeMenuPresets(value.menuPresets),
+    metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
+    presetLabelTagsSeeded: value.presetLabelTagsSeeded === true,
+    quickPresetNavIconNames: normalizeQuickPresetNavIconNames(
+      value.quickPresetNavIconNames,
+      quickPresetNavPresetIds.length || undefined,
+    ),
+    quickPresetNavPresetIds,
+    avoidedFilters: normalizeTodoFilters(value.avoidedFilters),
+    requiredFilters: pruneTodoFilters(
+      normalizeTodoFilters(value.requiredFilters),
+      selectedFilters,
+    ),
+    selectedFilters,
+    showOverdueMetaTags: value.showOverdueMetaTags !== false,
+    todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
+    todoSortMode: normalizeTodoSortMode(value.todoSortMode),
+    todos: Array.isArray(value.todos)
+      ? value.todos
+        .map(normalizeTodo)
+        .filter((todo): todo is Todo => Boolean(todo))
+        .map(cloneTodo)
+      : [],
+  };
+};
+
+export const normalizeAppHistorySnapshot = (
+  value: unknown,
+): AppHistorySnapshot | null => {
+  if (!isRecord(value) || !Array.isArray(value.todos)) {
+    return null;
+  }
+
+  return normalizeAppHistorySnapshotRecord(value);
+};
+
+const normalizeAppHistoryEntries = (value: unknown): AppHistoryEntry[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const usedIds = new Set<number>();
+
+  return value
+    .map((item, index): AppHistoryEntry | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const snapshot = normalizeAppHistorySnapshot(item.snapshot);
+      if (!snapshot) {
+        return null;
+      }
+
+      const rawId = typeof item.id === 'number' && Number.isFinite(item.id) && item.id > 0
+        ? Math.floor(item.id)
+        : index + 1;
+      let id = rawId;
+      while (usedIds.has(id)) {
+        id += 1;
+      }
+      usedIds.add(id);
+
+      return {
+        id,
+        label: normalizeAppHistoryEntryLabel(item.label),
+        snapshot,
+      };
+    })
+    .filter((item): item is AppHistoryEntry => Boolean(item))
+    .slice(0, APP_HISTORY_LIMIT);
+};
+
+export const normalizeAppHistoryState = (value: unknown): AppHistoryState => {
+  if (!isRecord(value)) {
+    return {
+      redo: [],
+      undo: [],
+    };
+  }
+
+  return {
+    redo: normalizeAppHistoryEntries(value.redo),
+    undo: normalizeAppHistoryEntries(value.undo),
+  };
+};
+
+export const cloneAppHistoryState = (
+  history: AppHistoryState,
+): AppHistoryState => normalizeAppHistoryState(history);
+
 export const normalizeAppSettings = (value: unknown): AppSettings => {
   if (!isRecord(value)) {
     return {
@@ -858,6 +1020,10 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       deletedTodos: [],
       filterConfigUiState: cloneFilterConfigUiState(),
       filterColors: cloneFilterColors(),
+      history: {
+        redo: [],
+        undo: [],
+      },
       hideDoneTodos: false,
       listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
       menuPresets: cloneMenuPresets(DEFAULT_APP_SETTINGS.menuPresets),
@@ -903,6 +1069,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       typeof value.googleDriveLastBackupAt === 'string' ? value.googleDriveLastBackupAt : null,
     googleDriveLastRestoreAt:
       typeof value.googleDriveLastRestoreAt === 'string' ? value.googleDriveLastRestoreAt : null,
+    history: normalizeAppHistoryState(value.history),
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
     listMenuTree: normalizeListMenuTree(value.listMenuTree),

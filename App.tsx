@@ -2722,15 +2722,7 @@ const dateFilterValuesIncludeExactDay = (
 
   return dateLabels.some((label) => {
     const formattedLabel = formatDateFilterValue(label);
-    const isExactDayLabel =
-      isCustomDateLabel(formattedLabel) ||
-      formattedLabel === 'Today' ||
-      formattedLabel === 'Tomorrow';
-
-    return (
-      isExactDayLabel &&
-      resolveDateFilterValueDate(formattedLabel, now)?.getTime() === targetDay
-    );
+    return resolveDateFilterValueDate(formattedLabel, now)?.getTime() === targetDay;
   });
 };
 
@@ -16314,6 +16306,7 @@ export default function App() {
                           : label;
                       const showCustomDateClear = (
                         label === CUSTOM_DATE_LABEL &&
+                        selected &&
                         getSelectedCustomDateLabel(createDraftFilters.date) !== null
                       );
                       const showReminderClear = (

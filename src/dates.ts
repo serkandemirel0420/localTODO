@@ -18,13 +18,21 @@ export const normalizeDateLabelDisplayMode = (value: unknown): DateLabelDisplayM
 export const DATE_FILTER_PRESETS = [
   'Today',
   'Tomorrow',
-  'This Week',
-  'Next Week',
-  LATER_DATE_LABEL,
+  '2 days',
+  '3 days',
+  '4 days',
+  '5 days',
+  '7 days',
   CUSTOM_DATE_LABEL,
+  LATER_DATE_LABEL,
 ] as const;
 
 const DATE_PRESET_LABELS: Record<string, string> = {
+  '2 days': '2 days',
+  '3 days': '3 days',
+  '4 days': '4 days',
+  '5 days': '5 days',
+  '7 days': '7 days',
   custom: CUSTOM_DATE_LABEL,
   'custom date': CUSTOM_DATE_LABEL,
   dated: DATED_DATE_LABEL,
@@ -36,10 +44,10 @@ const DATE_PRESET_LABELS: Record<string, string> = {
   someday: LATER_DATE_LABEL,
   today: 'Today',
   tomorrow: 'Tomorrow',
-  'this week': 'This Week',
-  thisweek: 'This Week',
-  'next week': 'Next Week',
-  nextweek: 'Next Week',
+  'this week': '2 days',
+  thisweek: '2 days',
+  'next week': '7 days',
+  nextweek: '7 days',
 };
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -121,6 +129,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_SORT_LATER_RANK = 8_000_000_000_000_000;
 const DATE_SORT_NO_DATE_RANK = DATE_SORT_LATER_RANK + 1;
 const RELATIVE_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
+  '2 days': 2,
+  '3 days': 3,
+  '4 days': 4,
+  '5 days': 5,
+  '7 days': 7,
   today: 0,
   tomorrow: 1,
   'this week': 2,
@@ -130,7 +143,6 @@ const EXACT_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
   today: 0,
   tomorrow: 1,
 };
-const EXACT_DATE_MENU_SHORTCUT_LABELS = new Set(['Today', 'Tomorrow']);
 
 export type DateLabelAnchor = Date | number | null | undefined;
 
@@ -487,6 +499,16 @@ const dateFilterValuesResolveToSameDay = (
   return Boolean(firstDate && secondDate && isSameCalendarDay(firstDate, secondDate));
 };
 
+const dateMenuLabelResolvesToDay = (label: string, now = new Date()): boolean =>
+  resolveDateFilterValueDate(label, now) !== null;
+
+const customDateMatchesVisibleShortcut = (customDate: string, now = new Date()): boolean =>
+  DATE_FILTER_PRESETS.some((label) => (
+    label !== CUSTOM_DATE_LABEL &&
+    label !== LATER_DATE_LABEL &&
+    dateFilterValuesResolveToSameDay(label, customDate, now)
+  ));
+
 const getExactDateFilterValueDate = (
   label: string,
   now = new Date(),
@@ -581,22 +603,27 @@ export const todoMatchesSelectedDateFilters = (
   );
 };
 
-export const isDateMenuItemSelected = (menuLabel: string, dateLabels: string[]): boolean => {
+export const isDateMenuItemSelected = (
+  menuLabel: string,
+  dateLabels: string[],
+  now = new Date(),
+): boolean => {
   const formattedMenuLabel = formatDateFilterValue(menuLabel);
   if (dateLabels.some((label) => formatDateFilterValue(label) === formattedMenuLabel)) {
     return true;
   }
 
   if (formattedMenuLabel === CUSTOM_DATE_LABEL) {
-    return dateLabels.some(isCustomDateLabel);
+    const customDate = getSelectedCustomDateLabel(dateLabels);
+    return Boolean(customDate && !customDateMatchesVisibleShortcut(customDate, now));
   }
 
-  if (!EXACT_DATE_MENU_SHORTCUT_LABELS.has(formattedMenuLabel)) {
+  if (!dateMenuLabelResolvesToDay(formattedMenuLabel, now)) {
     return false;
   }
 
   return dateLabels.some((label) =>
-    dateFilterValuesResolveToSameDay(formattedMenuLabel, label),
+    dateFilterValuesResolveToSameDay(formattedMenuLabel, label, now),
   );
 };
 
@@ -608,7 +635,7 @@ export const getDateMenuItemDisplayLabel = (
 ): string => {
   if (formatDateFilterValue(menuLabel) === CUSTOM_DATE_LABEL) {
     const customDate = getSelectedCustomDateLabel(dateLabels);
-    if (customDate) {
+    if (customDate && !customDateMatchesVisibleShortcut(customDate, now)) {
       if (mode === 'remaining') {
         const remainingLabel = formatRemainingDaysLabel(customDate, now);
         if (remainingLabel) {
@@ -636,25 +663,37 @@ export const getDateMenuItemDisplayLabel = (
   return formatDateFilterLabel(menuLabel);
 };
 
-export const getDateMenuClearValue = (menuLabel: string, dateLabels: string[]): string | null => {
+export const getDateMenuClearValue = (
+  menuLabel: string,
+  dateLabels: string[],
+  now = new Date(),
+): string | null => {
   const formattedMenuLabel = formatDateFilterValue(menuLabel);
 
   if (formattedMenuLabel === CUSTOM_DATE_LABEL) {
-    return getSelectedCustomDateLabel(dateLabels);
+    const customDate = getSelectedCustomDateLabel(dateLabels);
+    return customDate && !customDateMatchesVisibleShortcut(customDate, now)
+      ? customDate
+      : null;
   }
 
   return dateLabels.find((label) =>
     formatDateFilterValue(label) === formattedMenuLabel ||
     (
-      EXACT_DATE_MENU_SHORTCUT_LABELS.has(formattedMenuLabel) &&
-      dateFilterValuesResolveToSameDay(formattedMenuLabel, label)
+      dateMenuLabelResolvesToDay(formattedMenuLabel, now) &&
+      dateFilterValuesResolveToSameDay(formattedMenuLabel, label, now)
     ),
   ) ?? null;
 };
 
 export const getDateMenuColorLookupValue = (menuLabel: string, dateLabels: string[]): string => {
   const formattedMenuLabel = formatDateFilterValue(menuLabel);
-  if (formattedMenuLabel === CUSTOM_DATE_LABEL && dateLabels.some(isCustomDateLabel)) {
+  if (
+    formattedMenuLabel === CUSTOM_DATE_LABEL &&
+    dateLabels.some((label) => (
+      isCustomDateLabel(label) && !customDateMatchesVisibleShortcut(label)
+    ))
+  ) {
     return CUSTOM_DATE_LABEL;
   }
 
@@ -675,16 +714,17 @@ export const getDateMenuItemsForDateLabels = (
   const matchingShortcut = menuLabels.some((label) => {
     const formattedLabel = formatDateFilterValue(label);
     return (
-      EXACT_DATE_MENU_SHORTCUT_LABELS.has(formattedLabel) &&
+      dateMenuLabelResolvesToDay(formattedLabel, now) &&
       dateFilterValuesResolveToSameDay(formattedLabel, customDate, now)
     );
   });
+  const visibleMenuLabels = menuLabels;
 
-  const visibleMenuLabels = matchingShortcut
-    ? menuLabels.filter((label) => formatDateFilterValue(label) !== CUSTOM_DATE_LABEL)
-    : menuLabels;
-
-  if (!options.sortSelectedCustomDate || !visibleMenuLabels.includes(CUSTOM_DATE_LABEL)) {
+  if (
+    matchingShortcut ||
+    !options.sortSelectedCustomDate ||
+    !visibleMenuLabels.includes(CUSTOM_DATE_LABEL)
+  ) {
     return visibleMenuLabels;
   }
 

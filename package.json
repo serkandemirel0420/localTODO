@@ -24,6 +24,7 @@
     "files": [
       "desktop/**/*",
       "dist/**/*",
+      "assets/icon.icns",
       "assets/icon.png",
       "package.json"
     ],
@@ -35,6 +36,7 @@
     },
     "electronDist": "node_modules/electron/dist",
     "mac": {
+      "icon": "assets/icon.icns",
       "target": [
         "dir"
       ],

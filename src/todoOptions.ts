@@ -2,7 +2,6 @@ import {
   CUSTOM_DATE_LABEL,
   DATE_FILTER_PRESETS,
   DATED_DATE_LABEL,
-  LATER_DATE_LABEL,
   OVERDUE_DATE_LABEL,
 } from './dates';
 import {
@@ -23,11 +22,7 @@ export const DATE_MENU_ITEMS: string[] = [
 
 /** Date drawer list: date choices + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
-  ...DATE_FILTER_PRESETS.filter((label) => (
-    label !== LATER_DATE_LABEL && label !== CUSTOM_DATE_LABEL
-  )),
-  LATER_DATE_LABEL,
-  CUSTOM_DATE_LABEL,
+  ...DATE_FILTER_PRESETS,
   REMINDER_PICKER_LABEL,
   REPEAT_PICKER_LABEL,
 ];

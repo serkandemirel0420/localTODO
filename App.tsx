@@ -4229,6 +4229,7 @@ export default function App() {
   } | null>(null);
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
   const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
+  const [startupDataReady, setStartupDataReady] = useState(false);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
@@ -4853,6 +4854,12 @@ export default function App() {
     };
   }, [applyLoadedSettings]);
 
+  useEffect(() => {
+    if (loaded && settingsLoaded && notificationLogLoaded) {
+      setStartupDataReady(true);
+    }
+  }, [loaded, notificationLogLoaded, settingsLoaded]);
+
   const createSettingsSnapshot = useCallback((
     overrides: Partial<AppSettings> = {},
   ): AppSettings => ({
@@ -4962,8 +4969,14 @@ export default function App() {
 
     syncFirebaseAppDataFromLocalSnapshot(localSnapshot)
       .then((result) => {
-        if (!alive || result.status === 'disabled') {
+        if (!alive || result.status === 'disabled' || result.status === 'skipped') {
           initialSyncCompleted = true;
+          if (result.status === 'skipped') {
+            firebaseLastAppliedRemoteAtRef.current = Math.max(
+              firebaseLastAppliedRemoteAtRef.current,
+              result.remoteUpdatedAt,
+            );
+          }
           setFirebaseRemoteWritesEnabled(true);
           return;
         }
@@ -14583,6 +14596,18 @@ export default function App() {
     ),
     [deleteNotificationLogEntry, openNotificationLogEntry],
   );
+
+  // Avoid painting transient list/preset state before local settings settle.
+  if (!startupDataReady) {
+    return (
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaView style={styles.safeArea}>
+          <StatusBar barStyle="dark-content" />
+          <View style={styles.screen} />
+        </SafeAreaView>
+      </GestureHandlerRootView>
+    );
+  }
 
   return (
     <GestureHandlerRootView style={styles.root}>

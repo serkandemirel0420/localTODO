@@ -61,13 +61,19 @@ export type FirebaseAppDataSyncResult =
   | {
       firebaseUserId: string;
       remoteUpdatedAt: number;
+      reason: 'remote-unchanged';
+      status: 'skipped';
+    }
+  | {
+      firebaseUserId: string;
+      remoteUpdatedAt: number;
       snapshot: FirebaseAppDataSnapshot;
       status: 'loaded-remote' | 'uploaded-local';
     };
 
 export type FirebaseAppDataPullResult =
   | {
-      reason?: 'local-pending' | 'no-remote-data';
+      reason?: 'local-pending' | 'no-remote-data' | 'remote-unchanged';
       status: 'skipped';
     }
   | {
@@ -289,6 +295,12 @@ const normalizeRemoteMeta = (data: DocumentData | undefined): FirebaseRemoteMeta
     schemaVersion: typeof data.schemaVersion === 'number' ? data.schemaVersion : 0,
     updatedAt,
   };
+};
+
+const loadFirebaseRemoteMetaForUser = async (userId: string) => {
+  const database = getLocalTodoFirestore();
+  const syncMetaSnapshot = await getDoc(syncMetaDocRef(database, userId));
+  return normalizeRemoteMeta(syncMetaSnapshot.data());
 };
 
 const loadFirebaseAppDataForUser = async (
@@ -556,8 +568,38 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
   }
 
   const userId = await getLocalTodoFirebaseDataUserId();
+  const syncMeta = await loadFirebaseSyncMeta();
+  const usesSharedDataProfile = hasLocalTodoFirebaseDataUserId();
+  const remoteMeta = await loadFirebaseRemoteMetaForUser(userId);
+  const remoteUpdatedAt = remoteMeta?.updatedAt ?? 0;
+  const lastKnownRemoteAt = Math.max(
+    syncMeta.lastRemoteReadAt,
+    syncMeta.lastRemoteWriteAt,
+  );
+  const localHasPendingChanges = (
+    syncMeta.firebaseUserId === userId &&
+    syncMeta.lastLocalChangeAt > syncMeta.lastRemoteWriteAt
+  );
+  const remoteUnchanged = (
+    remoteMeta !== null &&
+    remoteUpdatedAt > 0 &&
+    syncMeta.firebaseUserId === userId &&
+    remoteUpdatedAt <= lastKnownRemoteAt &&
+    !localHasPendingChanges
+  );
+
+  if (remoteUnchanged) {
+    await markRemoteFirebaseRead(userId, remoteUpdatedAt);
+    return {
+      firebaseUserId: userId,
+      reason: 'remote-unchanged',
+      remoteUpdatedAt,
+      status: 'skipped',
+    };
+  }
+
   const remote = await loadFirebaseAppDataForUser(userId);
-  const remoteUpdatedAt = remote.meta?.updatedAt ?? 0;
+  const loadedRemoteUpdatedAt = remote.meta?.updatedAt ?? remoteUpdatedAt;
   const remoteHasData = (
     remote.snapshot.todos.length > 0 ||
     remote.snapshot.notificationLogEntries.length > 0 ||
@@ -566,8 +608,6 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
     remote.snapshot.settings.history.undo.length > 0 ||
     remote.snapshot.settings.history.redo.length > 0
   );
-  const syncMeta = await loadFirebaseSyncMeta();
-  const usesSharedDataProfile = hasLocalTodoFirebaseDataUserId();
   const shouldMergeLocalIntoRemote = (
     !usesSharedDataProfile &&
     Boolean(syncMeta.firebaseUserId) &&
@@ -612,11 +652,11 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
     };
   }
 
-  await markRemoteFirebaseRead(userId, remoteUpdatedAt);
+  await markRemoteFirebaseRead(userId, loadedRemoteUpdatedAt);
 
   return {
     firebaseUserId: userId,
-    remoteUpdatedAt,
+    remoteUpdatedAt: loadedRemoteUpdatedAt,
     snapshot: remote.snapshot,
     status: 'loaded-remote',
   };
@@ -637,18 +677,35 @@ export const loadFirebaseAppDataFromBackend = async (): Promise<FirebaseAppDataP
     return { reason: 'local-pending', status: 'skipped' };
   }
 
+  const remoteMeta = await loadFirebaseRemoteMetaForUser(userId);
+  const remoteUpdatedAt = remoteMeta?.updatedAt ?? 0;
+  const lastKnownRemoteAt = Math.max(
+    syncMeta.lastRemoteReadAt,
+    syncMeta.lastRemoteWriteAt,
+  );
+
+  if (
+    remoteMeta !== null &&
+    remoteUpdatedAt > 0 &&
+    syncMeta.firebaseUserId === userId &&
+    remoteUpdatedAt <= lastKnownRemoteAt
+  ) {
+    await markRemoteFirebaseRead(userId, remoteUpdatedAt);
+    return { reason: 'remote-unchanged', status: 'skipped' };
+  }
+
   const remote = await loadFirebaseAppDataForUser(userId);
-  const remoteUpdatedAt = remote.meta?.updatedAt ?? 0;
+  const loadedRemoteUpdatedAt = remote.meta?.updatedAt ?? remoteUpdatedAt;
 
   if (!remote.meta && !localSnapshotHasUserData(remote.snapshot)) {
     return { reason: 'no-remote-data', status: 'skipped' };
   }
 
-  await markRemoteFirebaseRead(userId, remoteUpdatedAt);
+  await markRemoteFirebaseRead(userId, loadedRemoteUpdatedAt);
 
   return {
     firebaseUserId: userId,
-    remoteUpdatedAt,
+    remoteUpdatedAt: loadedRemoteUpdatedAt,
     snapshot: remote.snapshot,
     status: 'loaded-remote',
   };

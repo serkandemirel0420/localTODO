@@ -129,7 +129,10 @@ import {
   googleAuthStore,
   type StoredGoogleAuth,
 } from './src/google/googleAuthStore';
-import { linkStoredGoogleAuthToFirebase } from './src/firebase/localTodoFirebase';
+import {
+  isFirebaseConfigured,
+  linkStoredGoogleAuthToFirebase,
+} from './src/firebase/localTodoFirebase';
 import {
   loadFirebaseAppDataFromBackend,
   queueFirebaseNotificationLogSave,
@@ -1497,6 +1500,7 @@ const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
+const INITIAL_FIREBASE_STARTUP_WAIT_MS = 5000;
 const EMPTY_VISIBLE_TODO_LIST_ROWS: VisibleTodoListRow[] = [];
 const EMPTY_LIST_GROUP_LABELS: string[] = [];
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
@@ -4229,6 +4233,9 @@ export default function App() {
   } | null>(null);
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
   const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
+  const [firebaseInitialSyncReady, setFirebaseInitialSyncReady] = useState(
+    () => !isFirebaseConfigured(),
+  );
   const [startupDataReady, setStartupDataReady] = useState(false);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
@@ -4736,16 +4743,40 @@ export default function App() {
     };
   }, []);
 
-  const applyLoadedSettings = useCallback((settings: AppSettings) => {
+  const applyLoadedSettings = useCallback((
+    settings: AppSettings,
+    options: { preserveVisibleView?: boolean } = {},
+  ) => {
+    const preserveVisibleView = options.preserveVisibleView === true;
+    const appliedSelectedFilters = preserveVisibleView
+      ? cloneTodoFilters(selectedFiltersRef.current)
+      : cloneTodoFilters(settings.selectedFilters);
+    const appliedRequiredFilters = pruneTodoFilters(
+      preserveVisibleView
+        ? cloneTodoFilters(requiredFiltersRef.current)
+        : cloneTodoFilters(settings.requiredFilters),
+      appliedSelectedFilters,
+    );
+    const appliedSettings: AppSettings = {
+      ...settings,
+      avoidedFilters: preserveVisibleView
+        ? cloneTodoFilters(avoidedFiltersRef.current)
+        : cloneTodoFilters(settings.avoidedFilters),
+      hideDoneTodos: preserveVisibleView ? hideDoneTodosRef.current : settings.hideDoneTodos,
+      listOrderMode: preserveVisibleView ? listOrderModeRef.current : settings.listOrderMode,
+      metaTagVisibility: preserveVisibleView
+        ? cloneMetaTagVisibility(metaTagVisibilityRef.current)
+        : cloneMetaTagVisibility(settings.metaTagVisibility),
+      requiredFilters: appliedRequiredFilters,
+      selectedFilters: appliedSelectedFilters,
+      todoGroupMode: preserveVisibleView ? todoGroupModeRef.current : settings.todoGroupMode,
+      todoSortMode: preserveVisibleView ? todoSortModeRef.current : settings.todoSortMode,
+    };
     const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
-      settings.listMenuTree,
-      settings.lastCreateTodoFilters,
+      appliedSettings.listMenuTree,
+      appliedSettings.lastCreateTodoFilters,
     );
-    const nextRequiredFilters = pruneTodoFilters(
-      settings.requiredFilters,
-      settings.selectedFilters,
-    );
-    const nextHistory = cloneAppHistoryState(settings.history);
+    const nextHistory = cloneAppHistoryState(appliedSettings.history);
     const nextHistorySequence = Math.max(
       0,
       ...nextHistory.undo.map((entry) => entry.id),
@@ -4761,29 +4792,29 @@ export default function App() {
       headerUndoTimerRef.current = null;
     }
 
-    setSelectedFilters(settings.selectedFilters);
-    setRequiredFilters(nextRequiredFilters);
-    setAvoidedFilters(settings.avoidedFilters);
-    setDeletedTodos(settings.deletedTodos);
-    setFilterConfigUiState(cloneFilterConfigUiState(settings.filterConfigUiState));
-    setFilterColors(settings.filterColors);
+    setSelectedFilters(appliedSettings.selectedFilters);
+    setRequiredFilters(appliedSettings.requiredFilters);
+    setAvoidedFilters(appliedSettings.avoidedFilters);
+    setDeletedTodos(appliedSettings.deletedTodos);
+    setFilterConfigUiState(cloneFilterConfigUiState(appliedSettings.filterConfigUiState));
+    setFilterColors(appliedSettings.filterColors);
     setGoogleDriveBackupEnabled(false);
-    setGoogleDriveLastBackupAt(settings.googleDriveLastBackupAt);
-    setGoogleDriveLastRestoreAt(settings.googleDriveLastRestoreAt);
-    setHideDoneTodos(settings.hideDoneTodos);
-    setDateLabelDisplayMode(settings.dateLabelDisplayMode);
-    setShowOverdueMetaTags(settings.showOverdueMetaTags);
-    setListMenuTree(cloneListMenuTree(settings.listMenuTree));
-    setCustomTags(normalizeCustomTags(settings.customTags));
-    setListOrderMode(settings.listOrderMode);
-    setMenuPresets(cloneMenuPresets(settings.menuPresets));
-    setPresetLabelTagsSeeded(settings.presetLabelTagsSeeded);
-    setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(settings.quickPresetNavIconNames));
-    setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(settings.quickPresetNavPresetIds));
-    setTodoGroupMode(settings.todoGroupMode);
-    setCollapsedTodoGroupIds(new Set(settings.collapsedTodoGroupIds));
-    setTodoSortMode(settings.todoSortMode);
-    setMetaTagVisibility(cloneMetaTagVisibility(settings.metaTagVisibility));
+    setGoogleDriveLastBackupAt(appliedSettings.googleDriveLastBackupAt);
+    setGoogleDriveLastRestoreAt(appliedSettings.googleDriveLastRestoreAt);
+    setHideDoneTodos(appliedSettings.hideDoneTodos);
+    setDateLabelDisplayMode(appliedSettings.dateLabelDisplayMode);
+    setShowOverdueMetaTags(appliedSettings.showOverdueMetaTags);
+    setListMenuTree(cloneListMenuTree(appliedSettings.listMenuTree));
+    setCustomTags(normalizeCustomTags(appliedSettings.customTags));
+    setListOrderMode(appliedSettings.listOrderMode);
+    setMenuPresets(cloneMenuPresets(appliedSettings.menuPresets));
+    setPresetLabelTagsSeeded(appliedSettings.presetLabelTagsSeeded);
+    setQuickPresetNavIconNames(cloneQuickPresetNavIconNames(appliedSettings.quickPresetNavIconNames));
+    setQuickPresetNavPresetIds(cloneQuickPresetNavPresetIds(appliedSettings.quickPresetNavPresetIds));
+    setTodoGroupMode(appliedSettings.todoGroupMode);
+    setCollapsedTodoGroupIds(new Set(appliedSettings.collapsedTodoGroupIds));
+    setTodoSortMode(appliedSettings.todoSortMode);
+    setMetaTagVisibility(cloneMetaTagVisibility(appliedSettings.metaTagVisibility));
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setCreateDraftFilters(nextLastCreateTodoFilters);
     setCreateDraftPriorityFromPicker(
@@ -4796,11 +4827,13 @@ export default function App() {
     setSettingsHistoryPreviewTarget(null);
 
     setGoogleDriveBackupStatus('Firebase sync enabled');
+    return appliedSettings;
   }, []);
 
   const applyFirebaseAppDataSnapshot = useCallback((
     snapshot: FirebaseAppDataSnapshot,
     remoteUpdatedAt: number,
+    options: { preserveVisibleView?: boolean } = {},
   ) => {
     const remoteTodos = removeInitialSeedTodos(snapshot.todos);
     const remoteNotificationLogEntries = normalizeNotificationLogEntries(
@@ -4818,9 +4851,9 @@ export default function App() {
     setSelectedTodoIds(new Set());
     setTodos(remoteTodos);
     setNotificationLogEntries(remoteNotificationLogEntries);
-    applyLoadedSettings(snapshot.settings);
+    const appliedSettings = applyLoadedSettings(snapshot.settings, options);
     localTodoStore.replaceAllLocal(remoteTodos).catch(() => undefined);
-    appSettingsStore.save(snapshot.settings).catch(() => undefined);
+    appSettingsStore.save(appliedSettings).catch(() => undefined);
     notificationLogStore
       .replaceAll(remoteNotificationLogEntries)
       .catch(() => undefined);
@@ -4855,10 +4888,34 @@ export default function App() {
   }, [applyLoadedSettings]);
 
   useEffect(() => {
-    if (loaded && settingsLoaded && notificationLogLoaded) {
+    if (loaded && settingsLoaded && notificationLogLoaded && firebaseInitialSyncReady) {
       setStartupDataReady(true);
     }
-  }, [loaded, notificationLogLoaded, settingsLoaded]);
+  }, [firebaseInitialSyncReady, loaded, notificationLogLoaded, settingsLoaded]);
+
+  useEffect(() => {
+    if (
+      !loaded ||
+      !settingsLoaded ||
+      !notificationLogLoaded ||
+      firebaseInitialSyncReady
+    ) {
+      return undefined;
+    }
+
+    const startupFallbackTimer = setTimeout(() => {
+      setFirebaseInitialSyncReady(true);
+    }, INITIAL_FIREBASE_STARTUP_WAIT_MS);
+
+    return () => {
+      clearTimeout(startupFallbackTimer);
+    };
+  }, [
+    firebaseInitialSyncReady,
+    loaded,
+    notificationLogLoaded,
+    settingsLoaded,
+  ]);
 
   const createSettingsSnapshot = useCallback((
     overrides: Partial<AppSettings> = {},
@@ -4981,7 +5038,9 @@ export default function App() {
           return;
         }
 
-        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
+        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt, {
+          preserveVisibleView: true,
+        });
         initialSyncCompleted = true;
         setFirebaseRemoteWritesEnabled(true);
       })
@@ -4991,6 +5050,7 @@ export default function App() {
       })
       .finally(() => {
         if (alive && initialSyncCompleted) {
+          setFirebaseInitialSyncReady(true);
           firebaseBackendPullReadyRef.current = true;
         }
       });
@@ -5032,7 +5092,9 @@ export default function App() {
           return;
         }
 
-        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
+        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt, {
+          preserveVisibleView: true,
+        });
       })
       .catch(() => undefined)
       .finally(() => {

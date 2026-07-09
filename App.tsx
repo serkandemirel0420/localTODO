@@ -1500,7 +1500,7 @@ const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
-const INITIAL_FIREBASE_STARTUP_WAIT_MS = 5000;
+const INITIAL_FIREBASE_SYNC_BAR_MAX_MS = 5000;
 const EMPTY_VISIBLE_TODO_LIST_ROWS: VisibleTodoListRow[] = [];
 const EMPTY_LIST_GROUP_LABELS: string[] = [];
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
@@ -4888,10 +4888,10 @@ export default function App() {
   }, [applyLoadedSettings]);
 
   useEffect(() => {
-    if (loaded && settingsLoaded && notificationLogLoaded && firebaseInitialSyncReady) {
+    if (loaded && settingsLoaded && notificationLogLoaded) {
       setStartupDataReady(true);
     }
-  }, [firebaseInitialSyncReady, loaded, notificationLogLoaded, settingsLoaded]);
+  }, [loaded, notificationLogLoaded, settingsLoaded]);
 
   useEffect(() => {
     if (
@@ -4905,7 +4905,7 @@ export default function App() {
 
     const startupFallbackTimer = setTimeout(() => {
       setFirebaseInitialSyncReady(true);
-    }, INITIAL_FIREBASE_STARTUP_WAIT_MS);
+    }, INITIAL_FIREBASE_SYNC_BAR_MAX_MS);
 
     return () => {
       clearTimeout(startupFallbackTimer);
@@ -14660,6 +14660,7 @@ export default function App() {
   );
 
   // Avoid painting transient list/preset state before local settings settle.
+  // Firebase startup sync continues in the background after the local copy is visible.
   if (!startupDataReady) {
     return (
       <GestureHandlerRootView style={styles.root}>
@@ -14676,6 +14677,9 @@ export default function App() {
       <SafeAreaView style={styles.safeArea}>
         <StatusBar barStyle="dark-content" />
         <View style={styles.screen}>
+        {!firebaseInitialSyncReady ? (
+          <View pointerEvents="none" style={styles.startupSyncBar} />
+        ) : null}
         <View style={styles.appHeader}>
           {todoSelectMode ? (
             <Pressable
@@ -18235,6 +18239,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: THEME_BG,
     position: 'relative',
+  },
+  startupSyncBar: {
+    backgroundColor: THEME_ACCENT,
+    height: 3,
+    left: 0,
+    opacity: 0.72,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 30,
   },
   listMenuOverlay: {
     position: 'absolute',

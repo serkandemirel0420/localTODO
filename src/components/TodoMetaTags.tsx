@@ -23,6 +23,8 @@ import {
 } from '../metaTags';
 import {
   decodeTodoReminder,
+  formatHabitIntervalLabel,
+  formatHabitIntervalShortLabel,
   formatReminderClockLabel,
   formatRepeatLabel,
 } from '../reminders';
@@ -273,10 +275,20 @@ function buildStatusIcons(
   reminderValues: string[] | undefined,
   pinned: boolean | undefined,
 ): StatusIconDescriptor[] {
-  const { time, repeat } = decodeTodoReminder(reminderValues ?? []);
+  const { habitHours, time, repeat } = decodeTodoReminder(reminderValues ?? []);
   const icons: StatusIconDescriptor[] = [];
 
-  if (time) {
+  if (habitHours) {
+    icons.push({
+      accessibilityLabel: `Habit ${formatHabitIntervalLabel(habitHours)}`,
+      color: REMINDER_STATUS_COLOR,
+      iconName: 'notifications-outline',
+      id: 'reminder',
+      label: formatHabitIntervalShortLabel(habitHours),
+    });
+  }
+
+  if (time && !habitHours) {
     icons.push({
       accessibilityLabel: `Reminder ${formatReminderClockLabel(time)}`,
       color: REMINDER_STATUS_COLOR,

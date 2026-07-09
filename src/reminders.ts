@@ -1,10 +1,13 @@
 export const REMINDER_PICKER_LABEL = 'Reminder';
+export const HABIT_PICKER_LABEL = 'Habit';
 export const REPEAT_PICKER_LABEL = 'Repeating';
 export const REPEATING_ITEMS_FILTER_LABEL = 'Repeating items';
 export const REPEATING_ITEMS_FILTER_VALUE = 'filter:repeating-items';
 const LEGACY_NOT_REPEATING_ITEMS_FILTER_VALUE = 'filter:not-repeating-items';
 
 export type RepeatPreset = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+export const HABIT_INTERVAL_HOUR_OPTIONS = [1, 2, 3, 4, 6, 8, 12] as const;
+export type HabitIntervalHours = typeof HABIT_INTERVAL_HOUR_OPTIONS[number];
 
 export type ReminderTime = {
   hours: number;
@@ -12,8 +15,14 @@ export type ReminderTime = {
 };
 
 export type TodoReminder = {
+  habitHours?: HabitIntervalHours | null;
   time: ReminderTime | null;
   repeat: RepeatPreset;
+};
+
+export type HabitIntervalOption = {
+  hours: HabitIntervalHours | null;
+  label: string;
 };
 
 export const REPEAT_SHORTCUT_MENU_ITEMS = ['Weekly', 'Monthly'] as const;
@@ -27,6 +36,7 @@ export const REPEAT_PRESETS: Array<{ id: RepeatPreset; label: string }> = [
 ];
 
 const REPEAT_PREFIX = 'repeat:';
+const HABIT_PREFIX = 'habit:';
 const REPEAT_STATUS_FILTER_VALUES = [
   REPEATING_ITEMS_FILTER_VALUE,
   LEGACY_NOT_REPEATING_ITEMS_FILTER_VALUE,
@@ -54,7 +64,10 @@ export const DEFAULT_REMINDER_TIME: ReminderTime = {
   minutes: 0,
 };
 
+export const DEFAULT_HABIT_INTERVAL_HOURS: HabitIntervalHours = 4;
+
 export const DEFAULT_TODO_REMINDER: TodoReminder = {
+  habitHours: null,
   time: null,
   repeat: 'none',
 };
@@ -83,11 +96,34 @@ const normalizeReminderTime = (time: ReminderTime | null): ReminderTime | null =
   return { hours, minutes };
 };
 
+export const formatHabitIntervalLabel = (hours: HabitIntervalHours): string => (
+  hours === 1 ? 'Every hour' : `Every ${hours} hours`
+);
+
+export const formatHabitIntervalShortLabel = (hours: HabitIntervalHours): string =>
+  `${hours}h`;
+
+export const HABIT_INTERVAL_OPTIONS: HabitIntervalOption[] = [
+  { hours: null, label: 'None' },
+  ...HABIT_INTERVAL_HOUR_OPTIONS.map((hours) => ({
+    hours,
+    label: formatHabitIntervalLabel(hours),
+  })),
+];
+
+const normalizeHabitIntervalHours = (
+  value: TodoReminder['habitHours'],
+): HabitIntervalHours | null => (
+  HABIT_INTERVAL_HOUR_OPTIONS.find((hours) => hours === value) ?? null
+);
+
 export const normalizeTodoReminder = (reminder: TodoReminder): TodoReminder => {
   const time = normalizeReminderTime(reminder.time);
   const repeat = isRepeatPreset(reminder.repeat) ? reminder.repeat : 'none';
+  const habitHours = normalizeHabitIntervalHours(reminder.habitHours);
 
   return {
+    habitHours,
     time,
     repeat,
   };
@@ -106,6 +142,15 @@ const parseTimePart = (value: string): ReminderTime | null => {
   }
 
   return { hours, minutes };
+};
+
+const parseHabitPart = (value: string): HabitIntervalHours | null => {
+  const match = /^(\d+)$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  return normalizeHabitIntervalHours(Number(match[1]) as HabitIntervalHours);
 };
 
 export const reminderTimeToDate = (time: ReminderTime): Date => {
@@ -134,21 +179,29 @@ export const formatRepeatLabel = (repeat: RepeatPreset): string => {
 
 export const encodeTodoReminder = (reminder: TodoReminder): string[] => {
   const normalized = normalizeTodoReminder(reminder);
+  const repeatPart = normalized.repeat === 'none'
+    ? null
+    : `${REPEAT_PREFIX}${normalized.repeat}`;
+  const habitPart = normalized.habitHours
+    ? `${HABIT_PREFIX}${normalized.habitHours}`
+    : null;
 
-  if (!normalized.time && normalized.repeat === 'none') {
+  if (!normalized.time && !repeatPart && !habitPart) {
     return [];
   }
 
+  const extraParts = [repeatPart, habitPart].filter((part): part is string => Boolean(part));
+
   if (normalized.time) {
     const base = `${pad2(normalized.time.hours)}:${pad2(normalized.time.minutes)}`;
-    if (normalized.repeat === 'none') {
+    if (extraParts.length === 0) {
       return [base];
     }
 
-    return [`${base}|${REPEAT_PREFIX}${normalized.repeat}`];
+    return [`${base}|${extraParts.join('|')}`];
   }
 
-  return [`${REPEAT_PREFIX}${normalized.repeat}`];
+  return [extraParts.join('|')];
 };
 
 export const decodeTodoReminder = (values: string[]): TodoReminder => {
@@ -162,6 +215,7 @@ export const decodeTodoReminder = (values: string[]): TodoReminder => {
   const time = firstSegment ? parseTimePart(firstSegment) : null;
 
   let repeat: RepeatPreset = 'none';
+  let habitHours: HabitIntervalHours | null = null;
   const repeatSegments = time ? segments.slice(1) : segments;
   repeatSegments.forEach((segment) => {
     if (segment.startsWith(REPEAT_PREFIX)) {
@@ -170,16 +224,23 @@ export const decodeTodoReminder = (values: string[]): TodoReminder => {
         repeat = candidate;
       }
     }
+
+    if (segment.startsWith(HABIT_PREFIX)) {
+      habitHours = parseHabitPart(segment.slice(HABIT_PREFIX.length));
+    }
   });
 
-  return normalizeTodoReminder({ time, repeat });
+  return normalizeTodoReminder({ habitHours, time, repeat });
 };
 
 export const hasTodoReminderTime = (values: string[]): boolean =>
   decodeTodoReminder(values).time !== null;
 
+export const hasTodoHabitInterval = (values: string[]): boolean =>
+  decodeTodoReminder(values).habitHours !== null;
+
 export const hasTodoRepeat = (values: string[]): boolean =>
-  decodeTodoReminder(values).repeat !== 'none';
+  decodeTodoReminder(values).repeat !== 'none' || hasTodoHabitInterval(values);
 
 export const hasRepeatingItemsFilter = (values: string[]): boolean =>
   values.includes(REPEATING_ITEMS_FILTER_VALUE);
@@ -207,6 +268,15 @@ export const formatReminderTimeMenuLabel = (values: string[]): string => {
   return formatReminderClockLabel(time);
 };
 
+export const formatHabitMenuLabel = (values: string[]): string => {
+  const { habitHours } = decodeTodoReminder(values);
+  if (!habitHours) {
+    return HABIT_PICKER_LABEL;
+  }
+
+  return formatHabitIntervalLabel(habitHours);
+};
+
 export const formatRepeatMenuLabel = (values: string[]): string => {
   const { repeat } = decodeTodoReminder(values);
   if (repeat === 'none') {
@@ -217,7 +287,11 @@ export const formatRepeatMenuLabel = (values: string[]): string => {
 };
 
 export const formatTodoReminderMetaLabel = (values: string[]): string | null => {
-  const { time, repeat } = decodeTodoReminder(values);
+  const { habitHours, time, repeat } = decodeTodoReminder(values);
+  if (habitHours) {
+    return formatHabitIntervalLabel(habitHours);
+  }
+
   if (!time) {
     return null;
   }
@@ -252,6 +326,10 @@ export const isDatePickerMenuItemSelected = (
     return hasTodoReminderTime(reminderLabels);
   }
 
+  if (menuLabel === HABIT_PICKER_LABEL) {
+    return hasTodoHabitInterval(reminderLabels);
+  }
+
   const repeatShortcut = getRepeatPresetForMenuLabel(menuLabel);
   if (repeatShortcut) {
     return decodeTodoReminder(reminderLabels).repeat === repeatShortcut;
@@ -275,6 +353,10 @@ export const getDatePickerMenuDisplayLabel = (
     return formatReminderTimeMenuLabel(reminderLabels);
   }
 
+  if (menuLabel === HABIT_PICKER_LABEL) {
+    return formatHabitMenuLabel(reminderLabels);
+  }
+
   const repeatShortcut = getRepeatPresetForMenuLabel(menuLabel);
   if (repeatShortcut) {
     return formatRepeatLabel(repeatShortcut);
@@ -288,4 +370,7 @@ export const getDatePickerMenuDisplayLabel = (
 };
 
 export const isReminderPickerMenuLabel = (label: string): boolean =>
-  label === REMINDER_PICKER_LABEL || label === REPEAT_PICKER_LABEL || isRepeatShortcutMenuLabel(label);
+  label === REMINDER_PICKER_LABEL ||
+  label === HABIT_PICKER_LABEL ||
+  label === REPEAT_PICKER_LABEL ||
+  isRepeatShortcutMenuLabel(label);

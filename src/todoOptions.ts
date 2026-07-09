@@ -5,6 +5,7 @@ import {
   OVERDUE_DATE_LABEL,
 } from './dates';
 import {
+  HABIT_PICKER_LABEL,
   REMINDER_PICKER_LABEL,
   REPEAT_PICKER_LABEL,
 } from './reminders';
@@ -23,6 +24,7 @@ export const DATE_MENU_ITEMS: string[] = [
 /** Date drawer list: date choices + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS,
+  HABIT_PICKER_LABEL,
   REMINDER_PICKER_LABEL,
   REPEAT_PICKER_LABEL,
 ];

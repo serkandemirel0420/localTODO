@@ -56,6 +56,7 @@ import {
   type ReminderTimeModalHandle,
   type ReminderTimeModalSource,
 } from './src/components/ReminderTimeModal';
+import { HabitReminderModal } from './src/components/HabitReminderModal';
 import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { FilterConfigScreen } from './src/components/FilterConfigScreen';
 import { QuickPresetNav } from './src/components/QuickPresetNav';
@@ -238,7 +239,9 @@ import {
   encodeTodoReminder,
   getDatePickerMenuDisplayLabel,
   getRepeatPresetForMenuLabel,
+  HABIT_PICKER_LABEL,
   hasRepeatingItemsFilter,
+  hasTodoHabitInterval,
   hasTodoReminderTime,
   hasTodoRepeat,
   isDatePickerMenuItemSelected,
@@ -250,6 +253,7 @@ import {
   removeRepeatStatusFilters,
   REPEAT_PICKER_LABEL,
   toggleRepeatingItemsFilterValue,
+  type HabitIntervalHours,
   type ReminderTime,
   type RepeatPreset,
 } from './src/reminders';
@@ -2023,11 +2027,12 @@ const getCreatableReminderValues = (values: string[]) => {
   }
 
   const currentReminder = decodeTodoReminder(reminderValues);
-  if (currentReminder.repeat !== 'none') {
+  if (currentReminder.repeat !== 'none' || currentReminder.habitHours) {
     return reminderValues;
   }
 
   return encodeTodoReminder({
+    habitHours: null,
     time: currentReminder.time,
     repeat: CREATE_SECTION_DEFAULT_REPEAT,
   });
@@ -4261,6 +4266,9 @@ export default function App() {
   const datePickerDateLabelsRef = useRef<string[]>([]);
   const datePickerRepeatRef = useRef<RepeatPreset | null>(null);
   const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
+  const [habitReminderModalVisible, setHabitReminderModalVisible] = useState(false);
+  const habitReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
+  const [habitDraft, setHabitDraft] = useState<HabitIntervalHours | null>(null);
   const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
   const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
   const [repeatDraft, setRepeatDraft] = useState<RepeatPreset>('none');
@@ -6567,6 +6575,7 @@ export default function App() {
     Keyboard.dismiss();
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(null);
   }, []);
@@ -6582,7 +6591,9 @@ export default function App() {
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
+    setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
 
@@ -6618,6 +6629,7 @@ export default function App() {
     setQuery('');
     setItemSearchState(null);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
@@ -6762,6 +6774,11 @@ export default function App() {
       return true;
     }
 
+    if (habitReminderModalVisible) {
+      setHabitReminderModalVisible(false);
+      return true;
+    }
+
     if (repeatReminderModalVisible) {
       setRepeatReminderModalVisible(false);
       return true;
@@ -6843,6 +6860,7 @@ export default function App() {
     exitTodoSelectMode,
     flushFilterConfigUndoBatch,
     googleDriveBackupPicker,
+    habitReminderModalVisible,
     menuMode,
     navTab,
     searchKeywordModalVisible,
@@ -7059,7 +7077,9 @@ export default function App() {
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
+    setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     Keyboard.dismiss();
     hideCreateFromSettingsCue();
@@ -7092,7 +7112,9 @@ export default function App() {
     setCreateDraftFilters(nextFilters);
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
+    setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     Keyboard.dismiss();
     hideCreateFromSettingsCue();
@@ -7269,6 +7291,7 @@ export default function App() {
     Keyboard.dismiss();
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(picker);
     triggerSubtleHaptic();
@@ -7832,6 +7855,7 @@ export default function App() {
       if (repeat) {
         const currentReminder = decodeTodoReminder(current.reminder);
         nextFilters.reminder = encodeTodoReminder({
+          habitHours: null,
           time: currentReminder.time,
           repeat,
         });
@@ -7861,6 +7885,7 @@ export default function App() {
       if (repeat) {
         const currentReminder = decodeTodoReminder(current.reminder);
         nextFilters.reminder = encodeTodoReminder({
+          habitHours: currentReminder.habitHours,
           time: currentReminder.time,
           repeat: 'none',
         });
@@ -7891,11 +7916,13 @@ export default function App() {
     setCreateDraftFilters((current) => ({
       ...current,
       date: [],
-      reminder: encodeTodoReminder({ time: null, repeat: 'none' }),
+      reminder: encodeTodoReminder({ habitHours: null, time: null, repeat: 'none' }),
     }));
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
+    setHabitDraft(null);
     setRepeatDraft('none');
     triggerSubtleHaptic();
   }, []);
@@ -8041,11 +8068,16 @@ export default function App() {
     datePickerApplyRef.current = source;
     datePickerDateLabelsRef.current = [...dateLabels];
     datePickerRepeatRef.current = repeat;
+    reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
     setDatePickerValue(getInitialDatePickerValue(dateLabels));
     setDatePickerVisible(true);
   }, []);
 
   const openCreateReminderModal = useCallback(() => {
+    setHabitReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
     reminderTimeModalRef.current?.open({
       source: 'create',
       value: decodeTodoReminder(createDraftFilters.reminder).time,
@@ -8063,7 +8095,7 @@ export default function App() {
 
         return {
           ...draft,
-          reminder: encodeTodoReminder({ time, repeat: current.repeat }),
+          reminder: encodeTodoReminder({ habitHours: null, time, repeat: current.repeat }),
         };
       });
     } else {
@@ -8075,7 +8107,7 @@ export default function App() {
 
           return {
             ...filters,
-            reminder: encodeTodoReminder({ time, repeat: current.repeat }),
+            reminder: encodeTodoReminder({ habitHours: null, time, repeat: current.repeat }),
           };
         });
       }
@@ -8084,7 +8116,66 @@ export default function App() {
     triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
+  const openCreateHabitModal = useCallback(() => {
+    const current = decodeTodoReminder(createDraftFilters.reminder);
+
+    habitReminderApplyRef.current = 'create';
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setHabitDraft(current.habitHours ?? null);
+    setHabitReminderModalVisible(true);
+    triggerSubtleHaptic();
+  }, [createDraftFilters.reminder]);
+
+  const closeCreateHabitModal = useCallback(() => {
+    setHabitReminderModalVisible(false);
+  }, []);
+
+  const confirmCreateHabit = useCallback((habitHours: HabitIntervalHours | null) => {
+    if (habitReminderApplyRef.current === 'create') {
+      setCreateDraftFilters((draft) => {
+        const current = decodeTodoReminder(draft.reminder);
+
+        return {
+          ...draft,
+          reminder: habitHours
+            ? encodeTodoReminder({ habitHours, time: null, repeat: 'none' })
+            : encodeTodoReminder({
+                habitHours: null,
+                time: current.time,
+                repeat: current.repeat,
+              }),
+        };
+      });
+    } else {
+      const targetIds = getCurrentTodoEditTargetIds();
+
+      if (targetIds.length > 0) {
+        updateTodoFiltersForIds(targetIds, (filters) => {
+          const current = decodeTodoReminder(filters.reminder);
+
+          return {
+            ...filters,
+            reminder: habitHours
+              ? encodeTodoReminder({ habitHours, time: null, repeat: 'none' })
+              : encodeTodoReminder({
+                  habitHours: null,
+                  time: current.time,
+                  repeat: current.repeat,
+                }),
+          };
+        });
+      }
+    }
+
+    setHabitDraft(habitHours);
+    setHabitReminderModalVisible(false);
+    triggerSubtleHaptic();
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+
   const openCreateRepeatModal = useCallback(() => {
+    reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     repeatReminderApplyRef.current = 'create';
     setRepeatDraft(decodeTodoReminder(createDraftFilters.reminder).repeat);
     setRepeatReminderModalVisible(true);
@@ -8102,7 +8193,7 @@ export default function App() {
 
         return {
           ...draft,
-          reminder: encodeTodoReminder({ time: current.time, repeat }),
+          reminder: encodeTodoReminder({ habitHours: null, time: current.time, repeat }),
         };
       });
     } else {
@@ -8114,7 +8205,7 @@ export default function App() {
 
           return {
             ...filters,
-            reminder: encodeTodoReminder({ time: current.time, repeat }),
+            reminder: encodeTodoReminder({ habitHours: null, time: current.time, repeat }),
           };
         });
       }
@@ -8130,7 +8221,11 @@ export default function App() {
 
       return {
         ...draft,
-        reminder: encodeTodoReminder({ time: null, repeat: current.repeat }),
+        reminder: encodeTodoReminder({
+          habitHours: current.habitHours,
+          time: null,
+          repeat: current.repeat,
+        }),
       };
     });
     reminderTimeModalRef.current?.close();
@@ -8143,7 +8238,27 @@ export default function App() {
 
       return {
         ...draft,
-        reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
+        reminder: encodeTodoReminder({
+          habitHours: current.habitHours,
+          time: current.time,
+          repeat: 'none',
+        }),
+      };
+    });
+    triggerSubtleHaptic();
+  }, []);
+
+  const clearCreateHabit = useCallback(() => {
+    setCreateDraftFilters((draft) => {
+      const current = decodeTodoReminder(draft.reminder);
+
+      return {
+        ...draft,
+        reminder: encodeTodoReminder({
+          habitHours: null,
+          time: current.time,
+          repeat: current.repeat,
+        }),
       };
     });
     triggerSubtleHaptic();
@@ -8158,6 +8273,8 @@ export default function App() {
 
     const reminderValues = todos.find((todo) => todo.id === firstTargetId)?.filters.reminder ?? [];
 
+    setHabitReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
     reminderTimeModalRef.current?.open({
       source: 'activeTodo',
       value: decodeTodoReminder(reminderValues).time,
@@ -8174,9 +8291,29 @@ export default function App() {
 
     const reminderValues = todos.find((todo) => todo.id === firstTargetId)?.filters.reminder ?? [];
 
+    reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
     repeatReminderApplyRef.current = 'activeTodo';
     setRepeatDraft(decodeTodoReminder(reminderValues).repeat);
     setRepeatReminderModalVisible(true);
+    triggerSubtleHaptic();
+  }, [getCurrentTodoEditTargetIds, todos]);
+
+  const openActiveTodoHabitModal = useCallback(() => {
+    const [firstTargetId] = getCurrentTodoEditTargetIds();
+
+    if (!firstTargetId) {
+      return;
+    }
+
+    const reminderValues = todos.find((todo) => todo.id === firstTargetId)?.filters.reminder ?? [];
+    const current = decodeTodoReminder(reminderValues);
+
+    habitReminderApplyRef.current = 'activeTodo';
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setHabitDraft(current.habitHours ?? null);
+    setHabitReminderModalVisible(true);
     triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, todos]);
 
@@ -8192,10 +8329,36 @@ export default function App() {
 
       return {
         ...filters,
-        reminder: encodeTodoReminder({ time: null, repeat: current.repeat }),
+        reminder: encodeTodoReminder({
+          habitHours: current.habitHours,
+          time: null,
+          repeat: current.repeat,
+        }),
       };
     });
     reminderTimeModalRef.current?.close();
+    triggerSubtleHaptic();
+  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+
+  const clearActiveTodoHabit = useCallback(() => {
+    const targetIds = getCurrentTodoEditTargetIds();
+
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    updateTodoFiltersForIds(targetIds, (filters) => {
+      const current = decodeTodoReminder(filters.reminder);
+
+      return {
+        ...filters,
+        reminder: encodeTodoReminder({
+          habitHours: null,
+          time: current.time,
+          repeat: current.repeat,
+        }),
+      };
+    });
     triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
@@ -8211,13 +8374,22 @@ export default function App() {
 
       return {
         ...filters,
-        reminder: encodeTodoReminder({ time: current.time, repeat: 'none' }),
+        reminder: encodeTodoReminder({
+          habitHours: current.habitHours,
+          time: current.time,
+          repeat: 'none',
+        }),
       };
     });
     triggerSubtleHaptic();
   }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
 
   const handleCreateDrawerDatePress = useCallback((label: string) => {
+    if (label === HABIT_PICKER_LABEL) {
+      openCreateHabitModal();
+      return;
+    }
+
     if (label === REMINDER_PICKER_LABEL) {
       openCreateReminderModal();
       return;
@@ -8248,6 +8420,7 @@ export default function App() {
   }, [
     clearCreateDraftDateOptions,
     createDraftFilters.date,
+    openCreateHabitModal,
     openCreateReminderModal,
     openCreateRepeatModal,
     openDatePicker,
@@ -9850,6 +10023,11 @@ export default function App() {
       return;
     }
 
+    if (label === HABIT_PICKER_LABEL) {
+      openActiveTodoHabitModal();
+      return;
+    }
+
     const repeatShortcut = getRepeatPresetForMenuLabel(label);
     if (repeatShortcut) {
       const targetIds = getCurrentTodoEditTargetIds();
@@ -9875,6 +10053,7 @@ export default function App() {
   }, [
     getCurrentTodoEditTargetIds,
     menuFilters.date,
+    openActiveTodoHabitModal,
     openActiveTodoReminderModal,
     openActiveTodoRepeatModal,
     openDatePicker,
@@ -15800,11 +15979,13 @@ export default function App() {
                               : item.label;
                             const clearAccessibilityLabel = item.label === REMINDER_PICKER_LABEL
                               ? 'Clear reminder time'
-                              : item.label === REPEAT_PICKER_LABEL || isRepeatShortcutValue
-                                ? 'Clear repeating'
-                                : isRepeatStatusValue
-                                  ? `Clear ${displayLabel}`
-                                : `Clear ${displayLabel}`;
+                              : item.label === HABIT_PICKER_LABEL
+                                ? 'Clear habit'
+                                : item.label === REPEAT_PICKER_LABEL || isRepeatShortcutValue
+                                  ? 'Clear repeating'
+                                  : isRepeatStatusValue
+                                    ? `Clear ${displayLabel}`
+                                  : `Clear ${displayLabel}`;
                             const canRequireValue =
                               !hasTodoEditTargets &&
                               item.label !== CUSTOM_DATE_LABEL &&
@@ -15885,6 +16066,11 @@ export default function App() {
 
                                     if (item.label === REMINDER_PICKER_LABEL) {
                                       clearActiveTodoReminderTime();
+                                      return;
+                                    }
+
+                                    if (item.label === HABIT_PICKER_LABEL) {
+                                      clearActiveTodoHabit();
                                       return;
                                     }
 
@@ -16387,12 +16573,17 @@ export default function App() {
                         label === REMINDER_PICKER_LABEL &&
                         hasTodoReminderTime(createDraftFilters.reminder)
                       );
+                      const showHabitClear = (
+                        label === HABIT_PICKER_LABEL &&
+                        hasTodoHabitInterval(createDraftFilters.reminder)
+                      );
                       const showRepeatClear = (
                         label === REPEAT_PICKER_LABEL
                           ? selected && hasTodoRepeat(createDraftFilters.reminder)
                           : isRepeatShortcutMenuLabel(label) && selected
                       );
-                      const showRowClear = showCustomDateClear || showReminderClear || showRepeatClear;
+                      const showRowClear =
+                        showCustomDateClear || showReminderClear || showHabitClear || showRepeatClear;
                       const useSplitDatePickerRow = (
                         createDrawerPicker === 'date' &&
                         (isReminderPickerMenuLabel(label) || showCustomDateClear)
@@ -16433,7 +16624,9 @@ export default function App() {
                                     ? 'Clear date'
                                     : label === REMINDER_PICKER_LABEL
                                       ? 'Clear reminder time'
-                                      : 'Clear repeating'
+                                      : label === HABIT_PICKER_LABEL
+                                        ? 'Clear habit'
+                                        : 'Clear repeating'
                                 }
                                 hitSlop={8}
                                 onPress={() => {
@@ -16444,6 +16637,11 @@ export default function App() {
 
                                   if (label === REMINDER_PICKER_LABEL) {
                                     clearCreateReminderTime();
+                                    return;
+                                  }
+
+                                  if (label === HABIT_PICKER_LABEL) {
+                                    clearCreateHabit();
                                     return;
                                   }
 
@@ -16686,6 +16884,13 @@ export default function App() {
         <ReminderTimeModal
           ref={reminderTimeModalRef}
           onConfirm={confirmReminderTime}
+        />
+
+        <HabitReminderModal
+          onClose={closeCreateHabitModal}
+          onConfirm={confirmCreateHabit}
+          value={habitDraft}
+          visible={habitReminderModalVisible}
         />
 
         <RepeatReminderModal

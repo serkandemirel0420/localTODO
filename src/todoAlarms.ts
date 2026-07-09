@@ -11,8 +11,10 @@ import {
 } from './dates';
 import {
   decodeTodoReminder,
+  formatHabitIntervalLabel,
   formatReminderClockLabel,
   formatRepeatLabel,
+  type HabitIntervalHours,
   type ReminderTime,
   type RepeatPreset,
 } from './reminders';
@@ -23,6 +25,7 @@ import { type Todo } from './todos';
 const TODO_ALARM_CHANNEL_ID = 'todo-alarms';
 const TODO_ALARM_IDENTIFIER_PREFIX = 'local-todo:todo-alarm:';
 const MINIMUM_ONE_TIME_DELAY_MS = 1000;
+const SECONDS_PER_HOUR = 60 * 60;
 
 type ExactAlarmNativeModule = {
   canScheduleExactAlarms?: () => Promise<boolean>;
@@ -426,11 +429,24 @@ const createRepeatingTrigger = (
   return null;
 };
 
+const createHabitIntervalTrigger = (
+  habitHours: HabitIntervalHours,
+): Notifications.SchedulableNotificationTriggerInput => ({
+  channelId: TODO_ALARM_CHANNEL_ID,
+  repeats: true,
+  seconds: habitHours * SECONDS_PER_HOUR,
+  type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+});
+
 const createTodoAlarmTrigger = (
   todo: Todo,
   now = new Date(),
 ): Notifications.NotificationTriggerInput => {
-  const { repeat, time } = decodeTodoReminder(todo.filters.reminder);
+  const { habitHours, repeat, time } = decodeTodoReminder(todo.filters.reminder);
+  if (habitHours) {
+    return createHabitIntervalTrigger(habitHours);
+  }
+
   if (!time) {
     return null;
   }
@@ -480,7 +496,7 @@ const createTodoAlarmRequest = (
   }
 
   const reminder = decodeTodoReminder(todo.filters.reminder);
-  if (!reminder.time) {
+  if (!reminder.time && !reminder.habitHours) {
     return null;
   }
 
@@ -492,6 +508,11 @@ const createTodoAlarmRequest = (
   const repeatLabel = reminder.repeat === 'none'
     ? ''
     : ` (${formatRepeatLabel(reminder.repeat)})`;
+  const subtitle = reminder.habitHours
+    ? formatHabitIntervalLabel(reminder.habitHours)
+    : reminder.time
+      ? `${formatReminderClockLabel(reminder.time)}${repeatLabel}`
+      : '';
   const title = todo.text.trim() || 'Todo';
   const body = todo.content.trim() || null;
 
@@ -504,7 +525,7 @@ const createTodoAlarmRequest = (
       },
       priority: Notifications.AndroidNotificationPriority.HIGH,
       sound: 'default',
-      subtitle: `${formatReminderClockLabel(reminder.time)}${repeatLabel}`,
+      subtitle,
       title,
     },
     identifier: getTodoAlarmIdentifier(todo.id),

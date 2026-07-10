@@ -70,6 +70,8 @@ const GROUPED_SWIPE_DRAG_START_DISTANCE = 6;
 const GROUPED_SWIPE_DIRECTION_RATIO = 1.1;
 const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
+const TODO_ROW_MOBILE_TITLE_WRAP_COLUMN = 28;
+const TODO_ROW_MOBILE_MAX_WIDTH = 480;
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
 const TODO_ROW_CHECKBOX_LONG_PRESS_WIDTH = 56;
@@ -316,6 +318,30 @@ const getTodoRowTextPreview = (text: string, maxLength: number) => {
     .trimEnd()}${TODO_ROW_PREVIEW_ELLIPSIS}`;
 };
 
+const wrapTextAtWordBoundaries = (text: string, maxLineLength: number) => {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
+
+  words.forEach((word) => {
+    const nextLine = currentLine ? `${currentLine} ${word}` : word;
+
+    if (currentLine && nextLine.length > maxLineLength) {
+      lines.push(currentLine);
+      currentLine = word;
+      return;
+    }
+
+    currentLine = nextLine;
+  });
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.join('\n');
+};
+
 const getBestTodoDateLabel = (todo: Todo): string => {
   const now = new Date();
   let bestLabel = '';
@@ -529,6 +555,7 @@ function TodoRowComponent({
   selectMode = false,
   showOverdueMetaTags = true,
   swipeDisabled = false,
+  viewportWidth,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const groupedSwipeableRef = useRef<TodoSwipeController | null>(null);
@@ -564,13 +591,21 @@ function TodoRowComponent({
     () => item.text.trim().replace(/\s+/g, ' '),
     [item.text],
   );
+  const wrappedDisplayTitle = useMemo(
+    () => (
+      isGroupedLayout && viewportWidth <= TODO_ROW_MOBILE_MAX_WIDTH
+        ? wrapTextAtWordBoundaries(displayTitle, TODO_ROW_MOBILE_TITLE_WRAP_COLUMN)
+        : displayTitle
+    ),
+    [displayTitle, isGroupedLayout, viewportWidth],
+  );
   const searchHighlightTerms = useMemo(
     () => getSearchHighlightTerms(searchHighlightQuery),
     [searchHighlightQuery],
   );
   const highlightedTitlePreview = useMemo(
-    () => renderHighlightedPreview(displayTitle, searchHighlightTerms),
-    [displayTitle, searchHighlightTerms],
+    () => renderHighlightedPreview(wrappedDisplayTitle, searchHighlightTerms),
+    [searchHighlightTerms, wrappedDisplayTitle],
   );
   const highlightedContentPreview = useMemo(
     () => (
@@ -1202,6 +1237,7 @@ function TodoRowComponent({
             {hasDisplayTitle ? (
               <View style={styles.titleBlock}>
                 <Text
+                  numberOfLines={0}
                   style={[
                     styles.text,
                     isVisuallyDone && styles.textDone,
@@ -1694,18 +1730,18 @@ const styles = StyleSheet.create({
   },
   textPressable: {
     alignSelf: 'flex-start',
+    flexBasis: 0,
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
-    width: '100%',
   },
   contentColumn: {
     alignItems: 'stretch',
     alignSelf: 'stretch',
+    flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
     paddingRight: TODO_ROW_TEXT_RIGHT_INSET,
-    width: '100%',
   },
   contentColumnGrouped: {
     paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
@@ -1714,7 +1750,6 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     minWidth: 0,
     position: 'relative',
-    width: '100%',
   },
   text: {
     alignSelf: 'stretch',

@@ -5835,13 +5835,29 @@ export default function App() {
     applyUndoHistoryEntry(entry);
   }, [applyUndoHistoryEntry, clearHeaderUndoButton, clearUndoToast, undoHistory]);
 
-  const currentHistorySnapshot = settingsModalVisible ? captureUndoSnapshot() : null;
-  const undoHistoryDisplayEntries = currentHistorySnapshot
-    ? buildUndoHistoryDisplayEntries('undo', undoHistory, currentHistorySnapshot)
-    : [];
-  const redoHistoryDisplayEntries = currentHistorySnapshot
-    ? buildUndoHistoryDisplayEntries('redo', redoHistory, currentHistorySnapshot)
-    : [];
+  const shouldBuildSettingsHistory =
+    settingsModalVisible &&
+    (settingsHistoryExpanded || settingsHistoryPreviewTarget !== null);
+  const currentHistorySnapshot = useMemo(
+    () => (shouldBuildSettingsHistory ? captureUndoSnapshot() : null),
+    [captureUndoSnapshot, shouldBuildSettingsHistory],
+  );
+  const undoHistoryDisplayEntries = useMemo(
+    () => (
+      currentHistorySnapshot
+        ? buildUndoHistoryDisplayEntries('undo', undoHistory, currentHistorySnapshot)
+        : []
+    ),
+    [currentHistorySnapshot, undoHistory],
+  );
+  const redoHistoryDisplayEntries = useMemo(
+    () => (
+      currentHistorySnapshot
+        ? buildUndoHistoryDisplayEntries('redo', redoHistory, currentHistorySnapshot)
+        : []
+    ),
+    [currentHistorySnapshot, redoHistory],
+  );
   const settingsHistoryPreviewEntry = settingsHistoryPreviewTarget
     ? (settingsHistoryPreviewTarget.mode === 'undo'
       ? undoHistoryDisplayEntries

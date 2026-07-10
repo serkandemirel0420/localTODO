@@ -37,6 +37,8 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
+  HABIT_ITEMS_FILTER_LABEL,
+  hasHabitItemsFilter,
   hasRepeatingItemsFilter,
   REPEATING_ITEMS_FILTER_LABEL,
 } from '../reminders';
@@ -96,6 +98,7 @@ type FilterConfigScreenProps = {
   onClose: () => void;
   onShowResults: () => void;
   onToggleFilter: (filterKey: FilterKey, value: string) => void;
+  onToggleHabitItemsFilter: () => void;
   onToggleRepeatingItemsFilter: () => void;
   onDateMenuPress: (label: string) => void;
   onRemoveFilter: (filterKey: FilterKey, value: string) => void;
@@ -224,6 +227,7 @@ export const FilterConfigScreen = ({
   onClose,
   onShowResults,
   onToggleFilter,
+  onToggleHabitItemsFilter,
   onToggleRepeatingItemsFilter,
   onDateMenuPress,
   onRemoveFilter,
@@ -246,6 +250,8 @@ export const FilterConfigScreen = ({
   );
   const getDateMenuDisplayLabel = (menuLabel: string) =>
     getDateMenuItemDisplayLabel(menuLabel, filters.date, dateLabelDisplayMode);
+  const habitItemsFilterActive = hasHabitItemsFilter(filters.reminder);
+  const habitItemsFilterAvoided = hasHabitItemsFilter(avoidedFilters.reminder);
   const repeatingItemsFilterActive = hasRepeatingItemsFilter(filters.reminder);
   const repeatingItemsFilterAvoided = hasRepeatingItemsFilter(avoidedFilters.reminder);
   const activeListFilterLabels = [
@@ -262,8 +268,10 @@ export const FilterConfigScreen = ({
   ];
   const activeDateFilterLabels = [
     ...filters.date.map((value) => formatActiveDateLabel(value)),
+    ...(habitItemsFilterActive ? [HABIT_ITEMS_FILTER_LABEL] : []),
     ...(repeatingItemsFilterActive ? [REPEATING_ITEMS_FILTER_LABEL] : []),
     ...avoidedFilters.date.map((value) => `Avoid ${formatActiveDateLabel(value)}`),
+    ...(habitItemsFilterAvoided ? [`Avoid ${HABIT_ITEMS_FILTER_LABEL}`] : []),
     ...(repeatingItemsFilterAvoided ? [`Avoid ${REPEATING_ITEMS_FILTER_LABEL}`] : []),
   ];
   const oneHandedScrollOffset = useMemo(
@@ -408,6 +416,10 @@ export const FilterConfigScreen = ({
     ? 'Show 1 result'
     : `Show ${resultCount} results`;
 
+  if (!visible) {
+    return null;
+  }
+
   return (
     <Modal
       animationType="slide"
@@ -458,7 +470,7 @@ export const FilterConfigScreen = ({
             subtitle={formatSelectionSummary(activeListFilterLabels, 'All lists')}
             title="Lists"
           >
-            {listMenuItems.map((item) => {
+            {expandedSections.lists ? listMenuItems.map((item) => {
               const selected = isListItemSelected(item);
               const listColorTheme = getFilterColorTheme(
                 filterColors,
@@ -494,7 +506,7 @@ export const FilterConfigScreen = ({
                   ) : null}
                 </View>
               );
-            })}
+            }) : null}
           </AccordionSection>
 
           <AccordionSection
@@ -505,14 +517,14 @@ export const FilterConfigScreen = ({
             subtitle={formatSelectionSummary(activeTagFilterLabels, 'All tags')}
             title="Tags"
           >
-            {availableTags.length === 0 ? (
+            {expandedSections.tags && availableTags.length === 0 ? (
               <Text style={styles.emptySectionText}>No tags</Text>
-            ) : availableTags.map((label) => renderOptionRow(
+            ) : expandedSections.tags ? availableTags.map((label) => renderOptionRow(
               `tag-${label}`,
               label,
               filters.tag.includes(label),
               () => onToggleFilter('tag', label),
-            ))}
+            )) : null}
           </AccordionSection>
 
           <AccordionSection
@@ -523,7 +535,7 @@ export const FilterConfigScreen = ({
             subtitle={formatSelectionSummary(activePriorityFilterLabels, 'Any priority')}
             title="Priority"
           >
-            {PRIORITY_MENU_ITEMS.map((label) => {
+            {expandedSections.priority ? PRIORITY_MENU_ITEMS.map((label) => {
               const selected = filters.priority.includes(label);
               const colorTheme = getFilterColorTheme(filterColors, 'priority', label);
 
@@ -534,7 +546,7 @@ export const FilterConfigScreen = ({
                 () => onToggleFilter('priority', label),
                 { colorTheme },
               );
-            })}
+            }) : null}
           </AccordionSection>
 
           <AccordionSection
@@ -548,6 +560,7 @@ export const FilterConfigScreen = ({
             )}
             title="Date"
           >
+            {expandedSections.date ? <>
             <Pressable
               accessibilityLabel="Date label style"
               accessibilityRole="button"
@@ -609,11 +622,18 @@ export const FilterConfigScreen = ({
               );
             })}
             {renderOptionRow(
+              'date-habit-items',
+              HABIT_ITEMS_FILTER_LABEL,
+              habitItemsFilterActive,
+              onToggleHabitItemsFilter,
+            )}
+            {renderOptionRow(
               'date-repeating-items',
               REPEATING_ITEMS_FILTER_LABEL,
               repeatingItemsFilterActive,
               onToggleRepeatingItemsFilter,
             )}
+            </> : null}
           </AccordionSection>
 
           <AccordionSection
@@ -624,12 +644,12 @@ export const FilterConfigScreen = ({
             subtitle={TODO_SORT_LABELS[sortMode]}
             title="Sort"
           >
-            {TODO_SORT_OPTIONS.map((item) => renderOptionRow(
+            {expandedSections.sort ? TODO_SORT_OPTIONS.map((item) => renderOptionRow(
               `sort-${item.mode}`,
               item.label,
               sortMode === item.mode,
               () => onSelectSort(item.mode),
-            ))}
+            )) : null}
           </AccordionSection>
 
           <AccordionSection
@@ -640,12 +660,12 @@ export const FilterConfigScreen = ({
             subtitle={TODO_GROUP_LABELS[groupMode]}
             title="Group"
           >
-            {TODO_GROUP_OPTIONS.map((item) => renderOptionRow(
+            {expandedSections.group ? TODO_GROUP_OPTIONS.map((item) => renderOptionRow(
               `group-${item.mode}`,
               item.label,
               groupMode === item.mode,
               () => onSelectGroup(item.mode),
-            ))}
+            )) : null}
           </AccordionSection>
 
           <AccordionSection
@@ -654,12 +674,12 @@ export const FilterConfigScreen = ({
             subtitle={formatMetaTagVisibilitySummary(metaTagVisibility)}
             title="Meta tags"
           >
-            {META_TAG_KEYS.map((key) => renderOptionRow(
+            {expandedSections.metaTags ? META_TAG_KEYS.map((key) => renderOptionRow(
               `meta-${key}`,
               META_TAG_LABELS[key],
               metaTagVisibility[key],
               () => onToggleMetaTag(key),
-            ))}
+            )) : null}
           </AccordionSection>
 
           <View style={styles.filterActionRow}>

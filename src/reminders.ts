@@ -1,6 +1,8 @@
 export const REMINDER_PICKER_LABEL = 'Reminder';
 export const HABIT_PICKER_LABEL = 'Habit';
 export const REPEAT_PICKER_LABEL = 'Repeating';
+export const HABIT_ITEMS_FILTER_LABEL = 'Habit items';
+export const HABIT_ITEMS_FILTER_VALUE = 'filter:habit-items';
 export const REPEATING_ITEMS_FILTER_LABEL = 'Repeating items';
 export const REPEATING_ITEMS_FILTER_VALUE = 'filter:repeating-items';
 const LEGACY_NOT_REPEATING_ITEMS_FILTER_VALUE = 'filter:not-repeating-items';
@@ -38,6 +40,7 @@ export const REPEAT_PRESETS: Array<{ id: RepeatPreset; label: string }> = [
 const REPEAT_PREFIX = 'repeat:';
 const HABIT_PREFIX = 'habit:';
 const REPEAT_STATUS_FILTER_VALUES = [
+  HABIT_ITEMS_FILTER_VALUE,
   REPEATING_ITEMS_FILTER_VALUE,
   LEGACY_NOT_REPEATING_ITEMS_FILTER_VALUE,
 ];
@@ -245,6 +248,9 @@ export const hasTodoRepeat = (values: string[]): boolean =>
 export const hasRepeatingItemsFilter = (values: string[]): boolean =>
   values.includes(REPEATING_ITEMS_FILTER_VALUE);
 
+export const hasHabitItemsFilter = (values: string[]): boolean =>
+  values.includes(HABIT_ITEMS_FILTER_VALUE);
+
 export const removeRepeatingItemsFilter = (values: string[]): string[] =>
   values.filter((value) => value !== REPEATING_ITEMS_FILTER_VALUE);
 
@@ -253,10 +259,22 @@ export const removeRepeatStatusFilters = (values: string[]): string[] =>
 
 export const toggleRepeatingItemsFilterValue = (values: string[]): string[] => {
   const reminderValues = removeRepeatStatusFilters(values);
+  const habitFilterValues = hasHabitItemsFilter(values) ? [HABIT_ITEMS_FILTER_VALUE] : [];
 
   return hasRepeatingItemsFilter(values)
-    ? reminderValues
-    : [...reminderValues, REPEATING_ITEMS_FILTER_VALUE];
+    ? [...reminderValues, ...habitFilterValues]
+    : [...reminderValues, ...habitFilterValues, REPEATING_ITEMS_FILTER_VALUE];
+};
+
+export const toggleHabitItemsFilterValue = (values: string[]): string[] => {
+  const reminderValues = removeRepeatStatusFilters(values);
+  const repeatingFilterValues = hasRepeatingItemsFilter(values)
+    ? [REPEATING_ITEMS_FILTER_VALUE]
+    : [];
+
+  return hasHabitItemsFilter(values)
+    ? [...reminderValues, ...repeatingFilterValues]
+    : [...reminderValues, HABIT_ITEMS_FILTER_VALUE, ...repeatingFilterValues];
 };
 
 export const formatReminderTimeMenuLabel = (values: string[]): string => {
@@ -305,15 +323,16 @@ export const formatTodoReminderMetaLabel = (values: string[]): string | null => 
 };
 
 export const normalizeReminderFilterValues = (values: string[]): string[] => {
+  const hasHabitFilter = hasHabitItemsFilter(values);
   const hasRepeatingFilter = hasRepeatingItemsFilter(values);
   const reminderValues = removeRepeatStatusFilters(values);
   const normalizedReminder = encodeTodoReminder(decodeTodoReminder(reminderValues));
+  const statusFilters = [
+    ...(hasHabitFilter ? [HABIT_ITEMS_FILTER_VALUE] : []),
+    ...(hasRepeatingFilter ? [REPEATING_ITEMS_FILTER_VALUE] : []),
+  ];
 
-  if (hasRepeatingFilter) {
-    return [...normalizedReminder, REPEATING_ITEMS_FILTER_VALUE];
-  }
-
-  return normalizedReminder;
+  return [...normalizedReminder, ...statusFilters];
 };
 
 export const isDatePickerMenuItemSelected = (

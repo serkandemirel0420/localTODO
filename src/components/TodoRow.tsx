@@ -39,7 +39,6 @@ import {
 } from '../todoOptions';
 import { getEffectiveTodoDateLabels } from '../todoDates';
 import {
-  getTodoRowTitleAreaWidth,
   TODO_ROW_TITLE_MAX_CHARS,
   type Todo,
 } from '../todos';
@@ -73,7 +72,6 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_TEXT_RIGHT_INSET = 36;
 const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
-const TODO_ROW_TITLE_ESTIMATED_CHAR_WIDTH = 8.8;
 const TODO_ROW_CHECKBOX_LONG_PRESS_WIDTH = 56;
 const TODO_ROW_GROUPED_CHECKBOX_LONG_PRESS_WIDTH = 52;
 const TODO_ROW_PRIORITY_RAIL_LONG_PRESS_OFFSET = 17;
@@ -88,16 +86,6 @@ type SearchHighlightRange = {
 };
 
 type SwipeActionAnimation = ReturnType<Animated.Value['interpolate']>;
-
-type TextLayoutLine = {
-  text?: string;
-};
-
-type TextLayoutEvent = {
-  nativeEvent: {
-    lines?: TextLayoutLine[];
-  };
-};
 
 const isCheckboxLongPress = (
   event: LongPressGestureHandlerStateChangeEvent,
@@ -541,14 +529,12 @@ function TodoRowComponent({
   selectMode = false,
   showOverdueMetaTags = true,
   swipeDisabled = false,
-  viewportWidth,
 }: TodoRowProps) {
   const swipeableRef = useRef<Swipeable | null>(null);
   const groupedSwipeableRef = useRef<TodoSwipeController | null>(null);
   const createFromSettingsLongPressActiveRef = useRef(false);
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
-  const [singleLineTitleMeasurementKey, setSingleLineTitleMeasurementKey] = useState('');
   const isGroupedLayout = layout === 'grouped';
   const fallbackRowHeight = isGroupedLayout ? 52 : 56;
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
@@ -603,46 +589,12 @@ function TodoRowComponent({
   const isVisuallyDone = item.done || isCompletionFeedback;
   const swipeEnabled = !swipeDisabled && !isPendingDelete && !isMenuTarget && !selectMode;
   const useStaticRowContainer = selectMode;
-  const titleMeasurementKey = [
-    Math.round(viewportWidth),
-    layout,
-    item.pinned ? 'pinned' : 'normal',
-    priorityRailTheme ? 'priority' : 'plain',
-    displayTitle,
-  ].join('|');
-  const titleAreaWidth = getTodoRowTitleAreaWidth(viewportWidth, {
-    grouped: isGroupedLayout,
-    hasPriorityRail: Boolean(priorityRailTheme),
-    pinned: item.pinned,
-  });
-  const estimatedTitleCharsPerLine = Math.max(
-    12,
-    Math.floor(titleAreaWidth / TODO_ROW_TITLE_ESTIMATED_CHAR_WIDTH),
-  );
-  const isClearlySingleLineTitle = Array.from(displayTitle).length <= estimatedTitleCharsPerLine;
-  const titleNumberOfLines =
-    isClearlySingleLineTitle || singleLineTitleMeasurementKey === titleMeasurementKey ? 1 : 2;
   const hasDisplayTitle = displayTitle.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim().length > 0;
   const canCreateFromSettings =
     !selectMode &&
     !isPendingDelete &&
     !isCompletionFeedback &&
     Boolean(onCreateFromSettings);
-
-  const handleTitleTextLayout = useCallback((event: TextLayoutEvent) => {
-    const lines = event.nativeEvent.lines ?? [];
-    const visibleLineCount = lines.filter((line) => (line.text ?? '').trim()).length;
-    const measuredLineCount = visibleLineCount || lines.length;
-    const isSingleVisibleLine = measuredLineCount <= 1;
-
-    setSingleLineTitleMeasurementKey((currentKey) => {
-      if (isSingleVisibleLine) {
-        return currentKey === titleMeasurementKey ? currentKey : titleMeasurementKey;
-      }
-
-      return currentKey === titleMeasurementKey ? '' : currentKey;
-    });
-  }, [titleMeasurementKey]);
 
   useEffect(() => {
     if (!isMenuTarget) {
@@ -1251,8 +1203,7 @@ function TodoRowComponent({
               <View style={styles.titleBlock}>
                 <Text
                   ellipsizeMode="tail"
-                  numberOfLines={titleNumberOfLines}
-                  onTextLayout={handleTitleTextLayout}
+                  numberOfLines={2}
                   style={[
                     styles.text,
                     isVisuallyDone && styles.textDone,
@@ -1512,6 +1463,7 @@ const styles = StyleSheet.create({
   },
   swipeableContainer: {
     alignSelf: 'stretch',
+    backgroundColor: THEME_CARD,
     borderRadius: ROW_BORDER_RADIUS,
     minHeight: 56,
     overflow: 'hidden',
@@ -1550,6 +1502,7 @@ const styles = StyleSheet.create({
   },
   lightweightSwipeContainer: {
     alignSelf: 'stretch',
+    backgroundColor: THEME_CARD,
     minHeight: 52,
     overflow: 'hidden',
     position: 'relative',
@@ -1559,30 +1512,34 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     backgroundColor: THEME_CARD,
     minHeight: 52,
+    overflow: 'hidden',
     width: '100%',
   },
   lightweightSwipeActionsLeft: {
     alignItems: 'center',
+    backgroundColor: THEME_CARD,
     bottom: 0,
     flexDirection: 'row',
     gap: SWIPE_ACTION_GAP,
     justifyContent: 'center',
-    left: SWIPE_ACTION_EDGE_PADDING,
+    left: 0,
     position: 'absolute',
     top: 0,
-    width: LEFT_SWIPE_ACTION_WIDTH - SWIPE_ACTION_EDGE_PADDING,
+    width: LEFT_SWIPE_ACTION_WIDTH,
   },
   lightweightSwipeActionsRight: {
     alignItems: 'center',
+    backgroundColor: THEME_CARD,
     bottom: 0,
     justifyContent: 'center',
     position: 'absolute',
-    right: SWIPE_ACTION_EDGE_PADDING,
+    right: 0,
     top: 0,
-    width: RIGHT_SWIPE_ACTION_WIDTH - SWIPE_ACTION_EDGE_PADDING,
+    width: RIGHT_SWIPE_ACTION_WIDTH,
   },
   swipeActionsRoot: {
     alignSelf: 'stretch',
+    backgroundColor: THEME_CARD,
   },
   swipeActionsRootLeft: {
     width: LEFT_SWIPE_ACTION_WIDTH,

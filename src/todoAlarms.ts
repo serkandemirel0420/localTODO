@@ -24,8 +24,15 @@ import { type Todo } from './todos';
 
 const TODO_ALARM_CHANNEL_ID = 'todo-alarms';
 const TODO_ALARM_IDENTIFIER_PREFIX = 'local-todo:todo-alarm:';
+const HABIT_ALARM_IDENTIFIER_PART = ':habit:';
 const MINIMUM_ONE_TIME_DELAY_MS = 1000;
-const SECONDS_PER_HOUR = 60 * 60;
+export const DEFAULT_HABIT_QUIET_HOURS_START = 0;
+export const DEFAULT_HABIT_QUIET_HOURS_END = 7;
+
+export type TodoAlarmSettings = {
+  habitNotificationsPaused: boolean;
+  habitQuietHoursEnabled: boolean;
+};
 
 type ExactAlarmNativeModule = {
   canScheduleExactAlarms?: () => Promise<boolean>;
@@ -36,6 +43,14 @@ let channelPromise: Promise<void> | null = null;
 let permissionPromise: Promise<boolean> | null = null;
 let exactAlarmPromptVisible = false;
 let exactAlarmPromptShown = false;
+let todoAlarmSettings: TodoAlarmSettings = {
+  habitNotificationsPaused: false,
+  habitQuietHoursEnabled: true,
+};
+
+export const setTodoAlarmSettings = (settings: TodoAlarmSettings) => {
+  todoAlarmSettings = { ...settings };
+};
 
 const exactAlarmModule = NativeModules.LocalTodoExactAlarm as
   | ExactAlarmNativeModule
@@ -132,11 +147,18 @@ const ensureTodoAlarmSchedulingReady = async () => {
 const getTodoAlarmIdentifier = (todoId: string) =>
   `${TODO_ALARM_IDENTIFIER_PREFIX}${todoId}`;
 
-const getTodoIdFromAlarmIdentifier = (identifier: string) => (
-  identifier.startsWith(TODO_ALARM_IDENTIFIER_PREFIX)
-    ? identifier.slice(TODO_ALARM_IDENTIFIER_PREFIX.length)
-    : null
-);
+const getHabitAlarmIdentifier = (todoId: string, hour: number) =>
+  `${getTodoAlarmIdentifier(todoId)}${HABIT_ALARM_IDENTIFIER_PART}${hour}`;
+
+const getTodoIdFromAlarmIdentifier = (identifier: string) => {
+  if (!identifier.startsWith(TODO_ALARM_IDENTIFIER_PREFIX)) {
+    return null;
+  }
+
+  const value = identifier.slice(TODO_ALARM_IDENTIFIER_PREFIX.length);
+  const habitPartIndex = value.lastIndexOf(HABIT_ALARM_IDENTIFIER_PART);
+  return habitPartIndex >= 0 ? value.slice(0, habitPartIndex) : value;
+};
 
 const getTodoAlarmRequestTodoId = (
   request: Notifications.NotificationRequest | null | undefined,
@@ -429,23 +451,41 @@ const createRepeatingTrigger = (
   return null;
 };
 
-const createHabitIntervalTrigger = (
-  habitHours: HabitIntervalHours,
+const createHabitClockTrigger = (
+  hour: number,
 ): Notifications.SchedulableNotificationTriggerInput => ({
   channelId: TODO_ALARM_CHANNEL_ID,
-  repeats: true,
-  seconds: habitHours * SECONDS_PER_HOUR,
-  type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+  hour,
+  minute: 0,
+  type: Notifications.SchedulableTriggerInputTypes.DAILY,
 });
+
+export const getHabitNotificationHours = (
+  habitHours: HabitIntervalHours,
+  createdAt: number,
+  quietHoursEnabled = true,
+): number[] => {
+  const createdDate = new Date(createdAt);
+  const firstWholeHour = (createdDate.getHours() + 1) % 24;
+
+  return Array.from({ length: 24 }, (_, hour) => hour).filter((hour) => {
+    if (
+      quietHoursEnabled &&
+      hour >= DEFAULT_HABIT_QUIET_HOURS_START &&
+      hour < DEFAULT_HABIT_QUIET_HOURS_END
+    ) {
+      return false;
+    }
+
+    return (hour - firstWholeHour + 24) % habitHours === 0;
+  });
+};
 
 const createTodoAlarmTrigger = (
   todo: Todo,
   now = new Date(),
 ): Notifications.NotificationTriggerInput => {
-  const { habitHours, repeat, time } = decodeTodoReminder(todo.filters.reminder);
-  if (habitHours) {
-    return createHabitIntervalTrigger(habitHours);
-  }
+  const { repeat, time } = decodeTodoReminder(todo.filters.reminder);
 
   if (!time) {
     return null;
@@ -487,22 +527,17 @@ const createTodoAlarmTrigger = (
   };
 };
 
-const createTodoAlarmRequest = (
+const createTodoAlarmRequests = (
   todo: Todo,
   now = new Date(),
-): Notifications.NotificationRequestInput | null => {
+): Notifications.NotificationRequestInput[] => {
   if (todo.done) {
-    return null;
+    return [];
   }
 
   const reminder = decodeTodoReminder(todo.filters.reminder);
   if (!reminder.time && !reminder.habitHours) {
-    return null;
-  }
-
-  const trigger = createTodoAlarmTrigger(todo, now);
-  if (!trigger) {
-    return null;
+    return [];
   }
 
   const repeatLabel = reminder.repeat === 'none'
@@ -515,22 +550,46 @@ const createTodoAlarmRequest = (
       : '';
   const title = todo.text.trim() || 'Todo';
   const body = todo.content.trim() || null;
+  const content: Notifications.NotificationContentInput = {
+    body,
+    data: {
+      todoId: todo.id,
+      type: 'todo-reminder',
+    },
+    priority: Notifications.AndroidNotificationPriority.HIGH,
+    sound: 'default',
+    subtitle,
+    title,
+  };
 
-  return {
+  if (reminder.habitHours) {
+    if (todoAlarmSettings.habitNotificationsPaused) {
+      return [];
+    }
+
+    return getHabitNotificationHours(
+      reminder.habitHours,
+      todo.createdAt,
+      todoAlarmSettings.habitQuietHoursEnabled,
+    ).map((hour) => ({
+      content,
+      identifier: getHabitAlarmIdentifier(todo.id, hour),
+      trigger: createHabitClockTrigger(hour),
+    }));
+  }
+
+  const trigger = createTodoAlarmTrigger(todo, now);
+  if (!trigger) {
+    return [];
+  }
+
+  return [{
     content: {
-      body,
-      data: {
-        todoId: todo.id,
-        type: 'todo-reminder',
-      },
-      priority: Notifications.AndroidNotificationPriority.HIGH,
-      sound: 'default',
-      subtitle,
-      title,
+      ...content,
     },
     identifier: getTodoAlarmIdentifier(todo.id),
     trigger,
-  };
+  }];
 };
 
 export const consumeLastTodoAlarmNotificationResponse = async (
@@ -622,8 +681,8 @@ export const syncTodoAlarm = async (todo: Todo) => {
     return;
   }
 
-  const request = createTodoAlarmRequest(todo);
-  if (!request) {
+  const requests = createTodoAlarmRequests(todo);
+  if (requests.length === 0) {
     await cancelTodoAlarm(todo.id);
     return;
   }
@@ -634,7 +693,9 @@ export const syncTodoAlarm = async (todo: Todo) => {
     return;
   }
 
-  await Notifications.scheduleNotificationAsync(request);
+  for (const request of requests) {
+    await Notifications.scheduleNotificationAsync(request);
+  }
 };
 
 export const reconcileTodoAlarms = async (todos: Todo[]) => {
@@ -644,19 +705,14 @@ export const reconcileTodoAlarms = async (todos: Todo[]) => {
 
   const now = new Date();
   const requests = todos
-    .map((todo) => createTodoAlarmRequest(todo, now))
-    .filter((request): request is Notifications.NotificationRequestInput => (
-      request !== null && Boolean(request.identifier)
-    ));
-  const expectedIdentifiers = new Set(
-    requests.map((request) => request.identifier!),
-  );
+    .flatMap((todo) => createTodoAlarmRequests(todo, now))
+    .filter((request) => Boolean(request.identifier));
   const currentTodoIds = new Set(todos.map((todo) => todo.id));
 
-  await cancelScheduledTodoAlarmNotifications(
-    () => true,
-    [...expectedIdentifiers],
-  );
+  // Reconciliation owns every scheduled notification in this app. Clear the
+  // package queue unconditionally so legacy interval alarms cannot survive
+  // when an older request has missing or differently serialized todo data.
+  await Notifications.cancelAllScheduledNotificationsAsync();
 
   await dismissPresentedTodoAlarmNotifications((todoId) => !currentTodoIds.has(todoId));
 

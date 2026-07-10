@@ -8,6 +8,7 @@ import {
 import { resolveMaterialCommunityIconName } from './materialCommunityIconNames';
 
 export type QuickPresetNavItem = {
+  color: string | null;
   displayLabel: string;
   iconName: string;
   id: string;
@@ -50,11 +51,13 @@ export const resolveQuickPresetNavSlotIconName = (
 };
 
 export const buildQuickPresetNavItems = ({
+  getPresetColor,
   menuPresetById,
   menuPresets,
   quickPresetNavIconNames,
   quickPresetNavPresetIds,
 }: {
+  getPresetColor?: (presetId: string) => string | null;
   menuPresetById: Map<string, StoredMenuPreset>;
   menuPresets: StoredMenuPreset[];
   quickPresetNavIconNames: QuickPresetNavIconNames;
@@ -86,6 +89,7 @@ export const buildQuickPresetNavItems = ({
     }
 
     items.push({
+      color: getPresetColor?.(preset.id) ?? null,
       displayLabel: preset.label,
       iconName: resolveQuickPresetNavSlotIconName(
         index,

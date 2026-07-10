@@ -140,6 +140,8 @@ export type AppHistorySnapshot = {
   deletedTodos: DeletedTodo[];
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
+  habitNotificationsPaused: boolean;
+  habitQuietHoursEnabled: boolean;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
   listMenuTree: StoredListMenuNode[];
@@ -216,6 +218,8 @@ export type AppSettings = {
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
+  habitNotificationsPaused: boolean;
+  habitQuietHoursEnabled: boolean;
   history: AppHistoryState;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
@@ -407,6 +411,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   googleDriveBackupEnabled: false,
   googleDriveLastBackupAt: null,
   googleDriveLastRestoreAt: null,
+  habitNotificationsPaused: false,
+  habitQuietHoursEnabled: true,
   history: {
     redo: [],
     undo: [],
@@ -917,6 +923,8 @@ const normalizeAppHistorySnapshotRecord = (
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
     filterColors: normalizeFilterColors(value.filterColors),
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
+    habitNotificationsPaused: value.habitNotificationsPaused === true,
+    habitQuietHoursEnabled: value.habitQuietHoursEnabled !== false,
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
     listMenuTree: normalizeListMenuTree(value.listMenuTree),
@@ -1069,6 +1077,8 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       typeof value.googleDriveLastBackupAt === 'string' ? value.googleDriveLastBackupAt : null,
     googleDriveLastRestoreAt:
       typeof value.googleDriveLastRestoreAt === 'string' ? value.googleDriveLastRestoreAt : null,
+    habitNotificationsPaused: value.habitNotificationsPaused === true,
+    habitQuietHoursEnabled: value.habitQuietHoursEnabled !== false,
     history: normalizeAppHistoryState(value.history),
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),

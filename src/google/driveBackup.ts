@@ -108,6 +108,8 @@ export type BackupSettings = {
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
+  habitNotificationsPaused: boolean;
+  habitQuietHoursEnabled: boolean;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
   listMenuTree: BackupListMenuNode[];
@@ -630,6 +632,8 @@ export const createBackupPayload = (
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
       googleDriveLastBackupAt: exportedAt,
       googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
+      habitNotificationsPaused: settings.habitNotificationsPaused,
+      habitQuietHoursEnabled: settings.habitQuietHoursEnabled,
       hideDoneTodos: settings.hideDoneTodos,
       lastCreateTodoFilters: cloneTodoFilters(settings.lastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(settings.listMenuTree),
@@ -690,6 +694,8 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
         typeof settings.googleDriveLastBackupAt === 'string' ? settings.googleDriveLastBackupAt : null,
       googleDriveLastRestoreAt:
         typeof settings.googleDriveLastRestoreAt === 'string' ? settings.googleDriveLastRestoreAt : null,
+      habitNotificationsPaused: settings.habitNotificationsPaused === true,
+      habitQuietHoursEnabled: settings.habitQuietHoursEnabled !== false,
       hideDoneTodos: settings.hideDoneTodos === true,
       lastCreateTodoFilters: normalizeTodoFilters(settings.lastCreateTodoFilters),
       listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),

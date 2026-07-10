@@ -164,7 +164,7 @@ export function QuickPresetNav({
           {items.map((item) => {
             const selected = isItemSelected(item);
             const iconColor = item.preset
-              ? selected ? accentColor : inactiveColor
+              ? item.color ?? (selected ? accentColor : inactiveColor)
               : emptyColor;
 
             return (
@@ -194,7 +194,9 @@ export function QuickPresetNav({
                 onPressOut={() => onReleaseSlot(item.slotNumber)}
                 style={({ pressed }) => [
                   styles.item,
-                  selected && { backgroundColor: selectedBackgroundColor },
+                  selected && {
+                    backgroundColor: item.color ? `${item.color}20` : selectedBackgroundColor,
+                  },
                   !item.preset && styles.itemEmpty,
                   pressed && styles.itemPressed,
                 ]}

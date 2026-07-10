@@ -232,6 +232,7 @@ import {
   consumeLastTodoAlarmNotificationResponse,
   getPresentedTodoAlarmNotificationLogEntries,
   reconcileTodoAlarms,
+  setTodoAlarmSettings,
   syncTodoAlarm,
 } from './src/todoAlarms';
 import {
@@ -239,7 +240,11 @@ import {
   encodeTodoReminder,
   getDatePickerMenuDisplayLabel,
   getRepeatPresetForMenuLabel,
+  formatHabitMenuLabel,
+  HABIT_ITEMS_FILTER_LABEL,
+  HABIT_ITEMS_FILTER_VALUE,
   HABIT_PICKER_LABEL,
+  hasHabitItemsFilter,
   hasRepeatingItemsFilter,
   hasTodoHabitInterval,
   hasTodoReminderTime,
@@ -252,6 +257,7 @@ import {
   REPEATING_ITEMS_FILTER_VALUE,
   removeRepeatStatusFilters,
   REPEAT_PICKER_LABEL,
+  toggleHabitItemsFilterValue,
   toggleRepeatingItemsFilterValue,
   type HabitIntervalHours,
   type ReminderTime,
@@ -376,6 +382,8 @@ const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
   deletedTodos: true,
   filterColors: true,
   googleDriveBackupEnabled: true,
+  habitNotificationsPaused: true,
+  habitQuietHoursEnabled: true,
   hideDoneTodos: true,
   lastCreateTodoFilters: true,
   listMenuTree: true,
@@ -875,6 +883,18 @@ const buildUndoSnapshotChangeDetails = (
   );
   compareHistoryScalar(
     details,
+    'Habit notifications',
+    formatHistoryToggle(before.habitNotificationsPaused, 'Paused', 'Active'),
+    formatHistoryToggle(after.habitNotificationsPaused, 'Paused', 'Active'),
+  );
+  compareHistoryScalar(
+    details,
+    'Habit quiet hours',
+    formatHistoryToggle(before.habitQuietHoursEnabled, '12 AM-7 AM', 'Off'),
+    formatHistoryToggle(after.habitQuietHoursEnabled, '12 AM-7 AM', 'Off'),
+  );
+  compareHistoryScalar(
+    details,
     'Sort',
     TODO_SORT_LABELS[before.todoSortMode],
     TODO_SORT_LABELS[after.todoSortMode],
@@ -1171,6 +1191,11 @@ const MENU_SECTION_FILTER_KEYS: Partial<Record<MenuMode, FilterKey>> = {
 
 const REPEAT_STATUS_FILTER_ITEMS = [
   {
+    displayLabel: HABIT_ITEMS_FILTER_LABEL,
+    id: 'habit-items',
+    value: HABIT_ITEMS_FILTER_VALUE,
+  },
+  {
     displayLabel: REPEATING_ITEMS_FILTER_LABEL,
     id: 'repeating-items',
     value: REPEATING_ITEMS_FILTER_VALUE,
@@ -1226,12 +1251,14 @@ const buildActiveFilterMenuRows = (
 };
 
 const isRepeatStatusFilterValue = (value: string) =>
-  value === REPEATING_ITEMS_FILTER_VALUE;
+  REPEAT_STATUS_FILTER_ITEMS.some((item) => item.value === value);
 
-const getRepeatStatusFilterDisplayLabel = (_value: string) => REPEATING_ITEMS_FILTER_LABEL;
+const getRepeatStatusFilterDisplayLabel = (value: string) =>
+  REPEAT_STATUS_FILTER_ITEMS.find((item) => item.value === value)?.displayLabel
+  ?? REPEATING_ITEMS_FILTER_LABEL;
 
 const hasRepeatStatusFilter = (values: string[]) =>
-  hasRepeatingItemsFilter(values);
+  REPEAT_STATUS_FILTER_ITEMS.some((item) => values.includes(item.value));
 
 const countRepeatStatusFilters = (values: string[]) =>
   REPEAT_STATUS_FILTER_ITEMS.filter((item) => values.includes(item.value)).length;
@@ -1971,6 +1998,9 @@ type NavTab = 'calendar' | 'menu' | 'notifications' | 'search' | 'settings';
 type CreateDrawerPicker = 'date' | 'list' | 'priority' | 'tags';
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
+const CREATE_DRAWER_DATE_PICKER_MENU_ITEMS = DATE_PICKER_MENU_ITEMS.filter(
+  (label) => label !== HABIT_PICKER_LABEL,
+);
 
 const LIST_SUBSECTION_NOT_SECTIONED_LABEL = 'Not Sectioned';
 const CREATE_SECTION_DEFAULT_REPEAT: RepeatPreset = 'daily';
@@ -3110,6 +3140,7 @@ const formatPresetSummary = (
     filters.tag.length > 0 ? formatPresetCount(filters.tag.length, 'tag') : null,
     filters.priority.length > 0 ? formatPresetCount(filters.priority.length, 'priority') : null,
     filters.date.length > 0 ? formatPresetCount(filters.date.length, 'date') : null,
+    hasHabitItemsFilter(filters.reminder) ? HABIT_ITEMS_FILTER_LABEL : null,
     hasRepeatingItemsFilter(filters.reminder) ? REPEATING_ITEMS_FILTER_LABEL : null,
     requiredFilterCount > 0 ? `${requiredFilterCount} must` : null,
     avoidedFilterCount > 0 ? `${avoidedFilterCount} avoid` : null,
@@ -3246,13 +3277,19 @@ const todoMatchesDateFilterGroup = (
   now = new Date(),
 ) => {
   const hasDateFilters = filters.date.length > 0;
+  const hasHabitFilter = hasHabitItemsFilter(filters.reminder);
   const hasRepeatingFilter = hasRepeatingItemsFilter(filters.reminder);
 
-  if (!hasDateFilters && !hasRepeatingFilter) {
+  if (!hasDateFilters && !hasHabitFilter && !hasRepeatingFilter) {
     return true;
   }
 
+  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
+  if (hasHabitFilter && todoIsHabit) {
+    return true;
+  }
+
   if (hasRepeatingFilter && todoRepeats) {
     return true;
   }
@@ -3298,6 +3335,7 @@ const todoMatchesRequiredFilters = (
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
   const requiredReminderValues = removeRepeatStatusFilters(requiredFilters.reminder);
+  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
 
   return (
@@ -3310,6 +3348,10 @@ const todoMatchesRequiredFilters = (
     requiredFilters.priority.every((value) => todo.filters.priority.includes(value)) &&
     requiredFilters.tag.every((value) => todoHasTagFilter(todo, value)) &&
     requiredReminderValues.every((value) => todo.filters.reminder.includes(value)) &&
+    (
+      !hasHabitItemsFilter(requiredFilters.reminder) ||
+      todoIsHabit
+    ) &&
     (
       !hasRepeatingItemsFilter(requiredFilters.reminder) ||
       todoRepeats
@@ -3331,6 +3373,7 @@ const todoMatchesAvoidedFilters = (
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
   const avoidedReminderValues = removeRepeatStatusFilters(avoidedFilters.reminder);
+  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
 
   return (
@@ -3343,6 +3386,10 @@ const todoMatchesAvoidedFilters = (
     avoidedFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
     avoidedFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
     avoidedReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
+    (
+      hasHabitItemsFilter(avoidedFilters.reminder) &&
+      todoIsHabit
+    ) ||
     (
       hasRepeatingItemsFilter(avoidedFilters.reminder) &&
       todoRepeats
@@ -3364,6 +3411,7 @@ const todoMatchesAnyOptionalFilter = (
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
   const optionalReminderValues = removeRepeatStatusFilters(optionalFilters.reminder);
+  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
   const todoRepeats = hasTodoRepeat(todo.filters.reminder);
 
   return (
@@ -3376,6 +3424,10 @@ const todoMatchesAnyOptionalFilter = (
     optionalFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
     optionalFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
     optionalReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
+    (
+      hasHabitItemsFilter(optionalFilters.reminder) &&
+      todoIsHabit
+    ) ||
     (
       hasRepeatingItemsFilter(optionalFilters.reminder) &&
       todoRepeats
@@ -4100,13 +4152,20 @@ function SettingsColorRow({
   sourceLabel,
   value,
 }: SettingsColorRowProps) {
+  const [paletteExpanded, setPaletteExpanded] = useState(false);
   const label = displayLabel ?? value;
   const selectedAccentKey = selectedAccent?.toUpperCase() ?? null;
   const noColorSelected = selectedAccent === null;
 
   return (
     <View style={styles.settingsColorRow}>
-      <View style={styles.settingsColorLabelWrap}>
+      <Pressable
+        accessibilityLabel={`${paletteExpanded ? 'Close' : 'Choose'} color for ${label}`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: paletteExpanded }}
+        onPress={() => setPaletteExpanded((current) => !current)}
+        style={styles.settingsColorLabelWrap}
+      >
         <View
           style={[
             styles.settingsColorPreviewDot,
@@ -4131,8 +4190,13 @@ function SettingsColorRow({
             {sourceLabel}
           </Text>
         </View>
-      </View>
-      <ScrollView
+        <Ionicons
+          color="#8F877F"
+          name={paletteExpanded ? 'chevron-up' : 'chevron-down'}
+          size={16}
+        />
+      </Pressable>
+      {paletteExpanded ? <ScrollView
         horizontal
         keyboardShouldPersistTaps="handled"
         showsHorizontalScrollIndicator={false}
@@ -4182,7 +4246,7 @@ function SettingsColorRow({
             </Pressable>
           );
         })}
-      </ScrollView>
+      </ScrollView> : null}
     </View>
   );
 }
@@ -4231,7 +4295,7 @@ export default function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
-  const [searchMode, setSearchMode] = useState<SearchMode>('preset');
+  const [searchMode, setSearchMode] = useState<SearchMode>('item');
   const [itemSearchState, setItemSearchState] = useState<{
     ids: string[];
     query: string;
@@ -4319,6 +4383,7 @@ export default function App() {
   );
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
+  const [settingsHabitsExpanded, setSettingsHabitsExpanded] = useState(false);
   const [settingsHistoryExpanded, setSettingsHistoryExpanded] = useState(false);
   const [settingsHistoryPreviewTarget, setSettingsHistoryPreviewTarget] =
     useState<UndoHistoryPreviewTarget | null>(null);
@@ -4338,6 +4403,8 @@ export default function App() {
     () => cloneFilterConfigUiState(DEFAULT_FILTER_CONFIG_UI_STATE),
   );
   const [hideDoneTodos, setHideDoneTodos] = useState(false);
+  const [habitNotificationsPaused, setHabitNotificationsPaused] = useState(false);
+  const [habitQuietHoursEnabled, setHabitQuietHoursEnabled] = useState(true);
   const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
   const [showOverdueMetaTags, setShowOverdueMetaTags] = useState(true);
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
@@ -4477,6 +4544,8 @@ export default function App() {
   const undoHistorySequenceRef = useRef(0);
   const headerUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todoAlarmResumeSyncAtRef = useRef(0);
+  const habitNotificationsPausedRef = useRef(habitNotificationsPaused);
+  const habitQuietHoursEnabledRef = useRef(habitQuietHoursEnabled);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -4495,6 +4564,8 @@ export default function App() {
   deletedTodosRef.current = deletedTodos;
   googleDriveBackupEnabledRef.current = googleDriveBackupEnabled;
   hideDoneTodosRef.current = hideDoneTodos;
+  habitNotificationsPausedRef.current = habitNotificationsPaused;
+  habitQuietHoursEnabledRef.current = habitQuietHoursEnabled;
   lastCreateTodoFiltersRef.current = lastCreateTodoFilters;
   listMenuTreeRef.current = listMenuTree;
   customTagsRef.current = customTags;
@@ -4529,7 +4600,6 @@ export default function App() {
   });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
-  const lastFilterNavTapRef = useRef(0);
   const lastSearchNavTapRef = useRef(0);
   const handledToggleAllTodoSectionsRequestRef = useRef(0);
   const lastQuickPresetNavTapRef = useRef({ presetId: '', timestamp: 0 });
@@ -4544,7 +4614,7 @@ export default function App() {
   });
   const pendingQuickPresetScrollTargetRef = useRef<'search' | 'top' | null>(null);
   const itemSearchResultsCacheRef = useRef(new Map<string, string[]>());
-  const previousSearchModeRef = useRef<SearchMode>('preset');
+  const previousSearchModeRef = useRef<SearchMode>('item');
   const skipNextTodoListOffsetEffectRef = useRef(false);
   const listMenuOpen = menuMode !== null;
   const submenuOpen = menuMode !== null && menuMode !== 'main';
@@ -4751,6 +4821,22 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    setTodoAlarmSettings({
+      habitNotificationsPaused,
+      habitQuietHoursEnabled,
+    });
+
+    if (loaded && settingsLoaded) {
+      reconcileTodoAlarms(todosRef.current).catch(() => undefined);
+    }
+  }, [
+    habitNotificationsPaused,
+    habitQuietHoursEnabled,
+    loaded,
+    settingsLoaded,
+  ]);
+
   const applyLoadedSettings = useCallback((
     settings: AppSettings,
     options: { preserveVisibleView?: boolean } = {},
@@ -4809,6 +4895,14 @@ export default function App() {
     setGoogleDriveBackupEnabled(false);
     setGoogleDriveLastBackupAt(appliedSettings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(appliedSettings.googleDriveLastRestoreAt);
+    habitNotificationsPausedRef.current = appliedSettings.habitNotificationsPaused;
+    habitQuietHoursEnabledRef.current = appliedSettings.habitQuietHoursEnabled;
+    setTodoAlarmSettings({
+      habitNotificationsPaused: appliedSettings.habitNotificationsPaused,
+      habitQuietHoursEnabled: appliedSettings.habitQuietHoursEnabled,
+    });
+    setHabitNotificationsPaused(appliedSettings.habitNotificationsPaused);
+    setHabitQuietHoursEnabled(appliedSettings.habitQuietHoursEnabled);
     setHideDoneTodos(appliedSettings.hideDoneTodos);
     setDateLabelDisplayMode(appliedSettings.dateLabelDisplayMode);
     setShowOverdueMetaTags(appliedSettings.showOverdueMetaTags);
@@ -4935,6 +5029,8 @@ export default function App() {
     filterColors,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    habitNotificationsPaused,
+    habitQuietHoursEnabled,
     history: cloneAppHistoryState({
       redo: redoHistory,
       undo: undoHistory,
@@ -4970,6 +5066,8 @@ export default function App() {
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    habitNotificationsPaused,
+    habitQuietHoursEnabled,
     hideDoneTodos,
     lastCreateTodoFilters,
     listMenuTree,
@@ -5356,6 +5454,8 @@ export default function App() {
     deletedTodos: cloneDeletedTodos(deletedTodosRef.current),
     filterColors: cloneFilterColors(filterColorsRef.current),
     googleDriveBackupEnabled: googleDriveBackupEnabledRef.current,
+    habitNotificationsPaused: habitNotificationsPausedRef.current,
+    habitQuietHoursEnabled: habitQuietHoursEnabledRef.current,
     hideDoneTodos: hideDoneTodosRef.current,
     lastCreateTodoFilters: cloneTodoFilters(lastCreateTodoFiltersRef.current),
     listMenuTree: cloneListMenuTree(listMenuTreeRef.current),
@@ -5555,6 +5655,8 @@ export default function App() {
       deletedTodos: restoredDeletedTodos,
       filterColors: restoredFilterColors,
       googleDriveBackupEnabled: false,
+      habitNotificationsPaused: snapshot.habitNotificationsPaused,
+      habitQuietHoursEnabled: snapshot.habitQuietHoursEnabled,
       hideDoneTodos: snapshot.hideDoneTodos,
       lastCreateTodoFilters: restoredLastCreateTodoFilters,
       listMenuTree: restoredListMenuTree,
@@ -5577,6 +5679,12 @@ export default function App() {
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
     googleDriveBackupEnabledRef.current = false;
+    habitNotificationsPausedRef.current = snapshot.habitNotificationsPaused;
+    habitQuietHoursEnabledRef.current = snapshot.habitQuietHoursEnabled;
+    setTodoAlarmSettings({
+      habitNotificationsPaused: snapshot.habitNotificationsPaused,
+      habitQuietHoursEnabled: snapshot.habitQuietHoursEnabled,
+    });
     hideDoneTodosRef.current = snapshot.hideDoneTodos;
     lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
     listMenuTreeRef.current = restoredListMenuTree;
@@ -5601,6 +5709,8 @@ export default function App() {
     setDeletedTodos(restoredDeletedTodos);
     setFilterColors(restoredFilterColors);
     setGoogleDriveBackupEnabled(false);
+    setHabitNotificationsPaused(snapshot.habitNotificationsPaused);
+    setHabitQuietHoursEnabled(snapshot.habitQuietHoursEnabled);
     setHideDoneTodos(snapshot.hideDoneTodos);
     setDateLabelDisplayMode(snapshot.dateLabelDisplayMode);
     setShowOverdueMetaTags(snapshot.showOverdueMetaTags);
@@ -7315,7 +7425,7 @@ export default function App() {
 
     if (createDrawerPicker === 'date') {
       return getDateMenuItemsForDateLabels(
-        DATE_PICKER_MENU_ITEMS,
+        CREATE_DRAWER_DATE_PICKER_MENU_ITEMS,
         createDraftFilters.date,
         new Date(),
         { sortSelectedCustomDate: true },
@@ -7343,6 +7453,10 @@ export default function App() {
     () => formatCreateDrawerDateLabel(createDraftFilters.date, dateLabelDisplayMode),
     [createDraftFilters.date, dateLabelDisplayMode],
   );
+  const createDrawerReminder = useMemo(
+    () => decodeTodoReminder(createDraftFilters.reminder),
+    [createDraftFilters.reminder],
+  );
 
   const createDrawerListLabel = createDraftFilters.list[0] ?? CREATE_DRAWER_NO_LIST_LABEL;
   const createDrawerListAccessibilityLabel = createDraftFilters.list[0]
@@ -7356,8 +7470,12 @@ export default function App() {
     createDrawerListPickerSheetHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO,
   );
   const createDrawerDateActive = createDraftFilters.date.length > 0
-    || hasTodoReminderTime(createDraftFilters.reminder)
-    || hasTodoRepeat(createDraftFilters.reminder);
+    || createDrawerReminder.time !== null
+    || createDrawerReminder.repeat !== 'none';
+  const createDrawerHabitActive = createDrawerReminder.habitHours !== null;
+  const createDrawerHabitAccessibilityLabel = createDrawerHabitActive
+    ? `Habit: ${formatHabitMenuLabel(createDraftFilters.reminder)}`
+    : 'Habit';
   const createDrawerListActive = createDraftFilters.list.length > 0;
   const createDrawerPriorityActive = createDraftFilters.priority.length > 0;
   const createDrawerTagsActive = createDraftTags.length > 0;
@@ -8127,6 +8245,12 @@ export default function App() {
     triggerSubtleHaptic();
   }, [createDraftFilters.reminder]);
 
+  const handleCreateDrawerHabitPress = useCallback(() => {
+    Keyboard.dismiss();
+    setCreateDrawerPicker(null);
+    openCreateHabitModal();
+  }, [openCreateHabitModal]);
+
   const closeCreateHabitModal = useCallback(() => {
     setHabitReminderModalVisible(false);
   }, []);
@@ -8618,8 +8742,26 @@ export default function App() {
     [listMenuTree, pendingDeleteIds, todos],
   );
   const selectedSettingsListCount = selectedSettingsListLabels.size;
+  const menuPresetById = useMemo(
+    () => new Map(menuPresets.map((preset) => [preset.id, preset])),
+    [menuPresets],
+  );
   const settingsColorGroups = useMemo(
     () => [
+      {
+        id: 'navbar-presets',
+        items: [...new Set(quickPresetNavPresetIds)].flatMap((presetId) => {
+          const preset = presetId ? menuPresetById.get(presetId) : null;
+
+          return preset ? [{
+            displayLabel: preset.label,
+            filterKey: 'navbar' as const,
+            sourceLabel: 'Navbar preset',
+            value: preset.id,
+          }] : [];
+        }),
+        title: 'Navbar presets',
+      },
       {
         id: 'item-backgrounds',
         items: settingsListColorLabels.map((value) => ({
@@ -8671,7 +8813,7 @@ export default function App() {
         title: 'Priority bg',
       },
     ],
-    [settingsListColorLabels],
+    [menuPresetById, quickPresetNavPresetIds, settingsListColorLabels],
   );
   const settingsColorItemCount = settingsColorGroups.reduce(
     (count, group) => count + group.items.length,
@@ -8703,10 +8845,6 @@ export default function App() {
     requiredFilters,
     selectedFilters,
   ]);
-  const menuPresetById = useMemo(
-    () => new Map(menuPresets.map((preset) => [preset.id, preset])),
-    [menuPresets],
-  );
   const searchKeywordEditTitle = useMemo(() => {
     if (
       !searchKeywordEditTarget ||
@@ -8751,12 +8889,14 @@ export default function App() {
   }, [listMenuTree, searchKeywordEditTarget, searchKeywordTitleDraft]);
   const quickPresetNavItems = useMemo<QuickPresetNavItem[]>(
     () => buildQuickPresetNavItems({
+      getPresetColor: (presetId) => getFilterColor(filterColors, 'navbar', presetId),
       menuPresetById,
       menuPresets,
       quickPresetNavIconNames,
       quickPresetNavPresetIds,
     }),
     [
+      filterColors,
       menuPresetById,
       menuPresets,
       quickPresetNavIconNames,
@@ -9133,7 +9273,6 @@ export default function App() {
   );
   const activeFilterCount =
     countFilters(menuFilters, includeActiveTodoReminderRows) + countFilters(menuAvoidedFilters);
-  const selectedFilterCount = countFilters(selectedFilters) + countFilters(avoidedFilters);
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
   const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
@@ -9636,13 +9775,6 @@ export default function App() {
       return [
         ...(pinActionRow ? [pinActionRow] : []),
         {
-          id: 'main-presets',
-          label: 'Apply saved list',
-          menuMode: 'presets',
-          type: 'menu',
-          valueLabel: formatPresetCount(menuPresets.length, 'list'),
-        },
-        {
           count: menuFilters.list.length || undefined,
           id: 'main-lists',
           label: 'Lists',
@@ -10012,7 +10144,39 @@ export default function App() {
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, recordFilterConfigUndo]);
 
+  const toggleHabitItemsFilter = useCallback(() => {
+    clearNotificationTodoReveal();
+    const nextFilters = {
+      ...selectedFiltersRef.current,
+      reminder: toggleHabitItemsFilterValue(selectedFiltersRef.current.reminder),
+    };
+    const nextRequiredFilters = pruneTodoFilters(requiredFiltersRef.current, nextFilters);
+    const nextAvoidedFilters = removeSelectedValuesFromAvoidedFilters(
+      avoidedFiltersRef.current,
+      nextFilters,
+    );
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+    ) {
+      return;
+    }
+
+    recordFilterConfigUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, recordFilterConfigUndo]);
+
   const handleDateMenuLabelPress = useCallback((label: string) => {
+    if (label === HABIT_ITEMS_FILTER_VALUE) {
+      toggleHabitItemsFilter();
+      return;
+    }
+
     if (label === REPEATING_ITEMS_FILTER_VALUE) {
       toggleRepeatingItemsFilter();
       return;
@@ -10058,6 +10222,7 @@ export default function App() {
     openActiveTodoRepeatModal,
     openDatePicker,
     toggleFilterValue,
+    toggleHabitItemsFilter,
     toggleRepeatingItemsFilter,
   ]);
 
@@ -10718,6 +10883,24 @@ export default function App() {
     setHideDoneTodos((current) => !current);
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, recordUndo]);
+
+  const toggleHabitNotificationsPaused = useCallback(() => {
+    recordUndo('Change habit notifications');
+    const nextPaused = !habitNotificationsPausedRef.current;
+    habitNotificationsPausedRef.current = nextPaused;
+    setHabitNotificationsPaused(nextPaused);
+    void persistAppSettings({ habitNotificationsPaused: nextPaused });
+    triggerSubtleHaptic();
+  }, [persistAppSettings, recordUndo]);
+
+  const toggleHabitQuietHours = useCallback(() => {
+    recordUndo('Change habit quiet hours');
+    const nextEnabled = !habitQuietHoursEnabledRef.current;
+    habitQuietHoursEnabledRef.current = nextEnabled;
+    setHabitQuietHoursEnabled(nextEnabled);
+    void persistAppSettings({ habitQuietHoursEnabled: nextEnabled });
+    triggerSubtleHaptic();
+  }, [persistAppSettings, recordUndo]);
 
   const toggleDateLabelDisplayMode = useCallback(() => {
     recordFilterConfigUndo('Change date labels');
@@ -12772,6 +12955,7 @@ export default function App() {
     exitTodoSelectMode();
     setSettingsColorsExpanded(false);
     setSettingsDateLabelsExpanded(false);
+    setSettingsHabitsExpanded(false);
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
     setSettingsHistoryExpanded(false);
@@ -12856,6 +13040,7 @@ export default function App() {
 
   const openHeaderSearch = useCallback((options?: { focusInput?: boolean }) => {
     clearNotificationTodoReveal();
+    setSearchMode('item');
     setNavTab('search');
     closeListMenuState();
     restoreSearchScroll();
@@ -12906,9 +13091,6 @@ export default function App() {
   ]);
 
   const handleNavTabPress = useCallback((tab: NavTab) => {
-    if (tab !== 'calendar') {
-      lastFilterNavTapRef.current = 0;
-    }
     if (tab !== 'search') {
       lastSearchNavTapRef.current = 0;
     }
@@ -12948,6 +13130,7 @@ export default function App() {
     }
 
     if (tab === 'search' && navTab === 'search') {
+      setSearchMode('item');
       focusHeaderSearchInput();
       triggerSubtleHaptic();
       return;
@@ -12987,6 +13170,7 @@ export default function App() {
         }
 
         setNavTab('calendar');
+        anchorActivePresetForFilterConfig();
         openFilterConfigModal();
         break;
       case 'menu':
@@ -13045,34 +13229,9 @@ export default function App() {
     };
   }, [navTab]);
 
-  const handleFilterNavPress = useCallback((event: GestureResponderEvent) => {
-    const timestamp = event.nativeEvent.timestamp || Date.now();
-    const sinceLastTap = timestamp - lastFilterNavTapRef.current;
-
-    if (!todoSelectMode && sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
-      lastFilterNavTapRef.current = 0;
-      setActiveTodoMenuId(null);
-      setNavTab('calendar');
-      anchorActivePresetForFilterConfig();
-      openFilterConfigModal();
-      return;
-    }
-
-    lastFilterNavTapRef.current = timestamp;
-    if (!todoSelectMode && selectedFilterCount > 0) {
-      showTodoItems();
-      return;
-    }
-
+  const handleFilterNavPress = useCallback(() => {
     handleNavTabPress('calendar');
-  }, [
-    anchorActivePresetForFilterConfig,
-    handleNavTabPress,
-    openFilterConfigModal,
-    selectedFilterCount,
-    showTodoItems,
-    todoSelectMode,
-  ]);
+  }, [handleNavTabPress]);
 
   const handleSearchNavPress = useCallback((event: GestureResponderEvent) => {
     const timestamp = event.nativeEvent.timestamp || Date.now();
@@ -13479,6 +13638,8 @@ export default function App() {
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
+      habitNotificationsPaused,
+      habitQuietHoursEnabled,
       hideDoneTodos,
       lastCreateTodoFilters,
       listMenuTree,
@@ -13511,6 +13672,8 @@ export default function App() {
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
+    habitNotificationsPaused,
+    habitQuietHoursEnabled,
     hideDoneTodos,
     lastCreateTodoFilters,
     listMenuTree,
@@ -13612,6 +13775,8 @@ export default function App() {
       googleDriveBackupEnabled: false,
       googleDriveLastBackupAt: payload.settings.googleDriveLastBackupAt,
       googleDriveLastRestoreAt: restoredAt,
+      habitNotificationsPaused: payload.settings.habitNotificationsPaused,
+      habitQuietHoursEnabled: payload.settings.habitQuietHoursEnabled,
       hideDoneTodos: payload.settings.hideDoneTodos,
       lastCreateTodoFilters: restoredLastCreateTodoFilters,
       listMenuTree: restoredListMenuTree,
@@ -13635,6 +13800,12 @@ export default function App() {
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
     googleDriveBackupEnabledRef.current = false;
+    habitNotificationsPausedRef.current = payload.settings.habitNotificationsPaused;
+    habitQuietHoursEnabledRef.current = payload.settings.habitQuietHoursEnabled;
+    setTodoAlarmSettings({
+      habitNotificationsPaused: payload.settings.habitNotificationsPaused,
+      habitQuietHoursEnabled: payload.settings.habitQuietHoursEnabled,
+    });
     hideDoneTodosRef.current = payload.settings.hideDoneTodos;
     lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
     listMenuTreeRef.current = restoredListMenuTree;
@@ -13668,6 +13839,8 @@ export default function App() {
     setGoogleDriveBackupEnabled(false);
     setGoogleDriveLastBackupAt(payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
+    setHabitNotificationsPaused(payload.settings.habitNotificationsPaused);
+    setHabitQuietHoursEnabled(payload.settings.habitQuietHoursEnabled);
     setHideDoneTodos(payload.settings.hideDoneTodos);
     setShowOverdueMetaTags(payload.settings.showOverdueMetaTags);
     setDateLabelDisplayMode(normalizeDateLabelDisplayMode(
@@ -15157,6 +15330,9 @@ export default function App() {
 
                             const enteringSearch = navTab !== 'search';
                             clearNotificationTodoReveal();
+                            if (enteringSearch) {
+                              setSearchMode('item');
+                            }
                             setNavTab('search');
                             if (enteringSearch) {
                               restoreSearchScroll();
@@ -15291,7 +15467,7 @@ export default function App() {
           <View style={styles.bottomNavPrimary}>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Shows filtered results; quick double tap opens filters"
+              accessibilityHint="Opens filters"
               accessibilityLabel="Filters"
               accessibilityState={{ selected: filterConfigModalVisible }}
               onPress={handleFilterNavPress}
@@ -16712,14 +16888,17 @@ export default function App() {
                       ref={createInputRef}
                       autoCapitalize="sentences"
                       autoCorrect
-                      blurOnSubmit={false}
+                      multiline
                       onChangeText={setCreateDraftText}
                       onSubmitEditing={() => createContentInputRef.current?.focus()}
                       placeholder="Task title"
                       placeholderTextColor="#B5ADA5"
                       returnKeyType="next"
                       selectionColor="#2F6F62"
+                      scrollEnabled={false}
                       style={styles.createDrawerTitleInput}
+                      submitBehavior="submit"
+                      textAlignVertical="top"
                       value={createDraftText}
                     />
                     <TextInput
@@ -16761,6 +16940,23 @@ export default function App() {
                       <Ionicons
                         color={createDrawerDateActive ? '#2F6F62' : '#8C847C'}
                         name="calendar-outline"
+                        size={22}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={createDrawerHabitAccessibilityLabel}
+                      accessibilityState={{ selected: createDrawerHabitActive }}
+                      onPress={handleCreateDrawerHabitPress}
+                      style={({ pressed }) => [
+                        styles.createDrawerToolbarButton,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                        createDrawerHabitActive && styles.createDrawerToolbarButtonActive,
+                      ]}
+                    >
+                      <Ionicons
+                        color={createDrawerHabitActive ? '#2F6F62' : '#8C847C'}
+                        name="notifications-outline"
                         size={22}
                       />
                     </Pressable>
@@ -16923,6 +17119,7 @@ export default function App() {
           onSelectSort={selectTodoSortMode}
           onShowResults={showTodoItems}
           onToggleFilter={toggleFilterValue}
+          onToggleHabitItemsFilter={toggleHabitItemsFilter}
           onToggleRepeatingItemsFilter={toggleRepeatingItemsFilter}
           onToggleListItem={toggleListMenuItem}
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
@@ -17158,6 +17355,94 @@ export default function App() {
                         })}
                       </View>
                     ) : null}
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Habit notifications</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {habitNotificationsPaused ? 'All paused' : 'Active'}
+                      {' · '}
+                      {habitQuietHoursEnabled ? 'Quiet 00:00-07:00' : 'Quiet hours off'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsHabitsExpanded ? 'Collapse' : 'Expand'} Habit notifications section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsHabitsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsHabitsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsHabitsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsHabitsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Pressable
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: habitNotificationsPaused }}
+                      onPress={toggleHabitNotificationsPaused}
+                      style={({ pressed }) => [
+                        styles.settingsRow,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Pause all habits</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          Existing habits stay saved until you resume them.
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.settingsStatusPill,
+                          habitNotificationsPaused && styles.settingsStatusPillEnabled,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.settingsStatusText,
+                            habitNotificationsPaused && styles.settingsStatusTextEnabled,
+                          ]}
+                        >
+                          {habitNotificationsPaused ? 'Paused' : 'Active'}
+                        </Text>
+                      </View>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: habitQuietHoursEnabled }}
+                      onPress={toggleHabitQuietHours}
+                      style={({ pressed }) => [
+                        styles.settingsOptionRow,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Night quiet hours</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          No habit alerts from 00:00 until 07:00.
+                        </Text>
+                      </View>
+                      <Text style={styles.settingsOptionValue}>
+                        {habitQuietHoursEnabled ? 'On' : 'Off'}
+                      </Text>
+                    </Pressable>
                   </View>
                 ) : null}
               </View>
@@ -20123,17 +20408,16 @@ const styles = StyleSheet.create({
   },
   settingsColorRow: {
     minHeight: 46,
-    alignItems: 'center',
-    flexDirection: 'row',
     gap: 12,
     paddingVertical: 6,
   },
   settingsColorLabelWrap: {
-    width: 124,
+    minHeight: 34,
     minWidth: 0,
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
+    width: '100%',
   },
   settingsColorPreviewDot: {
     width: 12,
@@ -20165,7 +20449,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   settingsColorSwatchScroll: {
-    flex: 1,
+    width: '100%',
   },
   settingsColorSwatches: {
     alignItems: 'center',
@@ -20789,6 +21073,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 29,
+    maxHeight: 92,
     minHeight: 44,
     paddingHorizontal: 0,
     paddingVertical: 5,

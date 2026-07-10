@@ -16,6 +16,7 @@ export type FilterColorValue = string | null;
 export type FilterColorSettings = {
   date: Record<string, FilterColorValue>;
   list: Record<string, FilterColorValue>;
+  navbar: Record<string, FilterColorValue>;
   priority: Record<string, FilterColorValue>;
   priorityBackground: Record<string, FilterColorValue>;
   priorityBorder: Record<string, FilterColorValue>;
@@ -211,6 +212,7 @@ const DEFAULT_LIST_COLORS: Record<string, string> = {};
 export const DEFAULT_FILTER_COLORS: FilterColorSettings = {
   date: DEFAULT_DATE_COLORS,
   list: DEFAULT_LIST_COLORS,
+  navbar: {},
   priority: DEFAULT_PRIORITY_COLORS,
   priorityBackground: DEFAULT_PRIORITY_COLORS,
   priorityBorder: DEFAULT_PRIORITY_COLORS,
@@ -324,6 +326,7 @@ export const normalizeFilterColors = (value: unknown): FilterColorSettings => {
   return {
     date: normalizeColorMap(record.date, DEFAULT_FILTER_COLORS.date, formatDateFilterValue),
     list: normalizeListColorMap(record.list, DEFAULT_FILTER_COLORS.list),
+    navbar: normalizeColorMap(record.navbar, DEFAULT_FILTER_COLORS.navbar),
     priority,
     priorityBackground: normalizeColorMap(
       record.priorityBackground,
@@ -399,7 +402,7 @@ export const getFilterColor = (
     }
   }
 
-  if (filterKey === 'date' || filterKey === 'list') {
+  if (filterKey === 'date' || filterKey === 'list' || filterKey === 'navbar') {
     return null;
   }
 

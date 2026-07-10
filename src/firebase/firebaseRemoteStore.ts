@@ -61,7 +61,7 @@ export type FirebaseAppDataSyncResult =
   | {
       firebaseUserId: string;
       remoteUpdatedAt: number;
-      reason: 'remote-unchanged';
+      reason: 'local-pending' | 'remote-unchanged';
       status: 'skipped';
     }
   | {
@@ -154,6 +154,7 @@ const touchRemoteMeta = async (
   database: Firestore,
   userId: string,
   reason: string,
+  localChangeSyncedAt = 0,
 ) => {
   const updatedAt = Date.now();
 
@@ -167,7 +168,7 @@ const touchRemoteMeta = async (
     },
     { merge: true },
   );
-  await markRemoteFirebaseWrite(userId, updatedAt);
+  await markRemoteFirebaseWrite(userId, updatedAt, localChangeSyncedAt);
 
   return updatedAt;
 };
@@ -176,19 +177,20 @@ export const setFirebaseRemoteWritesEnabled = (enabled: boolean) => {
   firebaseWritesEnabled = enabled;
 };
 
-const enqueueFirebaseWrite = (write: () => Promise<void>) => {
-  if (!firebaseWritesEnabled) {
+const enqueueFirebaseWrite = (write: (localChangeAt: number) => Promise<void>) => {
+  // Startup hydration also writes the downloaded snapshot into local stores.
+  // Ignore those persistence calls while initial sync owns the state; replaying
+  // them later can overwrite a newer remote snapshot with stale startup data.
+  if (!firebaseWritesEnabled || !isFirebaseConfigured()) {
     return Promise.resolve();
   }
 
-  markLocalFirebaseChange().catch(() => undefined);
+  const localChangeMarked = markLocalFirebaseChange();
   firebaseWriteQueue = firebaseWriteQueue
     .then(async () => {
-      if (!isFirebaseConfigured()) {
-        return;
-      }
+      const syncMeta = await localChangeMarked;
 
-      await runFirebaseWriteUntilSynced(write);
+      await runFirebaseWriteUntilSynced(() => write(syncMeta.lastLocalChangeAt));
     })
     .catch(() => undefined);
 
@@ -253,6 +255,7 @@ const writeFirebaseAppDataSnapshotForUser = async (
   userId: string,
   snapshot: FirebaseAppDataSnapshot,
   reason: string,
+  localChangeSyncedAt = 0,
 ) => {
   const database = getLocalTodoFirestore();
   const normalizedSettings = normalizeAppSettings({
@@ -279,7 +282,7 @@ const writeFirebaseAppDataSnapshotForUser = async (
       { merge: false },
     ),
   ]);
-  await touchRemoteMeta(database, userId, reason);
+  return touchRemoteMeta(database, userId, reason, localChangeSyncedAt);
 };
 
 const normalizeRemoteMeta = (data: DocumentData | undefined): FirebaseRemoteMeta | null => {
@@ -428,7 +431,7 @@ const mergeAppDataSnapshots = (
 };
 
 export const queueFirebaseTodoUpsert = (todo: Todo) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -440,22 +443,22 @@ export const queueFirebaseTodoUpsert = (todo: Todo) => (
       },
       { merge: false },
     );
-    await touchRemoteMeta(database, userId, 'todo-upsert');
+    await touchRemoteMeta(database, userId, 'todo-upsert', localChangeAt);
   })
 );
 
 export const queueFirebaseTodoDelete = (id: string) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
     await deleteDoc(todoDocRef(database, userId, id));
-    await touchRemoteMeta(database, userId, 'todo-delete');
+    await touchRemoteMeta(database, userId, 'todo-delete', localChangeAt);
   })
 );
 
 export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -464,12 +467,12 @@ export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => (
       { done, schemaVersion: FIREBASE_SCHEMA_VERSION },
       { merge: true },
     );
-    await touchRemoteMeta(database, userId, 'todo-done');
+    await touchRemoteMeta(database, userId, 'todo-done', localChangeAt);
   })
 );
 
 export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filters']) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -481,12 +484,12 @@ export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filter
       },
       { merge: true },
     );
-    await touchRemoteMeta(database, userId, 'todo-filters');
+    await touchRemoteMeta(database, userId, 'todo-filters', localChangeAt);
   })
 );
 
 export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     if (todos.length === 0) {
       return;
     }
@@ -512,22 +515,22 @@ export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => (
     }
 
     await commitBatch(batchState);
-    await touchRemoteMeta(database, userId, 'todos-upsert-many');
+    await touchRemoteMeta(database, userId, 'todos-upsert-many', localChangeAt);
   })
 );
 
 export const queueFirebaseTodosReplaceAll = (todos: Todo[]) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
     await writeTodosSnapshotForUser(database, userId, todos);
-    await touchRemoteMeta(database, userId, 'todos-replace-all');
+    await touchRemoteMeta(database, userId, 'todos-replace-all', localChangeAt);
   })
 );
 
 export const queueFirebaseSettingsSave = (settings: AppSettings) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -539,12 +542,12 @@ export const queueFirebaseSettingsSave = (settings: AppSettings) => (
       },
       { merge: false },
     );
-    await touchRemoteMeta(database, userId, 'settings-save');
+    await touchRemoteMeta(database, userId, 'settings-save', localChangeAt);
   })
 );
 
 export const queueFirebaseNotificationLogSave = (entries: NotificationLogEntry[]) => (
-  enqueueFirebaseWrite(async () => {
+  enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -556,12 +559,13 @@ export const queueFirebaseNotificationLogSave = (entries: NotificationLogEntry[]
       },
       { merge: false },
     );
-    await touchRemoteMeta(database, userId, 'notification-log-save');
+    await touchRemoteMeta(database, userId, 'notification-log-save', localChangeAt);
   })
 );
 
 export const syncFirebaseAppDataFromLocalSnapshot = async (
   localSnapshot: FirebaseAppDataSnapshot,
+  options: { forceUploadLocal?: boolean } = {},
 ): Promise<FirebaseAppDataSyncResult> => {
   if (!isFirebaseConfigured()) {
     return { status: 'disabled' };
@@ -572,13 +576,29 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
   const usesSharedDataProfile = hasLocalTodoFirebaseDataUserId();
   const remoteMeta = await loadFirebaseRemoteMetaForUser(userId);
   const remoteUpdatedAt = remoteMeta?.updatedAt ?? 0;
+
+  if (options.forceUploadLocal && localSnapshotHasUserData(localSnapshot)) {
+    const uploadedAt = await writeFirebaseAppDataSnapshotForUser(
+      userId,
+      localSnapshot,
+      'trusted-local-recovery-sync',
+      syncMeta.lastLocalChangeAt,
+    );
+    return {
+      firebaseUserId: userId,
+      remoteUpdatedAt: uploadedAt,
+      snapshot: localSnapshot,
+      status: 'uploaded-local',
+    };
+  }
+
   const lastKnownRemoteAt = Math.max(
     syncMeta.lastRemoteReadAt,
     syncMeta.lastRemoteWriteAt,
   );
   const localHasPendingChanges = (
     syncMeta.firebaseUserId === userId &&
-    syncMeta.lastLocalChangeAt > syncMeta.lastRemoteWriteAt
+    syncMeta.lastLocalChangeAt > syncMeta.lastLocalSyncedAt
   );
   const remoteUnchanged = (
     remoteMeta !== null &&
@@ -595,6 +615,21 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
       reason: 'remote-unchanged',
       remoteUpdatedAt,
       status: 'skipped',
+    };
+  }
+
+  if (localHasPendingChanges) {
+    const uploadedAt = await writeFirebaseAppDataSnapshotForUser(
+      userId,
+      localSnapshot,
+      'recover-pending-local-sync',
+      syncMeta.lastLocalChangeAt,
+    );
+    return {
+      firebaseUserId: userId,
+      remoteUpdatedAt: uploadedAt,
+      snapshot: localSnapshot,
+      status: 'uploaded-local',
     };
   }
 
@@ -627,26 +662,32 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
 
   if (shouldMergeLocalIntoRemote || shouldMergeSharedLocalIntoRemote) {
     const mergedSnapshot = mergeAppDataSnapshots(remote.snapshot, localSnapshot);
-    await writeFirebaseAppDataSnapshotForUser(
+    const uploadedAt = await writeFirebaseAppDataSnapshotForUser(
       userId,
       mergedSnapshot,
       shouldMergeSharedLocalIntoRemote
         ? 'merge-shared-local-remote-sync'
         : 'merge-local-remote-sync',
+      syncMeta.lastLocalChangeAt,
     );
     return {
       firebaseUserId: userId,
-      remoteUpdatedAt: Date.now(),
+      remoteUpdatedAt: uploadedAt,
       snapshot: mergedSnapshot,
       status: 'uploaded-local',
     };
   }
 
   if (shouldUploadLocal) {
-    await writeFirebaseAppDataSnapshotForUser(userId, localSnapshot, 'initial-local-sync');
+    const uploadedAt = await writeFirebaseAppDataSnapshotForUser(
+      userId,
+      localSnapshot,
+      'initial-local-sync',
+      syncMeta.lastLocalChangeAt,
+    );
     return {
       firebaseUserId: userId,
-      remoteUpdatedAt: Date.now(),
+      remoteUpdatedAt: uploadedAt,
       snapshot: localSnapshot,
       status: 'uploaded-local',
     };
@@ -672,7 +713,7 @@ export const loadFirebaseAppDataFromBackend = async (): Promise<FirebaseAppDataP
 
   if (
     syncMeta.firebaseUserId === userId &&
-    syncMeta.lastLocalChangeAt > syncMeta.lastRemoteWriteAt
+    syncMeta.lastLocalChangeAt > syncMeta.lastLocalSyncedAt
   ) {
     return { reason: 'local-pending', status: 'skipped' };
   }
@@ -721,7 +762,7 @@ export const loadFirebaseTodosFromBackend = async (): Promise<FirebaseTodosPullR
 
   if (
     syncMeta.firebaseUserId === userId &&
-    syncMeta.lastLocalChangeAt > syncMeta.lastRemoteWriteAt
+    syncMeta.lastLocalChangeAt > syncMeta.lastLocalSyncedAt
   ) {
     return { reason: 'local-pending', status: 'skipped' };
   }

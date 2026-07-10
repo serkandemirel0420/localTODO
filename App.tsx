@@ -1532,6 +1532,9 @@ const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 const INITIAL_FIREBASE_SYNC_BAR_MAX_MS = 5000;
+const FORCE_TRUSTED_NATIVE_FIREBASE_UPLOAD =
+  Platform.OS !== 'web' &&
+  process.env.EXPO_PUBLIC_FORCE_TRUSTED_NATIVE_FIREBASE_UPLOAD === '1';
 const EMPTY_VISIBLE_TODO_LIST_ROWS: VisibleTodoListRow[] = [];
 const EMPTY_LIST_GROUP_LABELS: string[] = [];
 const getTodoListItemKey = (item: VisibleTodoListRow) => {
@@ -4559,6 +4562,7 @@ export default function App() {
   const firebaseBackendPullInFlightRef = useRef(false);
   const firebaseBackendPullReadyRef = useRef(false);
   const lastFirebaseBackendPullStartedAtRef = useRef(0);
+  const settingsAutoSaveInitializedRef = useRef(false);
   todosRef.current = todos;
   dateLabelDisplayModeRef.current = dateLabelDisplayMode;
   deletedTodosRef.current = deletedTodos;
@@ -5130,7 +5134,9 @@ export default function App() {
       todos: todosRef.current.filter((todo) => !pendingDeleteIdsRef.current.has(todo.id)),
     };
 
-    syncFirebaseAppDataFromLocalSnapshot(localSnapshot)
+    syncFirebaseAppDataFromLocalSnapshot(localSnapshot, {
+      forceUploadLocal: FORCE_TRUSTED_NATIVE_FIREBASE_UPLOAD,
+    })
       .then((result) => {
         if (!alive || result.status === 'disabled' || result.status === 'skipped') {
           initialSyncCompleted = true;
@@ -5256,7 +5262,14 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!settingsLoaded) {
+    if (!settingsLoaded || !firebaseInitialSyncReady) {
+      return;
+    }
+
+    // Loading the local settings snapshot is hydration, not a user mutation.
+    // Do not let the initial autosave masquerade as a pending local Firebase edit.
+    if (!settingsAutoSaveInitializedRef.current) {
+      settingsAutoSaveInitializedRef.current = true;
       return;
     }
 
@@ -5267,6 +5280,7 @@ export default function App() {
     return () => clearTimeout(saveTimer);
   }, [
     persistAppSettings,
+    firebaseInitialSyncReady,
     settingsLoaded,
     createSettingsSnapshot,
   ]);

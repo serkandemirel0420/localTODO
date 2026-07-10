@@ -1202,8 +1202,6 @@ function TodoRowComponent({
             {hasDisplayTitle ? (
               <View style={styles.titleBlock}>
                 <Text
-                  ellipsizeMode="tail"
-                  numberOfLines={2}
                   style={[
                     styles.text,
                     isVisuallyDone && styles.textDone,
@@ -1719,11 +1717,14 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   text: {
+    alignSelf: 'stretch',
     color: THEME_TEXT,
+    flexShrink: 1,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
     includeFontPadding: false,
     lineHeight: 21,
+    minWidth: 0,
   },
   textDone: {
     color: THEME_TEXT_SECONDARY,

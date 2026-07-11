@@ -57,7 +57,7 @@ const SWIPE_DELETE = '#D14A42';
 const SWIPE_MENU = '#EA8D35';
 const FONT_REGULAR = '400';
 const ROW_BORDER_RADIUS = 14;
-const GROUPED_ROW_MIN_HEIGHT = Platform.OS === 'web' ? 76 : 52;
+const GROUPED_ROW_MIN_HEIGHT = Platform.OS === 'web' ? 104 : 52;
 const SWIPE_ACTION_BUTTON_WIDTH = 48;
 const SWIPE_ACTION_EDGE_PADDING = 10;
 const SWIPE_ACTION_GAP = 6;

@@ -9171,6 +9171,23 @@ export default function App() {
   const todoPinActionLabel = activeTodoMenuId
     ? (todoEditTargetsAllPinned ? 'Unpin item' : 'Pin item')
     : (todoEditTargetsAllPinned ? 'Unpin selected' : 'Pin selected');
+  const activeTodoMenuSummary = useMemo(() => {
+    if (!activeTodoMenuId) {
+      return null;
+    }
+
+    const todo = currentTodoEditTargets[0];
+    if (!todo) {
+      return null;
+    }
+
+    return {
+      dateLabel: getHistoryTodoPreviewDateLabel(todo, dateStatusNow),
+      listLabel: todo.filters.list[0] ?? '',
+      priorityLabel: getBestOrderedFilterLabel(todo.filters.priority, PRIORITY_MENU_ITEMS, ''),
+      todo,
+    };
+  }, [activeTodoMenuId, currentTodoEditTargets, dateStatusNow]);
   const activeTodoDetail = useMemo(
     () => todos.find((todo) => todo.id === activeTodoDetailId) ?? null,
     [activeTodoDetailId, todos],
@@ -16426,8 +16443,35 @@ export default function App() {
                             </View>
                           );
                         }}
-                        showsVerticalScrollIndicator={false}
+                          showsVerticalScrollIndicator={false}
                       />
+                      {activeTodoMenuSummary ? (
+                        <View style={styles.listMenuTodoSummary}>
+                          <Text style={styles.listMenuTodoSummaryLabel}>Item summary</Text>
+                          <TodoMetaTags
+                            createdAt={activeTodoMenuSummary.todo.createdAt}
+                            dateLabel={activeTodoMenuSummary.dateLabel || undefined}
+                            dateLabelAnchor={activeTodoMenuSummary.todo.createdAt}
+                            dateLabelDisplayMode={dateLabelDisplayMode}
+                            dateStatusKey={dateStatusKey}
+                            done={activeTodoMenuSummary.todo.done}
+                            filterColors={filterColors}
+                            listLabel={activeTodoMenuSummary.listLabel || undefined}
+                            pinned={activeTodoMenuSummary.todo.pinned}
+                            priorityLabel={
+                              activeTodoMenuSummary.priorityLabel &&
+                              activeTodoMenuSummary.priorityLabel !== 'None'
+                                ? activeTodoMenuSummary.priorityLabel
+                                : undefined
+                            }
+                            reminderValues={activeTodoMenuSummary.todo.filters.reminder}
+                            showOverdueMetaTags={showOverdueMetaTags}
+                            tagLabels={activeTodoMenuSummary.todo.tags}
+                            visibility={HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY}
+                            wrap
+                          />
+                        </View>
+                      ) : null}
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={submenuOpen ? listMenuBackAccessibilityLabel : 'Close filter menu'}
@@ -21341,6 +21385,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 8,
     paddingHorizontal: 16,
+  },
+  listMenuTodoSummary: {
+    backgroundColor: '#F8F9FB',
+    borderColor: '#E7E9ED',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginHorizontal: 4,
+    marginTop: 8,
+    paddingBottom: 10,
+    paddingHorizontal: 12,
+    paddingTop: 9,
+  },
+  listMenuTodoSummaryLabel: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 11,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0.2,
+    lineHeight: 14,
   },
   listMenuBackIcon: {
     color: THEME_ACCENT,

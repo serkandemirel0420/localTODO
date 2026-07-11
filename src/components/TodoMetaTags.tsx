@@ -78,6 +78,7 @@ type TodoMetaTagsProps = {
   showOverdueMetaTags?: boolean;
   tagLabels?: string[];
   visibility: MetaTagVisibility;
+  wrap?: boolean;
 };
 
 const isOverdueStatusLabel = (label: string) => /overdue/i.test(label);
@@ -338,6 +339,7 @@ function TodoMetaTagsComponent({
   showOverdueMetaTags = true,
   tagLabels,
   visibility,
+  wrap = false,
 }: TodoMetaTagsProps) {
   const tags = buildMetaTags(
     visibility,
@@ -357,7 +359,7 @@ function TodoMetaTagsComponent({
   }
 
   return (
-    <View style={styles.metaRow}>
+    <View style={[styles.metaRow, wrap && styles.metaRowWrap]}>
       {tags.map((descriptor) => (
         <MetaTag
           key={`${descriptor.filterKey}-${descriptor.lookupValue}-${descriptor.displayLabel}`}
@@ -390,6 +392,11 @@ const styles = StyleSheet.create({
     minWidth: 0,
     overflow: 'hidden',
     width: '100%',
+  },
+  metaRowWrap: {
+    flexWrap: 'wrap',
+    overflow: 'visible',
+    rowGap: 5,
   },
   tag: {
     borderRadius: 4,

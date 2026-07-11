@@ -15494,6 +15494,7 @@ export default function App() {
             pressDelayMs={QUICK_PRESET_NAV_PRESS_DELAY_MS}
             selectedBackgroundColor={THEME_ACCENT_SOFT}
           />
+          <View pointerEvents="none" style={styles.bottomNavSeparator} />
           <View style={styles.bottomNavPrimary}>
             <Pressable
               accessibilityRole="button"
@@ -20872,11 +20873,18 @@ const styles = StyleSheet.create({
   },
   bottomNavPrimary: {
     alignItems: 'stretch',
-    borderTopColor: '#EEF0F3',
-    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     height: BOTTOM_NAV_PRIMARY_HEIGHT,
     justifyContent: 'space-around',
+  },
+  bottomNavSeparator: {
+    backgroundColor: '#E6E9EE',
+    height: 1,
+    left: HORIZONTAL_PADDING,
+    position: 'absolute',
+    right: HORIZONTAL_PADDING,
+    top: QUICK_PRESET_NAV_HEIGHT,
+    zIndex: 2,
   },
   bottomNavItem: {
     alignItems: 'center',

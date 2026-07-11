@@ -8790,7 +8790,7 @@ export default function App() {
             value: preset.id,
           }] : [];
         }),
-        title: 'Navbar presets',
+        title: 'Navbar icon colors',
       },
       {
         id: 'item-backgrounds',
@@ -18106,7 +18106,7 @@ export default function App() {
                   <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Colors</Text>
                     <Text style={styles.settingsSectionSubtitle}>
-                      {settingsColorItemCount} items · Backgrounds, priority parts
+                      {settingsColorItemCount} items · Navbar icons, backgrounds, priority
                     </Text>
                   </View>
                   <Pressable
@@ -20872,6 +20872,8 @@ const styles = StyleSheet.create({
   },
   bottomNavPrimary: {
     alignItems: 'stretch',
+    borderTopColor: '#EEF0F3',
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     height: BOTTOM_NAV_PRIMARY_HEIGHT,
     justifyContent: 'space-around',

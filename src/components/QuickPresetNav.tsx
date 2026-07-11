@@ -194,9 +194,7 @@ export function QuickPresetNav({
                 onPressOut={() => onReleaseSlot(item.slotNumber)}
                 style={({ pressed }) => [
                   styles.item,
-                  selected && {
-                    backgroundColor: item.color ? `${item.color}20` : selectedBackgroundColor,
-                  },
+                  selected && { backgroundColor: selectedBackgroundColor },
                   !item.preset && styles.itemEmpty,
                   pressed && styles.itemPressed,
                 ]}

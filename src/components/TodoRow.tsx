@@ -521,6 +521,7 @@ export type TodoRowProps = {
   sectionLabel?: string;
   selectMode?: boolean;
   showOverdueMetaTags?: boolean;
+  showPriorityRail?: boolean;
   swipeDisabled?: boolean;
   viewportWidth: number;
 };
@@ -554,6 +555,7 @@ function TodoRowComponent({
   searchHighlightContent = true,
   selectMode = false,
   showOverdueMetaTags = true,
+  showPriorityRail = true,
   swipeDisabled = false,
   viewportWidth,
 }: TodoRowProps) {
@@ -1147,7 +1149,7 @@ function TodoRowComponent({
           ),
         ]}
       >
-        {priorityRailTheme ? (
+        {showPriorityRail && priorityRailTheme ? (
           <View
             style={[
               styles.colorRail,

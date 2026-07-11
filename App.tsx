@@ -14397,6 +14397,25 @@ export default function App() {
     );
   }, [openCreateDrawerWithFilters, searchQuery, todoSelectMode]);
 
+  const getGroupedTodoPriorityRailStyle = useCallback((todo: Todo) => {
+    const priorityLabel = getBestOrderedFilterLabel(
+      todo.filters.priority,
+      PRIORITY_MENU_ITEMS,
+      '',
+    );
+    if (!priorityLabel || priorityLabel === 'None') {
+      return null;
+    }
+
+    const priorityTheme =
+      getFilterColorTheme(deferredFilterColors, 'priorityBorder', priorityLabel) ??
+      getFilterColorTheme(deferredFilterColors, 'priority', priorityLabel);
+
+    return priorityTheme
+      ? { borderLeftColor: priorityTheme.accent, borderLeftWidth: 4 }
+      : null;
+  }, [deferredFilterColors]);
+
   const renderTodoItem = useCallback(
     ({ item }: { item: AppTodoListRow }) => {
       if (item.type === 'searchListHeader') {
@@ -14507,6 +14526,7 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
+                getGroupedTodoPriorityRailStyle(todo),
                 shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                 item.isLastInList && styles.todoSectionGroupedShellLast,
               ]}
@@ -14546,6 +14566,7 @@ export default function App() {
                 searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
+                showPriorityRail={false}
                 swipeDisabled={quickPresetScreenSwipeEnabled}
                 viewportWidth={windowWidth}
               />
@@ -14584,6 +14605,7 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
+                getGroupedTodoPriorityRailStyle(todo),
                 shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                 item.isLast && styles.todoSectionGroupedShellLast,
               ]}
@@ -14624,6 +14646,7 @@ export default function App() {
                 searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
+                showPriorityRail={false}
                 swipeDisabled={quickPresetScreenSwipeEnabled}
                 viewportWidth={windowWidth}
               />
@@ -14740,6 +14763,7 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
+                getGroupedTodoPriorityRailStyle(todo),
                 shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                 item.isLastInPreset && styles.todoSectionGroupedShellLast,
               ]}
@@ -14779,6 +14803,7 @@ export default function App() {
                 searchHighlightQuery={itemSearchHighlightQuery}
                 selectMode={todoSelectMode}
                 showOverdueMetaTags={showOverdueMetaTags}
+                showPriorityRail={false}
                 swipeDisabled={quickPresetScreenSwipeEnabled}
                 viewportWidth={windowWidth}
               />
@@ -14903,6 +14928,7 @@ export default function App() {
                   key={todo.id}
                   style={[
                     styles.todoSectionGroupedShell,
+                    getGroupedTodoPriorityRailStyle(todo),
                     shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                     isLastInSection && styles.todoSectionGroupedShellLast,
                   ]}
@@ -14943,6 +14969,7 @@ export default function App() {
                     selectMode={todoSelectMode}
                     sectionLabel={item.sectionLabel}
                     showOverdueMetaTags={showOverdueMetaTags}
+                    showPriorityRail={false}
                     swipeDisabled={quickPresetScreenSwipeEnabled}
                     viewportWidth={windowWidth}
                   />
@@ -15015,6 +15042,7 @@ export default function App() {
       deleteTodo,
       deferredFilterColors,
       enterTodoSelectMode,
+      getGroupedTodoPriorityRailStyle,
       hideCreateFromSettingsCue,
       hidePresetTodoSectionAddButton,
       metaTagVisibility,

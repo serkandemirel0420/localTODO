@@ -14411,9 +14411,7 @@ export default function App() {
       getFilterColorTheme(deferredFilterColors, 'priorityBorder', priorityLabel) ??
       getFilterColorTheme(deferredFilterColors, 'priority', priorityLabel);
 
-    return priorityTheme
-      ? { borderLeftColor: priorityTheme.accent, borderLeftWidth: 4 }
-      : null;
+    return priorityTheme ? { backgroundColor: priorityTheme.accent } : null;
   }, [deferredFilterColors]);
 
   const renderTodoItem = useCallback(
@@ -14526,11 +14524,20 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
-                getGroupedTodoPriorityRailStyle(todo),
                 shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                 item.isLastInList && styles.todoSectionGroupedShellLast,
               ]}
             >
+              {getGroupedTodoPriorityRailStyle(todo) ? (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.todoSectionPriorityRail,
+                    item.isLastInList && styles.todoSectionPriorityRailLast,
+                    getGroupedTodoPriorityRailStyle(todo),
+                  ]}
+                />
+              ) : null}
               {!item.isFirstInList ? (
                 <View
                   style={[
@@ -14605,11 +14612,20 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
-                getGroupedTodoPriorityRailStyle(todo),
                 shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                 item.isLast && styles.todoSectionGroupedShellLast,
               ]}
             >
+              {getGroupedTodoPriorityRailStyle(todo) ? (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.todoSectionPriorityRail,
+                    item.isLast && styles.todoSectionPriorityRailLast,
+                    getGroupedTodoPriorityRailStyle(todo),
+                  ]}
+                />
+              ) : null}
               {!item.isFirst ? (
                 <View
                   style={[
@@ -14763,11 +14779,20 @@ export default function App() {
             <View
               style={[
                 styles.todoSectionGroupedShell,
-                getGroupedTodoPriorityRailStyle(todo),
                 shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                 item.isLastInPreset && styles.todoSectionGroupedShellLast,
               ]}
             >
+              {getGroupedTodoPriorityRailStyle(todo) ? (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.todoSectionPriorityRail,
+                    item.isLastInPreset && styles.todoSectionPriorityRailLast,
+                    getGroupedTodoPriorityRailStyle(todo),
+                  ]}
+                />
+              ) : null}
               {!item.isFirstInPreset ? (
                 <View
                   style={[
@@ -14928,11 +14953,20 @@ export default function App() {
                   key={todo.id}
                   style={[
                     styles.todoSectionGroupedShell,
-                    getGroupedTodoPriorityRailStyle(todo),
                     shouldHighlightGroupedRow && styles.todoSectionGroupedShellHighlighted,
                     isLastInSection && styles.todoSectionGroupedShellLast,
                   ]}
                 >
+                  {getGroupedTodoPriorityRailStyle(todo) ? (
+                    <View
+                      pointerEvents="none"
+                      style={[
+                        styles.todoSectionPriorityRail,
+                        isLastInSection && styles.todoSectionPriorityRailLast,
+                        getGroupedTodoPriorityRailStyle(todo),
+                      ]}
+                    />
+                  ) : null}
                   {!isFirstInSection ? (
                     <View
                       style={[
@@ -21814,6 +21848,18 @@ const styles = StyleSheet.create({
   },
   todoSectionGroupedShellHighlighted: {
     backgroundColor: THEME_ACCENT_SOFT,
+  },
+  todoSectionPriorityRail: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+    width: 4,
+    zIndex: 2,
+  },
+  todoSectionPriorityRailLast: {
+    borderBottomRightRadius: 2,
+    bottom: 12,
   },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,

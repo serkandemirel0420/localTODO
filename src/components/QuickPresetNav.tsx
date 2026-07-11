@@ -259,8 +259,8 @@ const styles = StyleSheet.create({
   },
   item: {
     alignItems: 'center',
-    borderRadius: 8,
-    height: 32,
+    borderRadius: 10,
+    height: 34,
     justifyContent: 'center',
     width: QUICK_PRESET_NAV_ITEM_WIDTH,
   },
@@ -268,8 +268,8 @@ const styles = StyleSheet.create({
     opacity: 0.68,
   },
   itemPressed: {
-    opacity: 0.7,
-    transform: [{ scale: 0.98 }],
+    opacity: 0.72,
+    transform: [{ scale: 0.94 }],
   },
   items: {
     alignItems: 'center',

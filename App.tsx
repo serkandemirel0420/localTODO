@@ -1338,7 +1338,7 @@ const menuSectionCanClear = (
 };
 
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 16;
-const HORIZONTAL_PADDING = 16;
+const HORIZONTAL_PADDING = 18;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
@@ -1356,8 +1356,8 @@ const TODO_DETAIL_SELECTION_COLOR = '#C0C0C0';
 const TODO_DETAIL_CONTENT_VISIBLE_LINES = 6;
 const TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT = 165;
 const TODO_DETAIL_CONTENT_EXTRA_LINES = 5;
-const CARD_BORDER_RADIUS = 12;
-const CONTROL_BORDER_RADIUS = 10;
+const CARD_BORDER_RADIUS = 16;
+const CONTROL_BORDER_RADIUS = 14;
 const PULL_MAX = 178;
 const DOUBLE_TAP_DELAY = 300;
 const EDGE_BACK_WIDTH = 28;
@@ -1366,11 +1366,11 @@ const NAV_ACCENT = THEME_ACCENT;
 const NAV_ICON_INACTIVE = THEME_TEXT_SECONDARY;
 const QUICK_PRESET_NAV_ICON_ROW_HEIGHT = 40;
 const QUICK_PRESET_NAV_HEIGHT = QUICK_PRESET_NAV_ICON_ROW_HEIGHT;
-const BOTTOM_NAV_PRIMARY_HEIGHT = 48;
+const BOTTOM_NAV_PRIMARY_HEIGHT = 52;
 const BOTTOM_NAV_HEIGHT = QUICK_PRESET_NAV_HEIGHT + BOTTOM_NAV_PRIMARY_HEIGHT;
 const BOTTOM_NAV_BOTTOM_GAP = Platform.OS === 'android' ? 10 : 0;
 const BOTTOM_NAV_RESERVED_HEIGHT = BOTTOM_NAV_HEIGHT + BOTTOM_NAV_BOTTOM_GAP;
-const HEADER_SEARCH_ROW_HEIGHT = 64;
+const HEADER_SEARCH_ROW_HEIGHT = 70;
 type MaterialCommunityIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 const toMaterialCommunityIconName = (iconName: string): MaterialCommunityIconName => (
   iconName as MaterialCommunityIconName
@@ -20684,18 +20684,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_BG,
     justifyContent: 'center',
-    minHeight: 44,
-    paddingBottom: 4,
+    minHeight: 50,
+    paddingBottom: 8,
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingTop: Platform.OS === 'android' ? TOP_SAFE_GAP : 8,
     position: 'relative',
   },
   appHeaderTitle: {
     color: THEME_TEXT,
-    fontSize: 20,
+    fontSize: 21,
     fontWeight: FONT_SEMIBOLD,
-    lineHeight: 26,
-    letterSpacing: -0.2,
+    lineHeight: 28,
+    letterSpacing: -0.3,
     paddingHorizontal: 94,
     textAlign: 'center',
     width: '100%',
@@ -20776,7 +20776,8 @@ const styles = StyleSheet.create({
     zIndex: 3,
   },
   appHeaderSideButtonPressed: {
-    opacity: 0.72,
+    opacity: 0.76,
+    transform: [{ scale: 0.94 }],
   },
   appHeaderSelectActions: {
     alignItems: 'center',
@@ -20795,9 +20796,9 @@ const styles = StyleSheet.create({
   headerSearchRow: {
     backgroundColor: THEME_BG,
     height: HEADER_SEARCH_ROW_HEIGHT,
-    paddingBottom: 12,
+    paddingBottom: 14,
     paddingHorizontal: HORIZONTAL_PADDING,
-    paddingTop: 4,
+    paddingTop: 6,
   },
   navSearchIcon: {
     marginRight: 8,
@@ -20844,7 +20845,7 @@ const styles = StyleSheet.create({
   bottomNav: {
     alignItems: 'stretch',
     backgroundColor: '#FFFFFF',
-    borderTopColor: '#E5E5EA',
+    borderTopColor: '#EAECF0',
     borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'column',
     height: BOTTOM_NAV_RESERVED_HEIGHT,
@@ -20852,8 +20853,8 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
     paddingTop: 0,
     shadowColor: '#000000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
     shadowOffset: { width: 0, height: -2 },
     elevation: 8,
   },
@@ -20890,20 +20891,21 @@ const styles = StyleSheet.create({
   },
   bottomNavItemPressed: {
     opacity: 0.72,
+    transform: [{ scale: 0.92 }],
   },
   searchBox: {
-    height: 48,
+    height: 50,
     borderRadius: CONTROL_BORDER_RADIUS,
     backgroundColor: THEME_CARD,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: THEME_BORDER,
     alignItems: 'center',
     flexDirection: 'row',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     shadowColor: '#000000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.045,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
   searchInput: {
@@ -20911,7 +20913,7 @@ const styles = StyleSheet.create({
     color: THEME_TEXT,
     fontSize: 16,
     fontWeight: FONT_REGULAR,
-    height: 48,
+    height: 50,
     letterSpacing: 0,
     minWidth: 0,
     paddingVertical: 0,

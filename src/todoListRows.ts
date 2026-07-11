@@ -21,8 +21,8 @@ import {
   type TodoSortMode,
 } from './storage/appSettingsStore';
 
-export const TODO_LIST_ROW_GAP = 12;
-export const TODO_LIST_CONTENT_TOP_PADDING = 8;
+export const TODO_LIST_ROW_GAP = 14;
+export const TODO_LIST_CONTENT_TOP_PADDING = 12;
 export const TODO_STANDALONE_ROW_ESTIMATE = 76;
 export const TODO_GROUPED_ROW_ESTIMATE = 64;
 export const TODO_SECTION_HEADER_ESTIMATE = 52;

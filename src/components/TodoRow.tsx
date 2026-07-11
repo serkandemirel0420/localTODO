@@ -55,7 +55,7 @@ const SWIPE_DONE = '#4168E8';
 const SWIPE_DELETE = '#D14A42';
 const SWIPE_MENU = '#EA8D35';
 const FONT_REGULAR = '400';
-const ROW_BORDER_RADIUS = 10;
+const ROW_BORDER_RADIUS = 14;
 const SWIPE_ACTION_BUTTON_WIDTH = 48;
 const SWIPE_ACTION_EDGE_PADDING = 10;
 const SWIPE_ACTION_GAP = 6;
@@ -1450,7 +1450,7 @@ const styles = StyleSheet.create({
   shell: {
     alignSelf: 'stretch',
     backgroundColor: 'transparent',
-    minHeight: 56,
+    minHeight: 62,
     position: 'relative',
     width: '100%',
   },
@@ -1499,7 +1499,7 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     backgroundColor: THEME_CARD,
     borderRadius: ROW_BORDER_RADIUS,
-    minHeight: 56,
+    minHeight: 62,
     overflow: 'hidden',
     width: '100%',
   },
@@ -1614,13 +1614,13 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     elevation: 1,
     flexDirection: 'row',
-    minHeight: 56,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    minHeight: 62,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowOpacity: 0.045,
+    shadowRadius: 10,
     width: '100%',
   },
   rowGrouped: {
@@ -1698,8 +1698,8 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   checkboxPressable: {
-    marginRight: 12,
-    marginTop: 2,
+    marginRight: 14,
+    marginTop: 1,
   },
   checkbox: {
     width: 22,
@@ -1755,10 +1755,10 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     color: THEME_TEXT,
     flexShrink: 1,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: FONT_REGULAR,
     includeFontPadding: false,
-    lineHeight: 21,
+    lineHeight: 23,
     minWidth: 0,
   },
   textDone: {
@@ -1771,8 +1771,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 14,
     fontWeight: FONT_REGULAR,
-    lineHeight: 19,
-    marginTop: 3,
+    lineHeight: 20,
+    marginTop: 5,
     minWidth: 0,
   },
   contentDone: {

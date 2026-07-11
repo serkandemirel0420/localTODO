@@ -15744,6 +15744,7 @@ export default function App() {
                                       }
                                       reminderValues={activeTodoMenuSummary.todo.filters.reminder}
                                       showOverdueMetaTags={showOverdueMetaTags}
+                                      showReminderTimeLabel
                                       tagLabels={activeTodoMenuSummary.todo.tags}
                                       visibility={HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY}
                                       wrap

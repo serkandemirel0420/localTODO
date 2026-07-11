@@ -76,6 +76,7 @@ type TodoMetaTagsProps = {
   priorityLabel?: string;
   reminderValues?: string[];
   showOverdueMetaTags?: boolean;
+  showReminderTimeLabel?: boolean;
   tagLabels?: string[];
   visibility: MetaTagVisibility;
   wrap?: boolean;
@@ -279,6 +280,7 @@ function buildMetaTags(
 function buildStatusIcons(
   reminderValues: string[] | undefined,
   pinned: boolean | undefined,
+  showReminderTimeLabel: boolean,
 ): StatusIconDescriptor[] {
   const { habitHours, time, repeat } = decodeTodoReminder(reminderValues ?? []);
   const icons: StatusIconDescriptor[] = [];
@@ -294,11 +296,13 @@ function buildStatusIcons(
   }
 
   if (time && !habitHours) {
+    const reminderTimeLabel = formatReminderClockLabel(time);
     icons.push({
-      accessibilityLabel: `Reminder ${formatReminderClockLabel(time)}`,
+      accessibilityLabel: `Reminder ${reminderTimeLabel}`,
       color: REMINDER_STATUS_COLOR,
       iconName: 'notifications-outline',
       id: 'reminder',
+      label: showReminderTimeLabel ? reminderTimeLabel : undefined,
     });
   }
 
@@ -337,6 +341,7 @@ function TodoMetaTagsComponent({
   priorityLabel,
   reminderValues,
   showOverdueMetaTags = true,
+  showReminderTimeLabel = false,
   tagLabels,
   visibility,
   wrap = false,
@@ -352,7 +357,7 @@ function TodoMetaTagsComponent({
     tagLabels,
     createdAt,
   );
-  const statusIcons = buildStatusIcons(reminderValues, pinned);
+  const statusIcons = buildStatusIcons(reminderValues, pinned, showReminderTimeLabel);
 
   if (tags.length === 0 && statusIcons.length === 0) {
     return null;

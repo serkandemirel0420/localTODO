@@ -1175,7 +1175,6 @@ function TodoRowComponent({
             style={[
               styles.contentColumn,
               isGroupedLayout && styles.contentColumnGrouped,
-              isGroupedLayout && priorityRailTheme && styles.contentColumnGroupedPriorityRail,
             ]}
           >
             {hasDisplayTitle ? (
@@ -1627,19 +1626,15 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   colorRail: {
-    bottom: 9,
-    borderBottomRightRadius: 3,
-    borderTopRightRadius: 3,
-    left: 0,
-    position: 'absolute',
-    top: 9,
+    alignSelf: 'stretch',
+    borderRadius: 3,
+    marginRight: 9,
+    marginVertical: 1,
     width: 4,
-    zIndex: 1,
   },
   colorRailGrouped: {
-    bottom: 8,
-    left: 0,
-    top: 8,
+    marginRight: 8,
+    marginVertical: 0,
     width: 4,
   },
   colorRailDone: {
@@ -1662,9 +1657,6 @@ const styles = StyleSheet.create({
   },
   contentColumnGrouped: {
     paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
-  },
-  contentColumnGroupedPriorityRail: {
-    paddingLeft: 9,
   },
   titleBlock: {
     alignSelf: 'stretch',

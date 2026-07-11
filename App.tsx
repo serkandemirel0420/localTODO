@@ -14455,7 +14455,7 @@ export default function App() {
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
                     color={THEME_TEXT_SECONDARY}
-                    size={18}
+                    size={15}
                   />
                 </View>
               </View>
@@ -14688,7 +14688,7 @@ export default function App() {
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
                     color={THEME_TEXT_SECONDARY}
-                    size={18}
+                    size={15}
                   />
                 </View>
               </View>
@@ -14845,7 +14845,7 @@ export default function App() {
                   <Ionicons
                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
                     color={THEME_TEXT_SECONDARY}
-                    size={18}
+                    size={15}
                   />
                 </View>
               </View>
@@ -21798,9 +21798,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'flex-start',
-    minHeight: 52,
+    minHeight: 48,
+    paddingBottom: 9,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingTop: 13,
     width: '100%',
   },
   todoSectionHeaderPressable: {
@@ -21850,10 +21851,10 @@ const styles = StyleSheet.create({
   },
   todoGroupCount: {
     color: THEME_TEXT_SECONDARY,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: FONT_REGULAR,
-    lineHeight: 18,
-    minWidth: 16,
+    lineHeight: 16,
+    minWidth: 14,
     textAlign: 'right',
   },
   todoRowDivider: {

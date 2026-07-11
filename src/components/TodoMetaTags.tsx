@@ -92,6 +92,7 @@ function MetaTag({
   filterColors: FilterColorSettings;
 }) {
   const isPriorityTag = descriptor.filterKey === 'priority';
+  const isDateTag = descriptor.filterKey === 'date';
   const colorMetaTag = descriptor.filterKey === 'date' || isPriorityTag;
   const colorTheme = colorMetaTag
     ? getFilterColorTheme(
@@ -125,6 +126,7 @@ function MetaTag({
     <View
       style={[
         styles.tag,
+        isDateTag && styles.dateTag,
         {
           backgroundColor,
           borderColor,
@@ -136,6 +138,7 @@ function MetaTag({
         numberOfLines={1}
         style={[
           styles.tagText,
+          isDateTag && styles.dateTagText,
           { color: textColor },
           done && styles.tagTextDone,
         ]}
@@ -145,6 +148,7 @@ function MetaTag({
           <Text
             style={[
               styles.tagSecondaryText,
+              isDateTag && styles.dateTagSecondaryText,
               { color: textColor },
               done && styles.tagTextDone,
             ]}
@@ -399,6 +403,10 @@ const styles = StyleSheet.create({
   tagDone: {
     opacity: 0.55,
   },
+  dateTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
   tagText: {
     flexShrink: 1,
     fontSize: 10,
@@ -406,9 +414,19 @@ const styles = StyleSheet.create({
     lineHeight: 13,
     minWidth: 0,
   },
+  dateTagText: {
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 14,
+  },
   tagSecondaryText: {
     fontSize: 8,
     lineHeight: 10,
+  },
+  dateTagSecondaryText: {
+    fontSize: 10,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 13,
   },
   tagTextDone: {
     opacity: 0.9,

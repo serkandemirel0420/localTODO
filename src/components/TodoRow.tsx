@@ -72,8 +72,8 @@ const TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH = TODO_ROW_TITLE_MAX_CHARS;
 const TODO_ROW_PREVIEW_ELLIPSIS = '...';
 const TODO_ROW_MOBILE_TITLE_WRAP_COLUMN = 28;
 const TODO_ROW_MOBILE_MAX_WIDTH = 480;
-const TODO_ROW_TEXT_RIGHT_INSET = 36;
-const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 44;
+const TODO_ROW_TEXT_RIGHT_INSET = 0;
+const TODO_ROW_GROUPED_TEXT_RIGHT_INSET = 0;
 const TODO_ROW_CHECKBOX_LONG_PRESS_WIDTH = 56;
 const TODO_ROW_GROUPED_CHECKBOX_LONG_PRESS_WIDTH = 52;
 const TODO_ROW_PRIORITY_RAIL_LONG_PRESS_OFFSET = 17;
@@ -681,30 +681,6 @@ function TodoRowComponent({
     triggerSubtleHaptic();
   }, [closeOtherOpenSwipeable, isPendingDelete, item.id, onToggleSelect]);
 
-  const toggleDoneFromCheckbox = useCallback(() => {
-    if (isPendingDelete) {
-      return;
-    }
-
-    if (selectMode) {
-      toggleSelection();
-      return;
-    }
-
-    closeOtherOpenSwipeable();
-    onSetDone(item.id, !isVisuallyDone);
-    triggerSubtleHaptic();
-  }, [
-    closeOtherOpenSwipeable,
-    isCompletionFeedback,
-    isPendingDelete,
-    item.id,
-    isVisuallyDone,
-    onSetDone,
-    selectMode,
-    toggleSelection,
-  ]);
-
   const openCreateFromTodoSettings = useCallback(() => {
     if (!canCreateFromSettings) {
       return;
@@ -1179,42 +1155,6 @@ function TodoRowComponent({
           />
         ) : null}
         <GestureTouchableOpacity
-          accessibilityRole={selectMode ? 'button' : 'checkbox'}
-          accessibilityState={selectMode ? { selected: isSelected } : { checked: isVisuallyDone }}
-          accessibilityLabel={
-            selectMode
-              ? (isSelected ? 'Deselect todo' : 'Select todo')
-              : (isVisuallyDone ? 'Mark todo active' : 'Mark todo done')
-          }
-          accessibilityHint={
-            selectMode
-              ? undefined
-              : 'Long press to create a new todo with these settings'
-          }
-          activeOpacity={0.72}
-          disabled={isPendingDelete}
-          onPress={toggleDoneFromCheckbox}
-          style={styles.checkboxPressable}
-        >
-          <View
-            style={[
-              styles.checkbox,
-              selectMode
-                ? [
-                    styles.checkboxSelectMode,
-                    isSelected && styles.checkboxSelectModeSelected,
-                  ]
-                : (isVisuallyDone && styles.checkboxChecked),
-            ]}
-          >
-            {selectMode ? (
-              isSelected ? <View style={styles.checkboxSelectModeDot} /> : null
-            ) : isVisuallyDone ? (
-              <Ionicons color={THEME_CARD} name="checkmark" size={14} />
-            ) : null}
-          </View>
-        </GestureTouchableOpacity>
-        <GestureTouchableOpacity
           accessibilityRole="button"
           accessibilityLabel={
             isPendingDelete
@@ -1615,7 +1555,7 @@ const styles = StyleSheet.create({
     elevation: 1,
     flexDirection: 'row',
     minHeight: 62,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 16,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 2 },
@@ -1683,50 +1623,22 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   colorRail: {
-    alignSelf: 'stretch',
-    borderRadius: 2,
-    marginRight: 12,
-    marginVertical: 2,
-    width: 5,
+    bottom: 9,
+    borderBottomRightRadius: 3,
+    borderTopRightRadius: 3,
+    left: 0,
+    position: 'absolute',
+    top: 9,
+    width: 4,
   },
   colorRailGrouped: {
-    marginRight: 10,
-    marginVertical: 0,
-    width: 4,
+    bottom: 8,
+    left: -16,
+    top: 8,
+    width: 3,
   },
   colorRailDone: {
     opacity: 0.45,
-  },
-  checkboxPressable: {
-    marginRight: 14,
-    marginTop: 1,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: '#C7C7CC',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxChecked: {
-    backgroundColor: THEME_ACCENT,
-    borderColor: THEME_ACCENT,
-  },
-  checkboxSelectMode: {
-    backgroundColor: THEME_CARD,
-    borderColor: 'rgba(76, 120, 255, 0.52)',
-    borderRadius: 11,
-  },
-  checkboxSelectModeSelected: {
-    borderColor: THEME_ACCENT,
-  },
-  checkboxSelectModeDot: {
-    backgroundColor: THEME_ACCENT,
-    borderRadius: 4,
-    height: 8,
-    width: 8,
   },
   textPressable: {
     alignSelf: 'flex-start',

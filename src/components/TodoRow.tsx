@@ -4,6 +4,7 @@ import {
   Animated,
   type GestureResponderEvent,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -56,6 +57,7 @@ const SWIPE_DELETE = '#D14A42';
 const SWIPE_MENU = '#EA8D35';
 const FONT_REGULAR = '400';
 const ROW_BORDER_RADIUS = 14;
+const GROUPED_ROW_MIN_HEIGHT = Platform.OS === 'web' ? 76 : 52;
 const SWIPE_ACTION_BUTTON_WIDTH = 48;
 const SWIPE_ACTION_EDGE_PADDING = 10;
 const SWIPE_ACTION_GAP = 6;
@@ -565,7 +567,7 @@ function TodoRowComponent({
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
-  const fallbackRowHeight = isGroupedLayout ? 52 : 56;
+  const fallbackRowHeight = isGroupedLayout ? GROUPED_ROW_MIN_HEIGHT : 56;
   const swipeActionAreaHeight = isGroupedLayout ? fallbackRowHeight : rowHeight ?? fallbackRowHeight;
   const swipeActionInset = isGroupedLayout ? 2 : 0;
   const effectiveMetaTagVisibility = applyHiddenMetaTagKinds(
@@ -1400,7 +1402,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   shellGrouped: {
-    minHeight: 52,
+    minHeight: GROUPED_ROW_MIN_HEIGHT,
   },
   shellMenuTarget: {
     zIndex: 2,
@@ -1451,7 +1453,7 @@ const styles = StyleSheet.create({
   swipeableContainerGrouped: {
     alignSelf: 'stretch',
     borderRadius: 0,
-    minHeight: 52,
+    minHeight: GROUPED_ROW_MIN_HEIGHT,
     overflow: 'visible',
     width: '100%',
   },
@@ -1482,7 +1484,7 @@ const styles = StyleSheet.create({
   lightweightSwipeContainer: {
     alignSelf: 'stretch',
     backgroundColor: THEME_CARD,
-    minHeight: 52,
+    minHeight: GROUPED_ROW_MIN_HEIGHT,
     overflow: 'hidden',
     position: 'relative',
     width: '100%',
@@ -1490,7 +1492,7 @@ const styles = StyleSheet.create({
   lightweightSwipeSurface: {
     alignSelf: 'stretch',
     backgroundColor: THEME_CARD,
-    minHeight: 52,
+    minHeight: GROUPED_ROW_MIN_HEIGHT,
     overflow: 'hidden',
     width: '100%',
   },
@@ -1573,7 +1575,7 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     borderWidth: 0,
     elevation: 0,
-    minHeight: 52,
+    minHeight: GROUPED_ROW_MIN_HEIGHT,
     marginHorizontal: -16,
     paddingHorizontal: 16,
     paddingVertical: 12,

@@ -1679,7 +1679,7 @@ const styles = StyleSheet.create({
   },
   content: {
     alignSelf: 'stretch',
-    color: '#5F5B57',
+    color: 'rgba(95, 91, 87, 0.68)',
     flexShrink: 1,
     fontSize: 14,
     fontWeight: FONT_REGULAR,

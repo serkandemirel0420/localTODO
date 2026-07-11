@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import {
   Modal,
   type NativeScrollEvent,
@@ -67,7 +68,7 @@ const THEME_TEXT_SECONDARY = '#8E8E93';
 const THEME_ACCENT = '#4C78FF';
 const THEME_ACCENT_SOFT = '#E8EEFF';
 const SECTION_TOGGLE_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
-const OPTION_ROW_HEIGHT = 48;
+const OPTION_ROW_HEIGHT = 52;
 const FILTER_CONFIG_ONE_HANDED_SCROLL_RATIO = 0.7;
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 8 : 0;
 
@@ -182,14 +183,15 @@ const AccordionSection = ({
             {subtitle}
           </Text>
         </View>
-        <Text
+        <Ionicons
+          color={THEME_TEXT_SECONDARY}
+          name="chevron-down"
+          size={17}
           style={[
             styles.sectionChevron,
             expanded && styles.sectionChevronExpanded,
           ]}
-        >
-          ›
-        </Text>
+        />
       </Pressable>
       {canClear && onClear ? (
         <Pressable
@@ -202,7 +204,7 @@ const AccordionSection = ({
             pressed && styles.sectionClearButtonPressed,
           ]}
         >
-          <Text style={styles.sectionClearButtonText}>×</Text>
+          <Ionicons color={THEME_TEXT_SECONDARY} name="close" size={18} />
         </Pressable>
       ) : null}
     </View>
@@ -400,13 +402,16 @@ export const FilterConfigScreen = ({
           <Text
             style={[
               styles.optionLabel,
+              selected && styles.optionLabelSelected,
               options?.indented && styles.optionLabelSubsection,
             ]}
           >
             {label}
           </Text>
         </View>
-        {selected ? <Text style={styles.optionCheck}>✓</Text> : null}
+        {selected ? (
+          <Ionicons color={THEME_ACCENT} name="checkmark" size={18} style={styles.optionCheck} />
+        ) : null}
       </Pressable>
     ),
     [],
@@ -444,7 +449,7 @@ export const FilterConfigScreen = ({
                 pressed && styles.closeButtonPressed,
               ]}
             >
-              <Text style={styles.closeIcon}>×</Text>
+              <Ionicons color={THEME_TEXT} name="close" size={21} />
             </Pressable>
           </View>
 
@@ -501,7 +506,7 @@ export const FilterConfigScreen = ({
                         pressed && styles.sectionClearButtonPressed,
                       ]}
                     >
-                      <Text style={styles.rowClearButtonText}>×</Text>
+                      <Ionicons color={THEME_TEXT_SECONDARY} name="close" size={18} />
                     </Pressable>
                   ) : null}
                 </View>
@@ -615,7 +620,7 @@ export const FilterConfigScreen = ({
                         pressed && styles.sectionClearButtonPressed,
                       ]}
                     >
-                      <Text style={styles.rowClearButtonText}>×</Text>
+                      <Ionicons color={THEME_TEXT_SECONDARY} name="close" size={18} />
                     </Pressable>
                   ) : null}
                 </View>
@@ -740,9 +745,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
-    paddingBottom: 12,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingBottom: 16,
+    paddingHorizontal: 18,
+    paddingTop: 10,
   },
   headerTextWrap: {
     flex: 1,
@@ -750,28 +755,28 @@ const styles = StyleSheet.create({
   },
   title: {
     color: THEME_TEXT,
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: FONT_SEMIBOLD,
-    letterSpacing: 0,
-    lineHeight: 30,
+    letterSpacing: -0.3,
+    lineHeight: 32,
   },
   subtitle: {
     color: THEME_TEXT_SECONDARY,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: FONT_REGULAR,
     letterSpacing: 0.1,
-    lineHeight: 18,
-    marginTop: 2,
+    lineHeight: 17,
+    marginTop: 3,
   },
   closeButton: {
     alignItems: 'center',
-    backgroundColor: '#F3EEE7',
-    borderColor: '#E8E2DA',
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4E7EB',
+    borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    height: 34,
+    height: 36,
     justifyContent: 'center',
-    width: 34,
+    width: 36,
   },
   closeButtonPressed: {
     opacity: 0.72,
@@ -789,23 +794,24 @@ const styles = StyleSheet.create({
   },
   bodyContent: {
     paddingBottom: 24,
-    paddingHorizontal: 16,
-    paddingTop: 4,
+    paddingHorizontal: 18,
+    paddingTop: 2,
   },
   section: {
-    marginBottom: 14,
+    marginBottom: 16,
   },
   sectionHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 8,
+    marginBottom: 7,
   },
   sectionHeaderMain: {
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
+    minHeight: 44,
     minWidth: 0,
   },
   sectionHeaderPressed: {
@@ -817,34 +823,30 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: THEME_TEXT,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: FONT_SEMIBOLD,
-    letterSpacing: 0,
-    lineHeight: 22,
+    letterSpacing: -0.1,
+    lineHeight: 23,
   },
   sectionSubtitle: {
     color: THEME_TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: FONT_REGULAR,
     letterSpacing: 0.1,
-    lineHeight: 17,
-    marginTop: 2,
+    lineHeight: 16,
+    marginTop: 3,
   },
   sectionChevron: {
-    color: '#9B9289',
-    fontSize: 22,
-    fontWeight: FONT_REGULAR,
-    lineHeight: 22,
     transform: [{ rotate: '0deg' }],
   },
   sectionChevronExpanded: {
-    transform: [{ rotate: '90deg' }],
+    transform: [{ rotate: '180deg' }],
   },
   sectionClearButton: {
     alignItems: 'center',
-    height: 34,
+    height: 36,
     justifyContent: 'center',
-    width: 34,
+    width: 36,
   },
   sectionClearButtonPressed: {
     opacity: 0.72,
@@ -858,10 +860,10 @@ const styles = StyleSheet.create({
   sectionCard: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E8E2DA',
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   optionRow: {
     alignItems: 'center',
@@ -870,7 +872,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: OPTION_ROW_HEIGHT,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
   },
   optionRowIndented: {
     paddingLeft: 24,
@@ -882,25 +884,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     minWidth: 0,
   },
   optionLabel: {
     color: '#2A2520',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: FONT_REGULAR,
     letterSpacing: 0.1,
-    lineHeight: 20,
+    lineHeight: 21,
+  },
+  optionLabelSelected: {
+    fontWeight: FONT_MEDIUM,
   },
   optionLabelSubsection: {
     color: '#5C554E',
     fontSize: 14,
   },
   optionCheck: {
-    color: THEME_ACCENT,
-    fontSize: 16,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 20,
     marginLeft: 12,
   },
   emptySectionText: {
@@ -919,10 +920,10 @@ const styles = StyleSheet.create({
     width: 16,
   },
   colorDot: {
-    borderRadius: 5,
+    borderRadius: 6,
     flexShrink: 0,
-    height: 9,
-    width: 9,
+    height: 10,
+    width: 10,
   },
   colorDotNoColor: {
     backgroundColor: 'transparent',
@@ -1004,18 +1005,19 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   footer: {
-    borderTopColor: '#E8E2DA',
+    backgroundColor: '#FFFFFF',
+    borderTopColor: '#E6E9ED',
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingBottom: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingTop: 12,
   },
   showResultsButton: {
     alignItems: 'center',
     backgroundColor: THEME_ACCENT,
-    borderRadius: 14,
+    borderRadius: 16,
     justifyContent: 'center',
-    minHeight: 52,
+    minHeight: 54,
     paddingHorizontal: 16,
   },
   showResultsButtonPressed: {
@@ -1025,7 +1027,7 @@ const styles = StyleSheet.create({
   showResultsButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_SEMIBOLD,
     letterSpacing: 0.1,
     lineHeight: 20,
   },

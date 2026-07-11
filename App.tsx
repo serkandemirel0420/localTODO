@@ -21859,7 +21859,7 @@ const styles = StyleSheet.create({
   },
   todoSectionPriorityRailLast: {
     borderBottomRightRadius: 2,
-    bottom: 12,
+    bottom: 24,
   },
   todoSectionGroupedShellLast: {
     borderBottomColor: THEME_BORDER,

@@ -583,7 +583,10 @@ function TodoRowComponent({
     ? getFilterColorTheme(filterColors, 'list', listStatusLabel)
     : null;
   const priorityRailTheme = priorityStatusLabel && priorityStatusLabel !== 'None'
-    ? getFilterColorTheme(filterColors, 'priorityBorder', priorityStatusLabel)
+    ? (
+        getFilterColorTheme(filterColors, 'priorityBorder', priorityStatusLabel) ??
+        getFilterColorTheme(filterColors, 'priority', priorityStatusLabel)
+      )
     : null;
   const content = item.content.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
@@ -1172,6 +1175,7 @@ function TodoRowComponent({
             style={[
               styles.contentColumn,
               isGroupedLayout && styles.contentColumnGrouped,
+              isGroupedLayout && priorityRailTheme && styles.contentColumnGroupedPriorityRail,
             ]}
           >
             {hasDisplayTitle ? (
@@ -1630,12 +1634,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 9,
     width: 4,
+    zIndex: 1,
   },
   colorRailGrouped: {
     bottom: 8,
-    left: -16,
+    left: 0,
     top: 8,
-    width: 3,
+    width: 4,
   },
   colorRailDone: {
     opacity: 0.45,
@@ -1657,6 +1662,9 @@ const styles = StyleSheet.create({
   },
   contentColumnGrouped: {
     paddingRight: TODO_ROW_GROUPED_TEXT_RIGHT_INSET,
+  },
+  contentColumnGroupedPriorityRail: {
+    paddingLeft: 9,
   },
   titleBlock: {
     alignSelf: 'stretch',

@@ -15722,10 +15722,39 @@ export default function App() {
                               </View>
                             }
                             ListFooterComponent={
-                              <View
-                                pointerEvents="none"
-                                style={{ height: listMenuOneHandedOffset }}
-                              />
+                              <>
+                                {activeTodoMenuSummary ? (
+                                  <View style={styles.listMenuTodoSummary}>
+                                    <Text style={styles.listMenuTodoSummaryLabel}>Item summary</Text>
+                                    <TodoMetaTags
+                                      createdAt={activeTodoMenuSummary.todo.createdAt}
+                                      dateLabel={activeTodoMenuSummary.dateLabel || undefined}
+                                      dateLabelAnchor={activeTodoMenuSummary.todo.createdAt}
+                                      dateLabelDisplayMode={dateLabelDisplayMode}
+                                      dateStatusKey={dateStatusKey}
+                                      done={activeTodoMenuSummary.todo.done}
+                                      filterColors={filterColors}
+                                      listLabel={activeTodoMenuSummary.listLabel || undefined}
+                                      pinned={activeTodoMenuSummary.todo.pinned}
+                                      priorityLabel={
+                                        activeTodoMenuSummary.priorityLabel &&
+                                        activeTodoMenuSummary.priorityLabel !== 'None'
+                                          ? activeTodoMenuSummary.priorityLabel
+                                          : undefined
+                                      }
+                                      reminderValues={activeTodoMenuSummary.todo.filters.reminder}
+                                      showOverdueMetaTags={showOverdueMetaTags}
+                                      tagLabels={activeTodoMenuSummary.todo.tags}
+                                      visibility={HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY}
+                                      wrap
+                                    />
+                                  </View>
+                                ) : null}
+                                <View
+                                  pointerEvents="none"
+                                  style={{ height: listMenuOneHandedOffset }}
+                                />
+                              </>
                             }
                             ListHeaderComponent={
                               <View
@@ -16445,33 +16474,6 @@ export default function App() {
                         }}
                           showsVerticalScrollIndicator={false}
                       />
-                      {activeTodoMenuSummary ? (
-                        <View style={styles.listMenuTodoSummary}>
-                          <Text style={styles.listMenuTodoSummaryLabel}>Item summary</Text>
-                          <TodoMetaTags
-                            createdAt={activeTodoMenuSummary.todo.createdAt}
-                            dateLabel={activeTodoMenuSummary.dateLabel || undefined}
-                            dateLabelAnchor={activeTodoMenuSummary.todo.createdAt}
-                            dateLabelDisplayMode={dateLabelDisplayMode}
-                            dateStatusKey={dateStatusKey}
-                            done={activeTodoMenuSummary.todo.done}
-                            filterColors={filterColors}
-                            listLabel={activeTodoMenuSummary.listLabel || undefined}
-                            pinned={activeTodoMenuSummary.todo.pinned}
-                            priorityLabel={
-                              activeTodoMenuSummary.priorityLabel &&
-                              activeTodoMenuSummary.priorityLabel !== 'None'
-                                ? activeTodoMenuSummary.priorityLabel
-                                : undefined
-                            }
-                            reminderValues={activeTodoMenuSummary.todo.filters.reminder}
-                            showOverdueMetaTags={showOverdueMetaTags}
-                            tagLabels={activeTodoMenuSummary.todo.tags}
-                            visibility={HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY}
-                            wrap
-                          />
-                        </View>
-                      ) : null}
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={submenuOpen ? listMenuBackAccessibilityLabel : 'Close filter menu'}

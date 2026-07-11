@@ -2171,6 +2171,11 @@ const getCreateTodoFilters = (
   };
 };
 
+const getCopiedTodoFilters = (todo: Todo): SelectedFilters => ({
+  ...cloneTodoFilters(todo.filters),
+  tag: [],
+});
+
 const hasRememberedCreateDraftFilters = (
   listMenuTree: ListMenuNode[],
   filters: TodoFilters,
@@ -4315,6 +4320,7 @@ export default function App() {
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
   const [createDraftTags, setCreateDraftTags] = useState<string[]>([]);
+  const createDraftCopiesTodoSettingsRef = useRef(false);
   const [createFromSettingsCueVisible, setCreateFromSettingsCueVisible] = useState(false);
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
@@ -6721,6 +6727,7 @@ export default function App() {
   }, []);
 
   const resetCreateDrawerState = useCallback((filters = lastCreateTodoFilters) => {
+    createDraftCopiesTodoSettingsRef.current = false;
     const nextFilters = getRememberedCreateDraftFilters(listMenuTree, filters);
     const nextTags = normalizeTodoFilters(filters).tag;
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
@@ -7199,6 +7206,7 @@ export default function App() {
       closeListMenu();
     }
 
+    createDraftCopiesTodoSettingsRef.current = false;
     const nextFilters = getCreateTodoFilters(listMenuTree, sectionFilters);
 
     exitTodoSelectMode();
@@ -7239,7 +7247,8 @@ export default function App() {
       closeListMenu();
     }
 
-    const nextFilters = getCreateTodoFilters(listMenuTree, sourceTodo.filters);
+    createDraftCopiesTodoSettingsRef.current = true;
+    const nextFilters = getCopiedTodoFilters(sourceTodo);
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
@@ -7261,6 +7270,26 @@ export default function App() {
     setCreateDrawerVisible(true);
     triggerSubtleHaptic();
   }, [closeListMenu, exitTodoSelectMode, hideCreateFromSettingsCue, listMenuOpen, listMenuTree]);
+
+  const handleAddTodoPress = useCallback(() => {
+    if (selectedTodoIds.size === 1) {
+      const [selectedTodoId] = selectedTodoIds;
+      const selectedTodo = todosById.get(selectedTodoId);
+
+      if (selectedTodo && !pendingDeleteIds.has(selectedTodoId)) {
+        openCreateDrawerFromTodoSettings(selectedTodo);
+        return;
+      }
+    }
+
+    openCreateDrawer();
+  }, [
+    openCreateDrawer,
+    openCreateDrawerFromTodoSettings,
+    pendingDeleteIds,
+    selectedTodoIds,
+    todosById,
+  ]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -7324,16 +7353,18 @@ export default function App() {
       return;
     }
 
-    const todoFilters = getCreateTodoFilters(
-      listMenuTree,
-      createDraftFilters,
-    );
+    const copiesTodoSettings = createDraftCopiesTodoSettingsRef.current;
+    const todoFilters = copiesTodoSettings
+      ? cloneTodoFilters(createDraftFilters)
+      : getCreateTodoFilters(listMenuTree, createDraftFilters);
     const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
       listMenuTree,
       todoFilters,
     );
     const createdAt = Date.now();
-    const todoTags = normalizeTodoTags([...createDraftTags, ...selectedFilters.tag]);
+    const todoTags = normalizeTodoTags(
+      copiesTodoSettings ? createDraftTags : [...createDraftTags, ...selectedFilters.tag],
+    );
     const todo = makeTodo(
       text,
       todoFilters,
@@ -15649,7 +15680,7 @@ export default function App() {
               accessibilityRole="button"
               accessibilityHint="Opens the new todo drawer"
               accessibilityLabel="Add todo"
-              onPress={() => openCreateDrawer()}
+              onPress={handleAddTodoPress}
               style={({ pressed }) => [
                 styles.bottomNavItem,
                 pressed && styles.bottomNavItemPressed,

@@ -41,6 +41,7 @@ type ExactAlarmNativeModule = {
 
 let channelPromise: Promise<void> | null = null;
 let permissionPromise: Promise<boolean> | null = null;
+let alarmMutationQueue: Promise<void> = Promise.resolve();
 let exactAlarmPromptVisible = false;
 let exactAlarmPromptShown = false;
 let todoAlarmSettings: TodoAlarmSettings = {
@@ -67,6 +68,12 @@ Notifications.setNotificationHandler({
 });
 
 const canScheduleNotifications = () => Platform.OS !== 'web';
+
+const enqueueAlarmMutation = (mutation: () => Promise<void>) => {
+  const queuedMutation = alarmMutationQueue.then(mutation, mutation);
+  alarmMutationQueue = queuedMutation.catch(() => undefined);
+  return queuedMutation;
+};
 
 const canScheduleExactAlarms = async () => {
   if (Platform.OS !== 'android') {
@@ -662,7 +669,7 @@ export const getPresentedTodoAlarmNotificationLogEntries = async () => {
     .filter((entry): entry is NotificationLogEntry => Boolean(entry));
 };
 
-export const cancelTodoAlarm = async (todoId: string) => {
+const cancelTodoAlarmNow = async (todoId: string) => {
   if (!canScheduleNotifications()) {
     return;
   }
@@ -676,18 +683,22 @@ export const cancelTodoAlarm = async (todoId: string) => {
   ));
 };
 
-export const syncTodoAlarm = async (todo: Todo) => {
+export const cancelTodoAlarm = (todoId: string) => enqueueAlarmMutation(
+  () => cancelTodoAlarmNow(todoId),
+);
+
+const syncTodoAlarmNow = async (todo: Todo) => {
   if (!canScheduleNotifications()) {
     return;
   }
 
   const requests = createTodoAlarmRequests(todo);
   if (requests.length === 0) {
-    await cancelTodoAlarm(todo.id);
+    await cancelTodoAlarmNow(todo.id);
     return;
   }
 
-  await cancelTodoAlarm(todo.id);
+  await cancelTodoAlarmNow(todo.id);
 
   if (!(await ensureTodoAlarmSchedulingReady())) {
     return;
@@ -698,7 +709,11 @@ export const syncTodoAlarm = async (todo: Todo) => {
   }
 };
 
-export const reconcileTodoAlarms = async (todos: Todo[]) => {
+export const syncTodoAlarm = (todo: Todo) => enqueueAlarmMutation(
+  () => syncTodoAlarmNow(todo),
+);
+
+const reconcileTodoAlarmsNow = async (todos: Todo[]) => {
   if (!canScheduleNotifications()) {
     return;
   }
@@ -729,3 +744,7 @@ export const reconcileTodoAlarms = async (todos: Todo[]) => {
     await Notifications.scheduleNotificationAsync(request);
   }
 };
+
+export const reconcileTodoAlarms = (todos: Todo[]) => enqueueAlarmMutation(
+  () => reconcileTodoAlarmsNow(todos),
+);

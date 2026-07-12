@@ -15315,22 +15315,6 @@ export default function App() {
         <View style={styles.listShell}>
           {navTab === 'notifications' ? (
             <View style={styles.notificationPage}>
-              <View style={styles.notificationPageHeader}>
-                <Pressable
-                  accessibilityLabel="Clear notifications"
-                  accessibilityRole="button"
-                  disabled={notificationLogEntries.length === 0}
-                  onPress={clearNotificationLog}
-                  style={({ pressed }) => [
-                    styles.notificationClearButton,
-                    notificationLogEntries.length === 0 && styles.notificationClearButtonDisabled,
-                    pressed && notificationLogEntries.length > 0 && styles.notificationClearButtonPressed,
-                  ]}
-                >
-                  <Ionicons color={THEME_DANGER} name="trash-outline" size={17} />
-                  <Text style={styles.notificationClearButtonText}>Clear notifications</Text>
-                </Pressable>
-              </View>
               <FlatList
                 alwaysBounceVertical={false}
                 bounces={false}
@@ -15362,12 +15346,28 @@ export default function App() {
                   ) : null
                 }
                 ListHeaderComponent={
-                  todoListOneHandedOffset > 0 ? (
-                    <View
-                      pointerEvents="none"
-                      style={{ height: todoListOneHandedOffset }}
-                    />
-                  ) : null
+                  <View style={styles.notificationListHeader}>
+                    {todoListOneHandedOffset > 0 ? (
+                      <View
+                        pointerEvents="none"
+                        style={{ height: todoListOneHandedOffset }}
+                      />
+                    ) : null}
+                    <Pressable
+                      accessibilityLabel="Clear notifications"
+                      accessibilityRole="button"
+                      disabled={notificationLogEntries.length === 0}
+                      onPress={clearNotificationLog}
+                      style={({ pressed }) => [
+                        styles.notificationClearButton,
+                        notificationLogEntries.length === 0 && styles.notificationClearButtonDisabled,
+                        pressed && notificationLogEntries.length > 0 && styles.notificationClearButtonPressed,
+                      ]}
+                    >
+                      <Ionicons color={THEME_DANGER} name="trash-outline" size={17} />
+                      <Text style={styles.notificationClearButtonText}>Clear notifications</Text>
+                    </Pressable>
+                  </View>
                 }
                 renderItem={renderNotificationLogItem}
                 showsVerticalScrollIndicator={false}
@@ -21145,10 +21145,10 @@ const styles = StyleSheet.create({
     backgroundColor: THEME_BG,
     flex: 1,
   },
-  notificationPageHeader: {
-    alignItems: 'flex-end',
-    paddingHorizontal: HORIZONTAL_PADDING,
-    paddingTop: 10,
+  notificationListHeader: {
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
   },
   notificationClearButton: {
     alignItems: 'center',
@@ -22046,7 +22046,6 @@ const styles = StyleSheet.create({
   todoRowDivider: {
     backgroundColor: THEME_BORDER,
     height: TODO_ROW_DIVIDER_HEIGHT,
-    marginLeft: 38,
   },
   todoRowDividerHighlighted: {
     backgroundColor: THEME_ACCENT_SOFT,

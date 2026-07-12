@@ -1173,7 +1173,10 @@ function TodoRowComponent({
           activeOpacity={1}
           disabled={isPendingDelete}
           onPress={handleTodoPress}
-          style={styles.textPressable}
+          style={[
+            styles.textPressable,
+            isGroupedLayout && styles.textPressableGrouped,
+          ]}
         >
           <View
             style={[
@@ -1656,6 +1659,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
+  },
+  textPressableGrouped: {
+    flexBasis: 'auto',
   },
   contentColumn: {
     alignItems: 'stretch',

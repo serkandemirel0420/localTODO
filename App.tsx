@@ -22046,6 +22046,7 @@ const styles = StyleSheet.create({
   todoRowDivider: {
     backgroundColor: THEME_BORDER,
     height: TODO_ROW_DIVIDER_HEIGHT,
+    marginHorizontal: 16,
   },
   todoRowDividerHighlighted: {
     backgroundColor: THEME_ACCENT_SOFT,

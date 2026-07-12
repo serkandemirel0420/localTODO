@@ -2373,12 +2373,14 @@ const formatNotificationLogTime = (value: number) =>
 
 type NotificationLogSwipeRowProps = {
   entry: NotificationLogEntry;
+  reminderKind: 'daily' | 'one-time' | 'other';
   onDelete: () => void;
   onPress: () => void;
 };
 
 function NotificationLogSwipeRow({
   entry,
+  reminderKind,
   onDelete,
   onPress,
 }: NotificationLogSwipeRowProps) {
@@ -2422,6 +2424,8 @@ function NotificationLogSwipeRow({
           onPress={onPress}
           style={({ pressed }) => [
             styles.notificationLogRow,
+            reminderKind === 'daily' && styles.notificationLogRowDaily,
+            reminderKind === 'one-time' && styles.notificationLogRowOneTime,
             pressed && styles.notificationLogRowPressed,
           ]}
         >
@@ -6822,6 +6826,18 @@ export default function App() {
     setNotificationLogEntries((current) => current.filter((entry) => entry.id !== id));
     notificationLogStore
       .delete(id)
+      .then((nextEntries) => {
+        setNotificationLogEntries(nextEntries);
+        queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
+      })
+      .catch(() => undefined);
+    triggerSubtleHaptic();
+  }, []);
+
+  const clearNotificationLog = useCallback(() => {
+    setNotificationLogEntries([]);
+    notificationLogStore
+      .replaceAll([])
       .then((nextEntries) => {
         setNotificationLogEntries(nextEntries);
         queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
@@ -15141,14 +15157,27 @@ export default function App() {
   );
 
   const renderNotificationLogItem = useCallback(
-    ({ item }: { item: NotificationLogEntry }) => (
-      <MemoizedNotificationLogSwipeRow
-        entry={item}
-        onDelete={() => deleteNotificationLogEntry(item.id)}
-        onPress={() => openNotificationLogEntry(item)}
-      />
-    ),
-    [deleteNotificationLogEntry, openNotificationLogEntry],
+    ({ item }: { item: NotificationLogEntry }) => {
+      const linkedTodo = item.todoId ? todosById.get(item.todoId) : null;
+      const reminder = linkedTodo
+        ? decodeTodoReminder(linkedTodo.filters.reminder)
+        : null;
+      const reminderKind = reminder?.repeat === 'daily'
+        ? 'daily'
+        : reminder?.repeat === 'none'
+          ? 'one-time'
+          : 'other';
+
+      return (
+        <MemoizedNotificationLogSwipeRow
+          entry={item}
+          reminderKind={reminderKind}
+          onDelete={() => deleteNotificationLogEntry(item.id)}
+          onPress={() => openNotificationLogEntry(item)}
+        />
+      );
+    },
+    [deleteNotificationLogEntry, openNotificationLogEntry, todosById],
   );
 
   // Avoid painting transient list/preset state before local settings settle.
@@ -15286,6 +15315,22 @@ export default function App() {
         <View style={styles.listShell}>
           {navTab === 'notifications' ? (
             <View style={styles.notificationPage}>
+              <View style={styles.notificationPageHeader}>
+                <Pressable
+                  accessibilityLabel="Clear notifications"
+                  accessibilityRole="button"
+                  disabled={notificationLogEntries.length === 0}
+                  onPress={clearNotificationLog}
+                  style={({ pressed }) => [
+                    styles.notificationClearButton,
+                    notificationLogEntries.length === 0 && styles.notificationClearButtonDisabled,
+                    pressed && notificationLogEntries.length > 0 && styles.notificationClearButtonPressed,
+                  ]}
+                >
+                  <Ionicons color={THEME_DANGER} name="trash-outline" size={17} />
+                  <Text style={styles.notificationClearButtonText}>Clear notifications</Text>
+                </Pressable>
+              </View>
               <FlatList
                 alwaysBounceVertical={false}
                 bounces={false}
@@ -21100,6 +21145,33 @@ const styles = StyleSheet.create({
     backgroundColor: THEME_BG,
     flex: 1,
   },
+  notificationPageHeader: {
+    alignItems: 'flex-end',
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: 10,
+  },
+  notificationClearButton: {
+    alignItems: 'center',
+    backgroundColor: '#FCEDEC',
+    borderColor: '#F3D3D0',
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 36,
+    paddingHorizontal: 12,
+  },
+  notificationClearButtonDisabled: {
+    opacity: 0.4,
+  },
+  notificationClearButtonPressed: {
+    opacity: 0.7,
+  },
+  notificationClearButtonText: {
+    color: THEME_DANGER,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+  },
   notificationListContent: {
     gap: 8,
     paddingBottom: BOTTOM_NAV_RESERVED_HEIGHT + 16,
@@ -21161,6 +21233,12 @@ const styles = StyleSheet.create({
     minHeight: 72,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  notificationLogRowDaily: {
+    backgroundColor: '#F1F6FF',
+  },
+  notificationLogRowOneTime: {
+    backgroundColor: '#FFF8ED',
   },
   notificationLogRowPressed: {
     opacity: 0.72,

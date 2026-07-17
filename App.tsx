@@ -4368,6 +4368,7 @@ export default function App() {
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
+  const [activeTodoDetailExpanded, setActiveTodoDetailExpanded] = useState(false);
   const [activeTodoDetailDraftContent, setActiveTodoDetailDraftContent] = useState('');
   const [activeTodoDetailDraftText, setActiveTodoDetailDraftText] = useState('');
   const [activeTodoDetailDraftTags, setActiveTodoDetailDraftTags] = useState<string[]>([]);
@@ -9244,6 +9245,9 @@ export default function App() {
     () => deletedTodos.find((todo) => todo.id === activeDeletedTodoDetailId) ?? null,
     [activeDeletedTodoDetailId, deletedTodos],
   );
+  useEffect(() => {
+    setActiveTodoDetailExpanded(false);
+  }, [activeTodoDetailId]);
   useEffect(() => {
     if (!activeDeletedTodoDetail && activeDeletedTodoDetailId !== null) {
       setActiveDeletedTodoDetailId(null);
@@ -16685,10 +16689,16 @@ export default function App() {
                 keyboardOverlayInset > 0
                   ? { bottom: keyboardOverlayInset }
                   : null,
+                activeTodoDetailExpanded && styles.todoDetailLayerExpanded,
               ]}
             >
             <View
-              style={[styles.todoDetailCard, { maxHeight: todoDetailCardMaxHeight }]}
+              style={[
+                styles.todoDetailCard,
+                activeTodoDetailExpanded
+                  ? styles.todoDetailCardExpanded
+                  : { maxHeight: todoDetailCardMaxHeight },
+              ]}
             >
               <View style={styles.todoDetailHeader}>
                 <TextInput
@@ -16707,40 +16717,71 @@ export default function App() {
                   textAlignVertical="top"
                   value={activeTodoDetailDraftText}
                 />
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    activeTodoDetailHasChanges ? 'Save todo changes' : 'Close todo details'
-                  }
-                  accessibilityState={{
-                    disabled: activeTodoDetailHasChanges && !activeTodoDetailCanSave,
-                  }}
-                  disabled={activeTodoDetailHasChanges && !activeTodoDetailCanSave}
-                  hitSlop={8}
-                  onPress={activeTodoDetailHasChanges ? saveActiveTodoDetail : closeTodoDetailModal}
-                  style={({ pressed }) => [
-                    styles.todoDetailCloseButton,
-                    activeTodoDetailHasChanges && styles.todoDetailSaveButton,
-                    activeTodoDetailHasChanges &&
-                      !activeTodoDetailCanSave &&
-                      styles.todoDetailSaveButtonDisabled,
-                    pressed && styles.todoDetailCloseButtonPressed,
-                  ]}
-                >
-                  <Ionicons
-                    color={
-                      activeTodoDetailHasChanges
-                        ? activeTodoDetailCanSave
-                          ? THEME_ACCENT
-                          : '#AFA8A0'
-                        : '#2A2520'
+                <View style={styles.todoDetailHeaderActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      activeTodoDetailExpanded
+                        ? 'Collapse todo details'
+                        : 'Expand todo details to full screen'
                     }
-                    name={activeTodoDetailHasChanges ? 'checkmark' : 'close'}
-                    size={21}
-                  />
-                </Pressable>
+                    accessibilityState={{ expanded: activeTodoDetailExpanded }}
+                    hitSlop={8}
+                    onPress={() => {
+                      setActiveTodoDetailExpanded((current) => !current);
+                      triggerSubtleHaptic();
+                    }}
+                    style={({ pressed }) => [
+                      styles.todoDetailCloseButton,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons
+                      color="#2A2520"
+                      name={activeTodoDetailExpanded ? 'contract-outline' : 'expand-outline'}
+                      size={19}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      activeTodoDetailHasChanges ? 'Save todo changes' : 'Close todo details'
+                    }
+                    accessibilityState={{
+                      disabled: activeTodoDetailHasChanges && !activeTodoDetailCanSave,
+                    }}
+                    disabled={activeTodoDetailHasChanges && !activeTodoDetailCanSave}
+                    hitSlop={8}
+                    onPress={activeTodoDetailHasChanges ? saveActiveTodoDetail : closeTodoDetailModal}
+                    style={({ pressed }) => [
+                      styles.todoDetailCloseButton,
+                      activeTodoDetailHasChanges && styles.todoDetailSaveButton,
+                      activeTodoDetailHasChanges &&
+                        !activeTodoDetailCanSave &&
+                        styles.todoDetailSaveButtonDisabled,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons
+                      color={
+                        activeTodoDetailHasChanges
+                          ? activeTodoDetailCanSave
+                            ? THEME_ACCENT
+                            : '#AFA8A0'
+                          : '#2A2520'
+                      }
+                      name={activeTodoDetailHasChanges ? 'checkmark' : 'close'}
+                      size={21}
+                    />
+                  </Pressable>
+                </View>
               </View>
-              <View style={styles.todoDetailContentContainer}>
+              <View
+                style={[
+                  styles.todoDetailContentContainer,
+                  activeTodoDetailExpanded && styles.todoDetailContentContainerExpanded,
+                ]}
+              >
                 {activeTodoDetailDraftContentForSave.length === 0 ? (
                   <View pointerEvents="none" style={styles.todoDetailContentPlaceholderLayer}>
                     <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
@@ -16764,7 +16805,9 @@ export default function App() {
                   scrollEnabled
                     style={[
                       styles.todoDetailContentInput,
-                      { maxHeight: todoDetailContentInputMaxHeight },
+                      activeTodoDetailExpanded
+                        ? styles.todoDetailContentInputExpanded
+                        : { maxHeight: todoDetailContentInputMaxHeight },
                     ]}
                     textAlignVertical="top"
                     value={activeTodoDetailDraftContent}
@@ -19018,6 +19061,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
   },
+  todoDetailLayerExpanded: {
+    paddingBottom: 0,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    top: 0,
+  },
   todoDetailBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(30, 27, 24, 0.42)',
@@ -19035,6 +19084,14 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 10,
   },
+  todoDetailCardExpanded: {
+    borderRadius: 0,
+    borderWidth: 0,
+    elevation: 0,
+    flex: 1,
+    maxHeight: '100%',
+    shadowOpacity: 0,
+  },
   deletedTodoDetailCard: {
     alignSelf: 'center',
     maxWidth: 430,
@@ -19049,6 +19106,10 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     paddingHorizontal: 18,
     paddingTop: 18,
+  },
+  todoDetailHeaderActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
   todoDetailTitleInput: {
     color: THEME_TEXT,
@@ -19092,6 +19153,9 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     position: 'relative',
   },
+  todoDetailContentContainerExpanded: {
+    flex: 1,
+  },
   todoDetailContentPlaceholderLayer: {
     left: 18,
     position: 'absolute',
@@ -19115,6 +19179,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 0,
+  },
+  todoDetailContentInputExpanded: {
+    flex: 1,
+    maxHeight: '100%',
   },
   deletedTodoDetailHeader: {
     alignItems: 'flex-start',

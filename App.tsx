@@ -15227,7 +15227,13 @@ export default function App() {
             numberOfLines={1}
             style={[
               styles.appHeaderTitle,
+              createFromSettingsCueVisible && headerUndoEntry
+                ? styles.appHeaderTitleThreeActions
+                : null,
               appHeaderTitleLeftAligned && styles.appHeaderTitleLeftAligned,
+              appHeaderTitleLeftAligned && createFromSettingsCueVisible && headerUndoEntry
+                ? styles.appHeaderTitleLeftAlignedThreeActions
+                : null,
             ]}
           >
             {appHeaderTitle}
@@ -15263,11 +15269,6 @@ export default function App() {
             </View>
           ) : (
             <>
-              {createFromSettingsCueVisible ? (
-                <View pointerEvents="none" style={styles.appHeaderCreateFromSettingsCue}>
-                  <Ionicons color={THEME_CARD} name="add" size={19} />
-                </View>
-              ) : null}
               <View style={styles.appHeaderActions}>
                 {headerUndoEntry ? (
                   <Pressable
@@ -15286,6 +15287,11 @@ export default function App() {
                       <Text style={styles.appHeaderUndoCountBadge}>{undoHistoryCount}</Text>
                     ) : null}
                   </Pressable>
+                ) : null}
+                {createFromSettingsCueVisible ? (
+                  <View pointerEvents="none" style={styles.appHeaderCreateFromSettingsCue}>
+                    <Ionicons color={THEME_CARD} name="add" size={19} />
+                  </View>
                 ) : null}
                 <Pressable
                   accessibilityRole="button"
@@ -20959,6 +20965,12 @@ const styles = StyleSheet.create({
     paddingRight: 94,
     textAlign: 'left',
   },
+  appHeaderTitleThreeActions: {
+    paddingHorizontal: 134,
+  },
+  appHeaderTitleLeftAlignedThreeActions: {
+    paddingRight: 134,
+  },
   appHeaderSideButton: {
     alignItems: 'center',
     borderRadius: 18,
@@ -21019,15 +21031,11 @@ const styles = StyleSheet.create({
     elevation: 3,
     height: 36,
     justifyContent: 'center',
-    left: HORIZONTAL_PADDING,
-    position: 'absolute',
     shadowColor: NAV_ACCENT,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.2,
     shadowRadius: 6,
-    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
     width: 36,
-    zIndex: 3,
   },
   appHeaderSideButtonPressed: {
     opacity: 0.76,

@@ -22,6 +22,7 @@ import {
 } from './storage/appSettingsStore';
 
 export const TODO_LIST_ROW_GAP = 14;
+export const TODO_SECTION_GAP = 20;
 export const TODO_LIST_CONTENT_TOP_PADDING = 12;
 export const TODO_STANDALONE_ROW_ESTIMATE = 76;
 export const TODO_GROUPED_ROW_ESTIMATE = 64;
@@ -48,6 +49,10 @@ export type TodoListRow =
     };
 
 export type VisibleTodoListRow =
+  | {
+      id: string;
+      type: 'sectionGap';
+    }
   | {
       gapBefore: boolean;
       id: string;
@@ -252,9 +257,16 @@ export const flattenTodoListRows = (
     }
 
     const isCollapsed = collapsedGroupIds.has(row.id);
+    if (shouldGapBeforeVisibleRow(previous)) {
+      visible.push({
+        id: `before:${row.id}`,
+        type: 'sectionGap',
+      });
+    }
+
     const sectionHeader: VisibleTodoListRow = {
       count: row.count,
-      gapBefore: shouldGapBeforeVisibleRow(previous),
+      gapBefore: false,
       id: row.id,
       isCollapsed,
       label: row.label,
@@ -745,7 +757,7 @@ export const estimateTodoListOffsetForId = (
     const row = rows[rowIndex];
 
     if (rowIndex > 0) {
-      offset += TODO_LIST_ROW_GAP;
+      offset += row.type === 'section' ? TODO_SECTION_GAP : TODO_LIST_ROW_GAP;
     }
 
     if (row.type === 'todo') {

@@ -221,6 +221,7 @@ import {
   TODO_LIST_CONTENT_TOP_PADDING,
   TODO_LIST_ROW_GAP,
   TODO_ROW_DIVIDER_HEIGHT,
+  TODO_SECTION_GAP,
   type VisibleTodoListRow,
 } from './src/todoListRows';
 import { getEffectiveTodoDateLabels } from './src/todoDates';
@@ -1548,7 +1549,8 @@ const getTodoListItemKey = (item: VisibleTodoListRow) => {
 
 const getTodoListItemType = (item: VisibleTodoListRow) => {
   if (item.type === 'sectionHeader') {
-    return item.isCollapsed ? 'sectionHeaderCollapsed' : 'sectionHeaderExpanded';
+    const collapseState = item.isCollapsed ? 'collapsed' : 'expanded';
+    return `sectionHeader:${item.id}:${collapseState}`;
   }
 
   if (item.type === 'groupedTodoBatch') {
@@ -1606,20 +1608,29 @@ const getAppTodoListItemType = (item: AppTodoListRow) => {
   return getTodoListItemType(item);
 };
 
+type TodoListSectionGapRow = Extract<VisibleTodoListRow, { type: 'sectionGap' }>;
+
 const buildSearchListRows = (
   searchPresetItems: SearchPresetItem[],
   collapsedSearchPresetIds: Set<string>,
   searchPresetTodosByPresetId: Map<string, Todo[]>,
-): Array<SearchPresetHeaderRow | SearchPresetTodoRow> => {
-  const rows: Array<SearchPresetHeaderRow | SearchPresetTodoRow> = [];
+): Array<SearchPresetHeaderRow | SearchPresetTodoRow | TodoListSectionGapRow> => {
+  const rows: Array<SearchPresetHeaderRow | SearchPresetTodoRow | TodoListSectionGapRow> = [];
   let hasPreviousRow = false;
 
   searchPresetItems.forEach((item) => {
     const isCollapsed = collapsedSearchPresetIds.has(item.preset.id);
+    if (hasPreviousRow) {
+      rows.push({
+        id: `before:search-preset:${item.preset.id}`,
+        type: 'sectionGap',
+      });
+    }
+
     rows.push({
       type: 'searchPresetHeader',
       count: item.count,
-      gapBefore: hasPreviousRow,
+      gapBefore: false,
       id: `search-preset:${item.preset.id}`,
       isCollapsed,
       matchesQuery: item.matchesQuery,
@@ -1654,16 +1665,23 @@ const buildSearchListMenuRows = (
   searchListMenuItems: SearchListMenuItem[],
   collapsedSearchListLabels: Set<string>,
   searchListMenuTodosByLabel: Map<string, Todo[]>,
-): Array<SearchListHeaderRow | SearchListTodoRow> => {
-  const rows: Array<SearchListHeaderRow | SearchListTodoRow> = [];
+): Array<SearchListHeaderRow | SearchListTodoRow | TodoListSectionGapRow> => {
+  const rows: Array<SearchListHeaderRow | SearchListTodoRow | TodoListSectionGapRow> = [];
   let hasPreviousRow = false;
 
   searchListMenuItems.forEach((item) => {
     const isCollapsed = collapsedSearchListLabels.has(item.node.label);
+    if (hasPreviousRow) {
+      rows.push({
+        id: `before:search-list:${item.node.label}`,
+        type: 'sectionGap',
+      });
+    }
+
     rows.push({
       type: 'searchListHeader',
       count: item.count,
-      gapBefore: hasPreviousRow,
+      gapBefore: false,
       id: `search-list:${item.node.label}`,
       isCollapsed,
       listIndex: item.listIndex,
@@ -4391,7 +4409,12 @@ export default function App() {
   const [openQuickPresetNavSlotNumber, setOpenQuickPresetNavSlotNumber] = useState<number | null>(
     null,
   );
-  const [quickPresetScreenSwipeArmed, setQuickPresetScreenSwipeArmed] = useState(false);
+  const [quickPresetScreenSwipeArmed, setQuickPresetScreenSwipeArmedState] = useState(false);
+  const quickPresetScreenSwipeArmedRef = useRef(false);
+  const setQuickPresetScreenSwipeArmed = useCallback((armed: boolean) => {
+    quickPresetScreenSwipeArmedRef.current = armed;
+    setQuickPresetScreenSwipeArmedState(armed);
+  }, []);
   const [heldQuickPresetNavSlotNumber, setHeldQuickPresetNavSlotNumber] = useState<number | null>(
     null,
   );
@@ -4607,6 +4630,8 @@ export default function App() {
   const hadTodoListRowsRef = useRef(false);
   const devTestTodosSeededRef = useRef(false);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const todoSectionGapTouchRef = useRef(false);
+  const todoListContentTouchStartRef = useRef(0);
   const todoRowTouchStartRef = useRef({
     pageX: 0,
     pageY: 0,
@@ -8695,7 +8720,12 @@ export default function App() {
 
   const markTodoRowTouchStart = useCallback((id: string) => (event: GestureResponderEvent) => {
     const { pageX, pageY, timestamp } = event.nativeEvent;
+    todoListContentTouchStartRef.current = timestamp;
     todoRowTouchStartRef.current = { pageX, pageY, timestamp, id };
+  }, []);
+
+  const markTodoListContentTouchStart = useCallback((event: GestureResponderEvent) => {
+    todoListContentTouchStartRef.current = event.nativeEvent.timestamp;
   }, []);
 
   const handleListFrameTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -8705,6 +8735,11 @@ export default function App() {
 
   const handleListFrameTouchEnd = useCallback(
     (event: GestureResponderEvent) => {
+      if (todoSectionGapTouchRef.current) {
+        todoSectionGapTouchRef.current = false;
+        return;
+      }
+
       const { pageX, pageY, timestamp } = event.nativeEvent;
       const start = listTouchStartRef.current;
       const moved = Math.hypot(pageX - start.pageX, pageY - start.pageY);
@@ -9133,6 +9168,10 @@ export default function App() {
     () => [...repeatingTodoCompletionFeedbackIds].sort().join('|'),
     [repeatingTodoCompletionFeedbackIds],
   );
+  const collapsedTodoGroupKey = useMemo(
+    () => [...collapsedTodoGroupIds].sort().join('|'),
+    [collapsedTodoGroupIds],
+  );
   const collapsedSearchPresetKey = useMemo(
     () => [...collapsedSearchPresetIds].sort().join('|'),
     [collapsedSearchPresetIds],
@@ -9145,6 +9184,7 @@ export default function App() {
     () => ({
       activeTodoMenuHighlightId,
       activeTodoMenuId,
+      collapsedTodoGroupKey,
       collapsedSearchListKey,
       collapsedSearchPresetKey,
       dateStatusKey,
@@ -9158,6 +9198,7 @@ export default function App() {
     [
       activeTodoMenuHighlightId,
       activeTodoMenuId,
+      collapsedTodoGroupKey,
       collapsedSearchListKey,
       collapsedSearchPresetKey,
       dateStatusKey,
@@ -9539,18 +9580,28 @@ export default function App() {
     todos,
   ]);
   const searchListRows = useMemo(
-    () => [
-      ...buildSearchListMenuRows(
+    () => {
+      const listRows = buildSearchListMenuRows(
         searchListMenuItems,
         collapsedSearchListLabels,
         searchListMenuTodosByLabel,
-      ),
-      ...buildSearchListRows(
+      );
+      const presetRows = buildSearchListRows(
         searchPresetItems,
         collapsedSearchPresetIds,
         searchPresetTodosByPresetId,
-      ),
-    ],
+      );
+
+      if (listRows.length === 0 || presetRows.length === 0) {
+        return [...listRows, ...presetRows];
+      }
+
+      return [
+        ...listRows,
+        { id: 'before:search-presets', type: 'sectionGap' as const },
+        ...presetRows,
+      ];
+    },
     [
       collapsedSearchListLabels,
       collapsedSearchPresetIds,
@@ -9611,9 +9662,14 @@ export default function App() {
     !settingsModalVisible &&
     !todoSelectMode;
   const quickPresetScreenSwipeEnabled =
-    quickPresetScreenSwipeArmed && quickPresetHeaderSwipeEnabled;
+    Platform.OS !== 'web' &&
+    quickPresetScreenSwipeArmed &&
+    quickPresetHeaderSwipeEnabled;
   useEffect(() => {
-    if (quickPresetScreenSwipeArmed && !quickPresetHeaderSwipeEnabled) {
+    if (
+      quickPresetScreenSwipeArmed &&
+      (Platform.OS === 'web' || !quickPresetHeaderSwipeEnabled)
+    ) {
       setQuickPresetScreenSwipeArmed(false);
     }
   }, [quickPresetHeaderSwipeEnabled, quickPresetScreenSwipeArmed]);
@@ -9626,6 +9682,9 @@ export default function App() {
           LIST_MENU_ROW_HEIGHT,
       ) * LIST_MENU_ROW_HEIGHT,
     );
+    const adjustedOffset = appTodoListData.length > 0 && effectiveGroupMode !== 'none'
+      ? Math.max(LIST_MENU_ROW_HEIGHT, calculatedOffset - LIST_MENU_ROW_HEIGHT)
+      : calculatedOffset;
 
     if (appTodoListData.length === 0) {
       return navTab === 'search' || currentQuickPresetSwipeItemIndex >= 0
@@ -9633,10 +9692,11 @@ export default function App() {
         : 0;
     }
 
-    return calculatedOffset;
+    return adjustedOffset;
   }, [
     appTodoListData.length,
     currentQuickPresetSwipeItemIndex,
+    effectiveGroupMode,
     navTab,
     todoListFrameHeight,
     windowHeight,
@@ -14414,10 +14474,89 @@ export default function App() {
     triggerSubtleHaptic();
   }, [pendingDeleteIds]);
 
-  const renderVisibleTodoRowGap = useCallback(
-    (gapBefore: boolean) => (gapBefore ? <View style={styles.todoListRowGap} /> : null),
-    [],
-  );
+  const canFocusNavbarPresetsFromSectionGap =
+    Platform.OS !== 'web' && quickPresetHeaderSwipeEnabled;
+  const hasSingleVisibleTodoSection =
+    appTodoListData === visibleTodoListRows &&
+    visibleTodoListRows.filter((row) => row.type === 'sectionHeader').length === 1;
+  const focusNavbarPresetsFromSectionGap = useCallback(() => {
+    if (!canFocusNavbarPresetsFromSectionGap) {
+      return;
+    }
+
+    lastListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
+    lastRegisteredListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
+    setQuickPresetScreenSwipeArmed(!quickPresetScreenSwipeArmedRef.current);
+    triggerSubtleHaptic();
+  }, [
+    canFocusNavbarPresetsFromSectionGap,
+  ]);
+  const handleTodoListFrameTouchEnd = useCallback((event: GestureResponderEvent) => {
+    if (
+      todoSectionGapTouchRef.current ||
+      todoSelectMode ||
+      !canFocusNavbarPresetsFromSectionGap ||
+      !hasSingleVisibleTodoSection
+    ) {
+      handleListFrameTouchEnd(event);
+      return;
+    }
+
+    const { pageX, pageY, timestamp } = event.nativeEvent;
+    const start = listTouchStartRef.current;
+    const moved = Math.hypot(pageX - start.pageX, pageY - start.pageY);
+    const elapsed = timestamp - start.timestamp;
+    const startedOnListContent =
+      Math.abs(start.timestamp - todoListContentTouchStartRef.current) < 48;
+
+    if (moved <= 8 && elapsed <= 360 && !startedOnListContent) {
+      focusNavbarPresetsFromSectionGap();
+      return;
+    }
+
+    handleListFrameTouchEnd(event);
+  }, [
+    canFocusNavbarPresetsFromSectionGap,
+    focusNavbarPresetsFromSectionGap,
+    handleListFrameTouchEnd,
+    hasSingleVisibleTodoSection,
+    todoSelectMode,
+  ]);
+  const renderVisibleTodoRowGap = useCallback((
+    gapBefore: boolean,
+    isCollapsibleSectionGap = false,
+  ) => {
+    if (!gapBefore) {
+      return null;
+    }
+
+    if (!isCollapsibleSectionGap) {
+      return <View style={styles.todoListRowGap} />;
+    }
+
+    if (!canFocusNavbarPresetsFromSectionGap) {
+      return <View style={styles.todoListSectionGap} />;
+    }
+
+    return (
+      <Pressable
+        accessibilityHint="Toggles swipe navigation between navbar presets"
+        accessibilityLabel="Toggle navbar preset focus"
+        accessibilityRole="button"
+        onPress={focusNavbarPresetsFromSectionGap}
+        onPressIn={() => {
+          todoSectionGapTouchRef.current = true;
+        }}
+        style={({ pressed }) => [
+          styles.todoListSectionGap,
+          pressed && styles.todoListSectionGapPressed,
+        ]}
+      />
+    );
+  }, [
+    canFocusNavbarPresetsFromSectionGap,
+    focusNavbarPresetsFromSectionGap,
+  ]);
   const currentCreateSectionFilters = useMemo(
     () => mergeCreateSectionFilters(requiredFilters, selectedFilters),
     [requiredFilters, selectedFilters],
@@ -14467,6 +14606,10 @@ export default function App() {
 
   const renderTodoItem = useCallback(
     ({ item }: { item: AppTodoListRow }) => {
+      if (item.type === 'sectionGap') {
+        return renderVisibleTodoRowGap(true, true);
+      }
+
       if (item.type === 'searchListHeader') {
         const isExpanded = !item.isCollapsed;
         const hasExpandedTodos = isExpanded && item.count > 0;
@@ -14474,7 +14617,6 @@ export default function App() {
 
         return (
           <View key={headerLayoutKey} collapsable={false}>
-            {renderVisibleTodoRowGap(item.gapBefore)}
             <View
               collapsable={false}
               style={[
@@ -14729,7 +14871,6 @@ export default function App() {
 
         return (
           <View key={headerLayoutKey} collapsable={false}>
-            {renderVisibleTodoRowGap(item.gapBefore)}
             <View
               collapsable={false}
               style={[
@@ -14898,8 +15039,10 @@ export default function App() {
           (hidePresetTodoSectionAddButton && !item.id.startsWith('group-list-'));
 
         return (
-          <View>
-            {renderVisibleTodoRowGap(item.gapBefore)}
+          <View
+            collapsable={false}
+            onTouchStart={markTodoListContentTouchStart}
+          >
             <View
               collapsable={false}
               style={[
@@ -15392,7 +15535,7 @@ export default function App() {
             >
               <View
                 collapsable={false}
-                onTouchEnd={handleListFrameTouchEnd}
+                onTouchEnd={handleTodoListFrameTouchEnd}
                 onTouchStart={handleListFrameTouchStart}
                 style={styles.todoListTapFrame}
               >
@@ -15493,7 +15636,10 @@ export default function App() {
                         />
                       )
                     ) : null}
-                    <View style={styles.headerSearchRow}>
+                    <View
+                      onTouchStart={markTodoListContentTouchStart}
+                      style={styles.headerSearchRow}
+                    >
                       <View style={styles.searchBox}>
                         <Ionicons
                           color={THEME_TEXT_SECONDARY}
@@ -21988,6 +22134,13 @@ const styles = StyleSheet.create({
   },
   todoListRowGap: {
     height: TODO_LIST_ROW_GAP,
+  },
+  todoListSectionGap: {
+    height: TODO_SECTION_GAP,
+  },
+  todoListSectionGapPressed: {
+    backgroundColor: 'rgba(209, 74, 66, 0.08)',
+    borderRadius: 4,
   },
   emptyListContent: {
     flexGrow: 1,

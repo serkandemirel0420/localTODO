@@ -1128,39 +1128,8 @@ function TodoRowComponent({
       <View
         collapsable={false}
         onLayout={isGroupedLayout ? undefined : handleRowLayout}
-        style={[
-          styles.row,
-          isGroupedLayout && styles.rowGrouped,
-          itemBackgroundTheme && !isVisuallyDone && !isPendingDelete && {
-            backgroundColor: itemBackgroundTheme.tint,
-            borderColor: itemBackgroundTheme.border,
-            shadowColor: itemBackgroundTheme.accent,
-          },
-          item.pinned && !isVisuallyDone && !isPendingDelete && (
-            isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
-          ),
-          isPendingDelete && styles.rowPendingDelete,
-          isHighlightedForMenu && (
-            isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
-          ),
-          isHighlightedForEdit && (
-            isGroupedLayout ? styles.rowRecentlyEditedGrouped : styles.rowRecentlyEdited
-          ),
-          isHighlightedForSelection && (
-            isGroupedLayout ? styles.rowSelectedGrouped : styles.rowSelected
-          ),
-        ]}
+        style={styles.rowLongPressTarget}
       >
-        {showPriorityRail && priorityRailTheme ? (
-          <View
-            style={[
-              styles.colorRail,
-              isGroupedLayout && styles.colorRailGrouped,
-              { backgroundColor: priorityRailTheme.accent },
-              isVisuallyDone && styles.colorRailDone,
-            ]}
-          />
-        ) : null}
         <GestureTouchableOpacity
           accessibilityRole="button"
           accessibilityLabel={
@@ -1174,56 +1143,90 @@ function TodoRowComponent({
           disabled={isPendingDelete}
           onPress={handleTodoPress}
           style={[
-            styles.textPressable,
-            isGroupedLayout && styles.textPressableGrouped,
+            styles.row,
+            isGroupedLayout && styles.rowGrouped,
+            itemBackgroundTheme && !isVisuallyDone && !isPendingDelete && {
+              backgroundColor: itemBackgroundTheme.tint,
+              borderColor: itemBackgroundTheme.border,
+              shadowColor: itemBackgroundTheme.accent,
+            },
+            item.pinned && !isVisuallyDone && !isPendingDelete && (
+              isGroupedLayout ? styles.rowPinnedGrouped : styles.rowPinned
+            ),
+            isPendingDelete && styles.rowPendingDelete,
+            isHighlightedForMenu && (
+              isGroupedLayout ? styles.rowMenuTargetGrouped : styles.rowMenuTarget
+            ),
+            isHighlightedForEdit && (
+              isGroupedLayout ? styles.rowRecentlyEditedGrouped : styles.rowRecentlyEdited
+            ),
+            isHighlightedForSelection && (
+              isGroupedLayout ? styles.rowSelectedGrouped : styles.rowSelected
+            ),
           ]}
         >
+          {showPriorityRail && priorityRailTheme ? (
+            <View
+              style={[
+                styles.colorRail,
+                isGroupedLayout && styles.colorRailGrouped,
+                { backgroundColor: priorityRailTheme.accent },
+                isVisuallyDone && styles.colorRailDone,
+              ]}
+            />
+          ) : null}
           <View
             style={[
-              styles.contentColumn,
-              isGroupedLayout && styles.contentColumnGrouped,
+              styles.textPressable,
+              isGroupedLayout && styles.textPressableGrouped,
             ]}
           >
-            {hasDisplayTitle ? (
-              <View style={styles.titleBlock}>
+            <View
+              style={[
+                styles.contentColumn,
+                isGroupedLayout && styles.contentColumnGrouped,
+              ]}
+            >
+              {hasDisplayTitle ? (
+                <View style={styles.titleBlock}>
+                  <Text
+                    numberOfLines={0}
+                    style={[
+                      styles.text,
+                      isVisuallyDone && styles.textDone,
+                      isPendingDelete && styles.textPendingDelete,
+                    ]}
+                  >
+                    {highlightedTitlePreview}
+                  </Text>
+                </View>
+              ) : null}
+              {contentPreview ? (
                 <Text
-                  numberOfLines={0}
+                  ellipsizeMode="tail"
+                  numberOfLines={1}
                   style={[
-                    styles.text,
-                    isVisuallyDone && styles.textDone,
-                    isPendingDelete && styles.textPendingDelete,
+                    styles.content,
+                    isVisuallyDone && styles.contentDone,
+                    isPendingDelete && styles.contentPendingDelete,
                   ]}
                 >
-                  {highlightedTitlePreview}
+                  {highlightedContentPreview}
                 </Text>
-              </View>
-            ) : null}
-            {contentPreview ? (
-              <Text
-                ellipsizeMode="tail"
-                numberOfLines={1}
-                style={[
-                  styles.content,
-                  isVisuallyDone && styles.contentDone,
-                  isPendingDelete && styles.contentPendingDelete,
-                ]}
-              >
-                {highlightedContentPreview}
-              </Text>
-            ) : null}
-            {isPendingDelete ? (
-              <Text style={styles.pendingDeleteText}>Deleting...</Text>
-            ) : (
-              <TodoMetaTags
-                createdAt={item.createdAt}
-                dateLabel={rawDateStatusLabel || undefined}
-                dateLabelAnchor={item.createdAt}
-                dateLabelDisplayMode={dateLabelDisplayMode}
-                dateStatusKey={dateStatusKey}
-                done={isVisuallyDone}
-                filterColors={filterColors}
-                listLabel={listStatusLabel || undefined}
-                pinned={item.pinned}
+              ) : null}
+              {isPendingDelete ? (
+                <Text style={styles.pendingDeleteText}>Deleting...</Text>
+              ) : (
+                <TodoMetaTags
+                  createdAt={item.createdAt}
+                  dateLabel={rawDateStatusLabel || undefined}
+                  dateLabelAnchor={item.createdAt}
+                  dateLabelDisplayMode={dateLabelDisplayMode}
+                  dateStatusKey={dateStatusKey}
+                  done={isVisuallyDone}
+                  filterColors={filterColors}
+                  listLabel={listStatusLabel || undefined}
+                  pinned={item.pinned}
                   priorityLabel={
                     priorityStatusLabel && priorityStatusLabel !== 'None'
                       ? priorityStatusLabel
@@ -1234,7 +1237,8 @@ function TodoRowComponent({
                   tagLabels={item.tags}
                   visibility={effectiveMetaTagVisibility}
                 />
-            )}
+              )}
+            </View>
           </View>
         </GestureTouchableOpacity>
       </View>
@@ -1542,6 +1546,11 @@ const styles = StyleSheet.create({
   swipeActionsRowRight: {
     justifyContent: 'flex-end',
   },
+  rowLongPressTarget: {
+    alignSelf: 'stretch',
+    minWidth: 0,
+    width: '100%',
+  },
   swipeActionSlot: {
     alignItems: 'center',
     height: SWIPE_ACTION_BUTTON_WIDTH,
@@ -1655,13 +1664,13 @@ const styles = StyleSheet.create({
   },
   textPressable: {
     alignSelf: 'flex-start',
-    flexBasis: 0,
+    flexBasis: Platform.OS === 'web' ? 'auto' : 0,
     flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
   },
   textPressableGrouped: {
-    flexBasis: 'auto',
+    flexBasis: Platform.OS === 'web' ? 'auto' : 0,
   },
   contentColumn: {
     alignItems: 'stretch',

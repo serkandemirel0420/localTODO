@@ -1339,6 +1339,10 @@ const menuSectionCanClear = (
 };
 
 const TOP_SAFE_GAP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 16;
+const ANDROID_STATUS_BAR_INSET = Platform.OS === 'android'
+  ? Math.max(StatusBar.currentHeight ?? 0, 24)
+  : 0;
+const ANDROID_FULLSCREEN_TOP_MARGIN = Platform.OS === 'android' ? 12 : 0;
 const HORIZONTAL_PADDING = 18;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
@@ -4338,6 +4342,7 @@ export default function App() {
   const [startupDataReady, setStartupDataReady] = useState(false);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
+  const [createDrawerExpanded, setCreateDrawerExpanded] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
@@ -7334,6 +7339,12 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (!createDrawerVisible) {
+      setCreateDrawerExpanded(false);
+    }
+  }, [createDrawerVisible]);
+
+  useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
@@ -7567,7 +7578,7 @@ export default function App() {
     : 'List: No list';
   const createDrawerListPickerOpen = createDrawerPicker === 'list';
   const createDrawerListPickerHalfSheet =
-    createDrawerListPickerOpen && keyboardOverlayInset === 0;
+    createDrawerListPickerOpen && !createDrawerExpanded && keyboardOverlayInset === 0;
   const createDrawerListPickerSheetHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
   const createDrawerListPickerTopSpace = Math.round(
     createDrawerListPickerSheetHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO,
@@ -14476,9 +14487,6 @@ export default function App() {
 
   const canFocusNavbarPresetsFromSectionGap =
     Platform.OS !== 'web' && quickPresetHeaderSwipeEnabled;
-  const hasSingleVisibleTodoSection =
-    appTodoListData === visibleTodoListRows &&
-    visibleTodoListRows.filter((row) => row.type === 'sectionHeader').length === 1;
   const focusNavbarPresetsFromSectionGap = useCallback(() => {
     if (!canFocusNavbarPresetsFromSectionGap) {
       return;
@@ -14495,8 +14503,7 @@ export default function App() {
     if (
       todoSectionGapTouchRef.current ||
       todoSelectMode ||
-      !canFocusNavbarPresetsFromSectionGap ||
-      !hasSingleVisibleTodoSection
+      !canFocusNavbarPresetsFromSectionGap
     ) {
       handleListFrameTouchEnd(event);
       return;
@@ -14519,7 +14526,6 @@ export default function App() {
     canFocusNavbarPresetsFromSectionGap,
     focusNavbarPresetsFromSectionGap,
     handleListFrameTouchEnd,
-    hasSingleVisibleTodoSection,
     todoSelectMode,
   ]);
   const renderVisibleTodoRowGap = useCallback((
@@ -16852,7 +16858,12 @@ export default function App() {
                   : { maxHeight: todoDetailCardMaxHeight },
               ]}
             >
-              <View style={styles.todoDetailHeader}>
+              <View
+                style={[
+                  styles.todoDetailHeader,
+                  activeTodoDetailExpanded && styles.todoDetailHeaderExpanded,
+                ]}
+              >
                 <TextInput
                   autoCapitalize="sentences"
                   autoCorrect
@@ -17075,6 +17086,7 @@ export default function App() {
               style={[
                 styles.createDrawerLayer,
                 { bottom: keyboardOverlayInset },
+                createDrawerExpanded && styles.createDrawerLayerExpanded,
                 createDrawerListPickerHalfSheet
                   ? { height: createDrawerListPickerSheetHeight }
                   : null,
@@ -17083,12 +17095,15 @@ export default function App() {
               <View
                 style={[
                   styles.createDrawer,
+                  createDrawerExpanded && styles.createDrawerExpanded,
                   createDrawerListPickerHalfSheet && styles.createDrawerListPickerSheet,
                 ]}
               >
-                <View style={styles.menuDragHandle} accessibilityRole="adjustable">
-                  <View style={styles.menuDragPill} />
-                </View>
+                {!createDrawerExpanded ? (
+                  <View style={styles.menuDragHandle} accessibilityRole="adjustable">
+                    <View style={styles.menuDragPill} />
+                  </View>
+                ) : null}
                 {createDrawerPicker ? (
                   <ScrollView
                     contentContainerStyle={
@@ -17103,7 +17118,8 @@ export default function App() {
                     showsVerticalScrollIndicator={false}
                     style={[
                       styles.createDrawerPicker,
-                      { maxHeight: createDrawerPickerMaxHeight },
+                      !createDrawerExpanded && { maxHeight: createDrawerPickerMaxHeight },
+                      createDrawerExpanded && styles.createDrawerPickerExpanded,
                       createDrawerListPickerHalfSheet && styles.createDrawerListPickerScroll,
                     ]}
                   >
@@ -17294,24 +17310,55 @@ export default function App() {
                     })}
                   </ScrollView>
                 ) : (
-                  <View style={styles.createDrawerEditor}>
-                    <TextInput
-                      ref={createInputRef}
-                      autoCapitalize="sentences"
-                      autoCorrect
-                      multiline
-                      onChangeText={setCreateDraftText}
-                      onSubmitEditing={() => createContentInputRef.current?.focus()}
-                      placeholder="Task title"
-                      placeholderTextColor="#B5ADA5"
-                      returnKeyType="next"
-                      selectionColor="#2F6F62"
-                      scrollEnabled={false}
-                      style={styles.createDrawerTitleInput}
-                      submitBehavior="submit"
-                      textAlignVertical="top"
-                      value={createDraftText}
-                    />
+                  <View
+                    style={[
+                      styles.createDrawerEditor,
+                      createDrawerExpanded && styles.createDrawerEditorExpanded,
+                    ]}
+                  >
+                    <View style={styles.createDrawerTitleRow}>
+                      <TextInput
+                        ref={createInputRef}
+                        autoCapitalize="sentences"
+                        autoCorrect
+                        multiline
+                        onChangeText={setCreateDraftText}
+                        onSubmitEditing={() => createContentInputRef.current?.focus()}
+                        placeholder="Task title"
+                        placeholderTextColor="#B5ADA5"
+                        returnKeyType="next"
+                        selectionColor="#2F6F62"
+                        scrollEnabled={false}
+                        style={styles.createDrawerTitleInput}
+                        submitBehavior="submit"
+                        textAlignVertical="top"
+                        value={createDraftText}
+                      />
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          createDrawerExpanded
+                            ? 'Collapse new todo editor'
+                            : 'Expand new todo editor to full screen'
+                        }
+                        accessibilityState={{ expanded: createDrawerExpanded }}
+                        hitSlop={8}
+                        onPress={() => {
+                          setCreateDrawerExpanded((current) => !current);
+                          triggerSubtleHaptic();
+                        }}
+                        style={({ pressed }) => [
+                          styles.todoDetailCloseButton,
+                          pressed && styles.todoDetailCloseButtonPressed,
+                        ]}
+                      >
+                        <Ionicons
+                          color="#2A2520"
+                          name={createDrawerExpanded ? 'contract-outline' : 'expand-outline'}
+                          size={19}
+                        />
+                      </Pressable>
+                    </View>
                     <TextInput
                       ref={createContentInputRef}
                       autoCapitalize="sentences"
@@ -17322,7 +17369,10 @@ export default function App() {
                       placeholderTextColor="#B5ADA5"
                       selectionColor="#2F6F62"
                       scrollEnabled
-                      style={styles.createDrawerContentInput}
+                      style={[
+                        styles.createDrawerContentInput,
+                        createDrawerExpanded && styles.createDrawerContentInputExpanded,
+                      ]}
                       textAlignVertical="top"
                       value={createDraftContent}
                     />
@@ -19258,6 +19308,9 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     paddingHorizontal: 18,
     paddingTop: 18,
+  },
+  todoDetailHeaderExpanded: {
+    paddingTop: 18 + ANDROID_STATUS_BAR_INSET + ANDROID_FULLSCREEN_TOP_MARGIN,
   },
   todoDetailHeaderActions: {
     flexDirection: 'row',
@@ -21529,6 +21582,9 @@ const styles = StyleSheet.create({
     zIndex: 24,
     elevation: 8,
   },
+  createDrawerLayerExpanded: {
+    top: 0,
+  },
   createDrawer: {
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -21543,6 +21599,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -8 },
     elevation: 10,
   },
+  createDrawerExpanded: {
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    borderTopWidth: 0,
+    flex: 1,
+    minHeight: 0,
+    paddingTop: ANDROID_STATUS_BAR_INSET + ANDROID_FULLSCREEN_TOP_MARGIN,
+  },
   createDrawerListPickerSheet: {
     flex: 1,
     minHeight: 0,
@@ -21550,13 +21614,24 @@ const styles = StyleSheet.create({
   createDrawerEditor: {
     marginTop: 4,
   },
+  createDrawerEditorExpanded: {
+    flex: 1,
+    minHeight: 0,
+  },
+  createDrawerTitleRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+  },
   createDrawerTitleInput: {
     color: THEME_TEXT,
+    flex: 1,
     fontSize: 22,
     fontWeight: FONT_SEMIBOLD,
     lineHeight: 29,
     maxHeight: 92,
     minHeight: 44,
+    minWidth: 0,
     paddingHorizontal: 0,
     paddingVertical: 5,
   },
@@ -21571,8 +21646,16 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 6,
   },
+  createDrawerContentInputExpanded: {
+    flex: 1,
+    maxHeight: '100%',
+  },
   createDrawerPicker: {
     marginTop: 4,
+  },
+  createDrawerPickerExpanded: {
+    flex: 1,
+    minHeight: 0,
   },
   createDrawerPickerEmptyText: {
     color: THEME_TEXT_SECONDARY,

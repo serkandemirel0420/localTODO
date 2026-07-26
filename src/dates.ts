@@ -23,6 +23,10 @@ export const DATE_FILTER_PRESETS = [
   '4 days',
   '5 days',
   '7 days',
+  '1 month',
+  '3 months',
+  '6 months',
+  '1 year',
   CUSTOM_DATE_LABEL,
   LATER_DATE_LABEL,
 ] as const;
@@ -33,6 +37,12 @@ const DATE_PRESET_LABELS: Record<string, string> = {
   '4 days': '4 days',
   '5 days': '5 days',
   '7 days': '7 days',
+  '1 month': '1 month',
+  '3 month': '3 months',
+  '3 months': '3 months',
+  '6 month': '6 months',
+  '6 months': '6 months',
+  '1 year': '1 year',
   custom: CUSTOM_DATE_LABEL,
   'custom date': CUSTOM_DATE_LABEL,
   dated: DATED_DATE_LABEL,
@@ -139,6 +149,12 @@ const RELATIVE_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
   'this week': 2,
   'next week': 7,
 };
+const RELATIVE_DATE_FILTER_MONTH_OFFSETS: Record<string, number> = {
+  '1 month': 1,
+  '3 months': 3,
+  '6 months': 6,
+  '1 year': 12,
+};
 const EXACT_DATE_FILTER_DAY_OFFSETS: Record<string, number> = {
   today: 0,
   tomorrow: 1,
@@ -149,6 +165,22 @@ export type DateLabelAnchor = Date | number | null | undefined;
 const addDays = (date: Date, days: number): Date => {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
+
+  return next;
+};
+
+const addCalendarMonths = (date: Date, months: number): Date => {
+  const next = new Date(date);
+  const originalDay = next.getDate();
+
+  next.setDate(1);
+  next.setMonth(next.getMonth() + months);
+  const lastDayOfTargetMonth = new Date(
+    next.getFullYear(),
+    next.getMonth() + 1,
+    0,
+  ).getDate();
+  next.setDate(Math.min(originalDay, lastDayOfTargetMonth));
 
   return next;
 };
@@ -191,11 +223,18 @@ export const resolveDateFilterValueDate = (
   }
 
   const dayOffset = RELATIVE_DATE_FILTER_DAY_OFFSETS[formattedLabel.toLocaleLowerCase()];
-  if (dayOffset === undefined) {
-    return null;
+  if (dayOffset !== undefined) {
+    return addDays(getDateLabelAnchorDay(anchor, now), dayOffset);
   }
 
-  return addDays(getDateLabelAnchorDay(anchor, now), dayOffset);
+  const monthOffset = RELATIVE_DATE_FILTER_MONTH_OFFSETS[
+    formattedLabel.toLocaleLowerCase()
+  ];
+  if (monthOffset !== undefined) {
+    return addCalendarMonths(getDateLabelAnchorDay(anchor, now), monthOffset);
+  }
+
+  return null;
 };
 
 export const freezeDateFilterValue = (
@@ -281,6 +320,12 @@ export const formatRemainingDaysLabel = (
     || formattedLabel === CUSTOM_DATE_LABEL
   ) {
     return formattedLabel === CUSTOM_DATE_LABEL ? null : formattedLabel;
+  }
+
+  if (
+    RELATIVE_DATE_FILTER_MONTH_OFFSETS[formattedLabel.toLocaleLowerCase()] !== undefined
+  ) {
+    return formattedLabel;
   }
 
   const dayOffset = getDateLabelDayOffset(label, now, anchor);
@@ -633,7 +678,9 @@ export const getDateMenuItemDisplayLabel = (
   mode: DateLabelDisplayMode = 'exact',
   now = new Date(),
 ): string => {
-  if (formatDateFilterValue(menuLabel) === CUSTOM_DATE_LABEL) {
+  const formattedMenuLabel = formatDateFilterValue(menuLabel);
+
+  if (formattedMenuLabel === CUSTOM_DATE_LABEL) {
     const customDate = getSelectedCustomDateLabel(dateLabels);
     if (customDate && !customDateMatchesVisibleShortcut(customDate, now)) {
       if (mode === 'remaining') {

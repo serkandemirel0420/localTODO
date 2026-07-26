@@ -8,3 +8,11 @@ export const triggerSubtleHaptic = (): void => {
 
   feedback.catch(() => undefined);
 };
+
+export const triggerVerySubtleHaptic = (): void => {
+  const feedback = Platform.OS === 'android'
+    ? Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Segment_Frequent_Tick)
+    : Haptics.selectionAsync();
+
+  feedback.catch(() => undefined);
+};

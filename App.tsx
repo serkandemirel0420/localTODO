@@ -50,6 +50,10 @@ import {
   type PanGestureHandlerGestureEvent,
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
+import {
+  KeyboardStickyView,
+  useKeyboardAnimation,
+} from 'react-native-keyboard-controller';
 
 import {
   ReminderTimeModal,
@@ -174,7 +178,7 @@ import {
   type MetaTagVisibility,
 } from './src/metaTags';
 import { resolveMaterialCommunityIconName } from './src/materialCommunityIconNames';
-import { triggerSubtleHaptic } from './src/haptics';
+import { triggerSubtleHaptic, triggerVerySubtleHaptic } from './src/haptics';
 import {
   appSettingsStore,
   APP_HISTORY_LIMIT,
@@ -241,7 +245,6 @@ import {
   encodeTodoReminder,
   getDatePickerMenuDisplayLabel,
   getRepeatPresetForMenuLabel,
-  formatHabitMenuLabel,
   HABIT_INTERVAL_OPTIONS,
   HABIT_ITEMS_FILTER_LABEL,
   HABIT_ITEMS_FILTER_VALUE,
@@ -1514,6 +1517,12 @@ const QUICK_PRESET_HEADER_SWIPE_DISTANCE = 34;
 const QUICK_PRESET_HEADER_SWIPE_VELOCITY = 420;
 const QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-12, 12];
 const QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y: [number, number] = [-8, 8];
+const QUICK_PRESET_SCREEN_SWIPE_DISTANCE = 22;
+const QUICK_PRESET_SCREEN_SWIPE_VELOCITY = 320;
+const QUICK_PRESET_SCREEN_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-8, 8];
+const QUICK_PRESET_SCREEN_SWIPE_FAIL_OFFSET_Y: [number, number] = [-28, 28];
+const QUICK_PRESET_EMPTY_AREA_FLASH_MS = 140;
+const QUICK_PRESET_EMPTY_AREA_FLASH_COLOR = '#EEF1F4';
 const MENU_DISMISS_RELEASE = 52;
 const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 116;
 
@@ -4774,8 +4783,53 @@ function CreateCommandPalette({
   );
 }
 
+function CreateDrawerHost({
+  androidHostRef,
+  children,
+  onRequestClose,
+  onShow,
+  visible,
+}: {
+  androidHostRef: React.RefObject<View | null>;
+  children: React.ReactNode;
+  onRequestClose: () => void;
+  onShow: () => void;
+  visible: boolean;
+}) {
+  if (Platform.OS === 'android') {
+    return (
+      <View
+        ref={androidHostRef}
+        accessibilityElementsHidden={!visible}
+        accessibilityViewIsModal={visible}
+        importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
+        pointerEvents={visible ? 'auto' : 'none'}
+        style={[
+          styles.createDrawerInlineHost,
+          !visible && styles.createDrawerInlineHostHidden,
+        ]}
+      >
+        {children}
+      </View>
+    );
+  }
+
+  return (
+    <Modal
+      animationType="fade"
+      onRequestClose={onRequestClose}
+      onShow={onShow}
+      transparent
+      visible={visible}
+    >
+      {children}
+    </Modal>
+  );
+}
+
 export default function App() {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const { progress: keyboardAnimationProgress } = useKeyboardAnimation();
   const todoTextMaxLength = useMemo(
     () => getTodoTextMaxLength(windowWidth),
     [windowWidth],
@@ -4904,6 +4958,7 @@ export default function App() {
     null,
   );
   const [quickPresetScreenSwipeArmed, setQuickPresetScreenSwipeArmedState] = useState(false);
+  const [quickPresetEmptyAreaFlashVisible, setQuickPresetEmptyAreaFlashVisible] = useState(false);
   const quickPresetScreenSwipeArmedRef = useRef(false);
   const setQuickPresetScreenSwipeArmed = useCallback((armed: boolean) => {
     quickPresetScreenSwipeArmedRef.current = armed;
@@ -5047,6 +5102,9 @@ export default function App() {
   const createCommandReturnSelectionRef = useRef({ end: 0, start: 0 });
   const createCommandRestoreAfterPickerRef = useRef(false);
   const createContentInputRef = useRef<TextInput>(null);
+  const createDrawerHostRef = useRef<View>(null);
+  const createDrawerKeepOpenOnKeyboardHideRef = useRef(false);
+  const createDrawerOpeningRef = useRef(false);
   const createInputRef = useRef<TextInput>(null);
   const createDraftSelectionRef = useRef({ end: 0, start: 0 });
   const createDraftTextValueRef = useRef(createDraftText);
@@ -5145,6 +5203,8 @@ export default function App() {
   const quickPresetNavPressStartedSwipeArmedRef = useRef(false);
   const didAddExistingPresetTagsRef = useRef(false);
   const quickPresetNavPressInRef = useRef<string | null>(null);
+  const quickPresetScreenSwipeHandledRef = useRef(false);
+  const quickPresetEmptyAreaFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
   const savedSearchScrollOffsetRef = useRef<number | null>(null);
   const searchScrollOffsetsByModeRef = useRef<Record<SearchMode, number | null>>({
@@ -6841,7 +6901,7 @@ export default function App() {
   }, [closeListMenuState]);
 
   const exitTodoSelectMode = useCallback(() => {
-    setSelectedTodoIds(new Set());
+    setSelectedTodoIds((current) => (current.size === 0 ? current : new Set()));
     setMenuEditOwner('presets');
   }, []);
 
@@ -7239,7 +7299,42 @@ export default function App() {
     createInputFocusTimerRef.current = setTimeout(() => {
       createInputFocusTimerRef.current = null;
       createInputRef.current?.focus();
-    }, Platform.OS === 'android' ? 180 : 0);
+    }, 0);
+  }, []);
+
+  const revealMountedCreateDrawer = useCallback(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    createDrawerHostRef.current?.setNativeProps({
+      pointerEvents: 'box-none',
+      style: { opacity: 1 },
+    });
+  }, []);
+
+  const hideMountedCreateDrawer = useCallback(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    createDrawerHostRef.current?.setNativeProps({
+      pointerEvents: 'none',
+      style: { opacity: 0 },
+    });
+  }, []);
+
+  const focusMountedCreateDrawerInput = useCallback(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    if (createInputFocusTimerRef.current) {
+      clearTimeout(createInputFocusTimerRef.current);
+      createInputFocusTimerRef.current = null;
+    }
+
+    createInputRef.current?.focus();
   }, []);
 
   useEffect(() => () => {
@@ -7249,6 +7344,7 @@ export default function App() {
   }, []);
 
   const backToCreateDrawerInput = useCallback(() => {
+    createDrawerKeepOpenOnKeyboardHideRef.current = true;
     Keyboard.dismiss();
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -7284,6 +7380,27 @@ export default function App() {
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
+
+  useEffect(() => {
+    if (
+      Platform.OS !== 'android' ||
+      createDrawerVisible ||
+      createDrawerOpeningRef.current
+    ) {
+      return;
+    }
+
+    const seedFilters = hasRememberedCreateDraftFilters(listMenuTree, selectedFilters)
+      ? selectedFilters
+      : lastCreateTodoFilters;
+    resetCreateDrawerState(seedFilters);
+  }, [
+    createDrawerVisible,
+    lastCreateTodoFilters,
+    listMenuTree,
+    resetCreateDrawerState,
+    selectedFilters,
+  ]);
 
   const focusCreateTitleAtCommandCursor = useCallback(() => {
     const selection = createCommandReturnSelectionRef.current;
@@ -7766,11 +7883,15 @@ export default function App() {
   ]);
 
   const closeCreateDrawer = useCallback(() => {
+    createDrawerKeepOpenOnKeyboardHideRef.current = false;
+    createDrawerOpeningRef.current = false;
+    hideMountedCreateDrawer();
+    createInputRef.current?.blur();
     Keyboard.dismiss();
     setCreateDrawerVisible(false);
     setCreateDrawerPicker(null);
     resetCreateDrawerState();
-  }, [resetCreateDrawerState]);
+  }, [hideMountedCreateDrawer, resetCreateDrawerState]);
 
   const openCreateDrawer = useCallback((initialText = '') => {
     if (listMenuOpen) {
@@ -7783,6 +7904,12 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    focusMountedCreateDrawerInput();
+
+    if (Platform.OS === 'android' && !initialText.trim()) {
+      return;
+    }
+
     setCreateDrawerPicker(null);
     resetCreateDrawerState(seedFilters);
     setCreateDraftText(
@@ -7792,10 +7919,10 @@ export default function App() {
       ),
     );
     setCreateDrawerVisible(true);
-    triggerSubtleHaptic();
   }, [
     closeListMenu,
     exitTodoSelectMode,
+    focusMountedCreateDrawerInput,
     lastCreateTodoFilters,
     listMenuOpen,
     listMenuTree,
@@ -7825,6 +7952,7 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    focusMountedCreateDrawerInput();
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -7847,10 +7975,10 @@ export default function App() {
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     hideCreateFromSettingsCue();
     setCreateDrawerVisible(true);
-    triggerSubtleHaptic();
   }, [
     closeListMenu,
     exitTodoSelectMode,
+    focusMountedCreateDrawerInput,
     hideCreateFromSettingsCue,
     listMenuOpen,
     listMenuTree,
@@ -7867,6 +7995,7 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    focusMountedCreateDrawerInput();
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -7884,10 +8013,29 @@ export default function App() {
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     hideCreateFromSettingsCue();
     setCreateDrawerVisible(true);
-    triggerSubtleHaptic();
-  }, [closeListMenu, exitTodoSelectMode, hideCreateFromSettingsCue, listMenuOpen, listMenuTree]);
+  }, [
+    closeListMenu,
+    exitTodoSelectMode,
+    focusMountedCreateDrawerInput,
+    hideCreateFromSettingsCue,
+    listMenuOpen,
+    listMenuTree,
+  ]);
 
   const handleAddTodoPress = useCallback(() => {
+    if (Platform.OS === 'android') {
+      createDrawerKeepOpenOnKeyboardHideRef.current = false;
+      createDrawerOpeningRef.current = true;
+      revealMountedCreateDrawer();
+      focusMountedCreateDrawerInput();
+
+      if (keyboardOverlayInset > 0) {
+        createDrawerOpeningRef.current = false;
+        setCreateDrawerVisible(true);
+        triggerVerySubtleHaptic();
+      }
+    }
+
     if (selectedTodoIds.size === 1) {
       const [selectedTodoId] = selectedTodoIds;
       const selectedTodo = todosById.get(selectedTodoId);
@@ -7900,9 +8048,12 @@ export default function App() {
 
     openCreateDrawer();
   }, [
+    focusMountedCreateDrawerInput,
+    keyboardOverlayInset,
     openCreateDrawer,
     openCreateDrawerFromTodoSettings,
     pendingDeleteIds,
+    revealMountedCreateDrawer,
     selectedTodoIds,
     todosById,
   ]);
@@ -7922,17 +8073,48 @@ export default function App() {
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
-      setKeyboardOverlayInset(Math.max(0, event.endCoordinates.height));
+      const keyboardInset = Math.max(0, event.endCoordinates.height);
+
+      if (Platform.OS === 'ios') {
+        Keyboard.scheduleLayoutAnimation(event);
+      }
+      setKeyboardOverlayInset(keyboardInset);
+
+      if (Platform.OS === 'android' && createDrawerOpeningRef.current) {
+        createDrawerKeepOpenOnKeyboardHideRef.current = false;
+        createDrawerOpeningRef.current = false;
+        setCreateDrawerVisible(true);
+        triggerVerySubtleHaptic();
+      }
     });
-    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+    const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+      if (Platform.OS === 'ios') {
+        Keyboard.scheduleLayoutAnimation(event);
+      }
       setKeyboardOverlayInset(0);
+
+      const keepCreateDrawerOpen = createDrawerKeepOpenOnKeyboardHideRef.current;
+      const createDrawerInputStillFocused = Boolean(
+        createInputRef.current?.isFocused() ||
+        createContentInputRef.current?.isFocused() ||
+        createCommandInputRef.current?.isFocused()
+      );
+
+      if (
+        Platform.OS === 'android' &&
+        !keepCreateDrawerOpen &&
+        createDrawerInputStillFocused &&
+        (createDrawerVisible || createDrawerOpeningRef.current)
+      ) {
+        closeCreateDrawer();
+      }
     });
 
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
     };
-  }, [windowHeight]);
+  }, [closeCreateDrawer, createDrawerVisible]);
 
   useEffect(() => {
     if (
@@ -8080,11 +8262,12 @@ export default function App() {
       [filterKey]:
         filterKey === 'priority' && label === 'None' ? [] : [normalizedLabel],
     }));
-    setCreateDrawerPicker(null);
+    backToCreateDrawerInput();
     triggerSubtleHaptic();
-  }, []);
+  }, [backToCreateDrawerInput]);
 
   const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
+    createDrawerKeepOpenOnKeyboardHideRef.current = true;
     Keyboard.dismiss();
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
@@ -8162,10 +8345,6 @@ export default function App() {
   const createDrawerDateActive = createDraftFilters.date.length > 0
     || createDrawerReminder.time !== null
     || createDrawerReminder.repeat !== 'none';
-  const createDrawerHabitActive = createDrawerReminder.habitHours !== null;
-  const createDrawerHabitAccessibilityLabel = createDrawerHabitActive
-    ? `Habit: ${formatHabitMenuLabel(createDraftFilters.reminder)}`
-    : 'Habit';
   const createDrawerListActive = createDraftFilters.list.length > 0;
   const createDrawerPriorityActive = createDraftFilters.priority.length > 0;
   const createDrawerTagsActive = createDraftTags.length > 0;
@@ -8470,27 +8649,19 @@ export default function App() {
     );
   }, [deleteTodo, exitTodoSelectMode, recordUndo, selectedTodoIds]);
 
-  const markSelectedTodosDone = useCallback((done: boolean) => {
+  const markSelectedTodosDone = useCallback(() => {
     const targetIds = [...selectedTodoIds].filter((id) => {
       const todo = todosRef.current.find((item) => item.id === id);
-      return todo && !pendingDeleteIdsRef.current.has(id) && todo.done !== done;
+      return todo && !pendingDeleteIdsRef.current.has(id) && !todo.done;
     });
 
     if (targetIds.length > 0) {
-      recordUndo(done ? 'Complete selected todos' : 'Reopen selected todos');
+      recordUndo('Complete selected todos');
     }
-    targetIds.forEach((id) => setTodoDone(id, done, { skipUndo: true }));
+    targetIds.forEach((id) => setTodoDone(id, true, { skipUndo: true }));
     exitTodoSelectMode();
     triggerSubtleHaptic();
   }, [exitTodoSelectMode, recordUndo, selectedTodoIds, setTodoDone]);
-
-  const selectedTodosAllDone = useMemo(() => {
-    if (selectedTodoIds.size === 0) {
-      return false;
-    }
-
-    return [...selectedTodoIds].every((id) => todosById.get(id)?.done);
-  }, [selectedTodoIds, todosById]);
 
   const updateTodoFiltersForIds = useCallback((
     ids: string[],
@@ -8764,10 +8935,10 @@ export default function App() {
       list: [],
     }));
     if (closePicker) {
-      setCreateDrawerPicker(null);
+      backToCreateDrawerInput();
     }
     triggerSubtleHaptic();
-  }, []);
+  }, [backToCreateDrawerInput]);
 
   const clearCreateDraftPriority = useCallback(() => {
     setCreateDraftPriorityFromPicker(false);
@@ -8968,14 +9139,6 @@ export default function App() {
     setHabitReminderModalVisible(true);
     triggerSubtleHaptic();
   }, [createDraftFilters.reminder]);
-
-  const handleCreateDrawerHabitPress = useCallback(() => {
-    Keyboard.dismiss();
-    setCreateCommandPaletteVisible(false);
-    setCreateCommandQuery('');
-    setCreateDrawerPicker(null);
-    openCreateHabitModal();
-  }, [openCreateHabitModal]);
 
   const closeCreateHabitModal = useCallback(() => {
     setHabitReminderModalVisible(false);
@@ -10287,15 +10450,17 @@ export default function App() {
     openQuickPresetNavIndex,
     quickPresetNavItems,
   ]);
-  const quickPresetHeaderSwipeEnabled =
+  const quickPresetSwipeContextAvailable =
     navTab === null &&
     currentQuickPresetSwipeItemIndex >= 0 &&
     quickPresetNavItems.length > 1 &&
+    !todoSelectMode;
+  const quickPresetHeaderSwipeEnabled =
+    quickPresetSwipeContextAvailable &&
     !createDrawerVisible &&
     !filterConfigModalVisible &&
     !listMenuOpen &&
-    !settingsModalVisible &&
-    !todoSelectMode;
+    !settingsModalVisible;
   const quickPresetScreenSwipeEnabled =
     Platform.OS !== 'web' &&
     quickPresetScreenSwipeArmed &&
@@ -10303,11 +10468,11 @@ export default function App() {
   useEffect(() => {
     if (
       quickPresetScreenSwipeArmed &&
-      (Platform.OS === 'web' || !quickPresetHeaderSwipeEnabled)
+      (Platform.OS === 'web' || !quickPresetSwipeContextAvailable)
     ) {
       setQuickPresetScreenSwipeArmed(false);
     }
-  }, [quickPresetHeaderSwipeEnabled, quickPresetScreenSwipeArmed]);
+  }, [quickPresetScreenSwipeArmed, quickPresetSwipeContextAvailable]);
   // Empty presets still need this offset: the header/footer spacers provide
   // the blank canvas with enough vertical range to scroll while red mode is armed.
   const todoListOneHandedOffset = useMemo(() => {
@@ -13264,6 +13429,66 @@ export default function App() {
     quickPresetHeaderSwipeEnabled,
   ]);
 
+  const applyQuickPresetScreenSwipeMotion = useCallback((
+    translationX: number,
+    velocityX: number,
+  ) => {
+    if (
+      quickPresetScreenSwipeHandledRef.current ||
+      !quickPresetScreenSwipeEnabled ||
+      currentQuickPresetSwipeItemIndex < 0
+    ) {
+      return;
+    }
+
+    const absoluteTranslationX = Math.abs(translationX);
+    const hasDistance = absoluteTranslationX >= QUICK_PRESET_SCREEN_SWIPE_DISTANCE;
+    const hasVelocity =
+      absoluteTranslationX >= QUICK_PRESET_SCREEN_SWIPE_ACTIVE_OFFSET_X[1] &&
+      Math.abs(velocityX) >= QUICK_PRESET_SCREEN_SWIPE_VELOCITY;
+    if (!hasDistance && !hasVelocity) {
+      return;
+    }
+
+    quickPresetScreenSwipeHandledRef.current = true;
+    const direction = hasDistance
+      ? translationX < 0 ? 1 : -1
+      : velocityX < 0 ? 1 : -1;
+    applyQuickPresetSwipeDirection(direction);
+  }, [
+    applyQuickPresetSwipeDirection,
+    currentQuickPresetSwipeItemIndex,
+    quickPresetScreenSwipeEnabled,
+  ]);
+
+  const handleQuickPresetScreenSwipeGesture = useCallback((
+    event: PanGestureHandlerGestureEvent,
+  ) => {
+    applyQuickPresetScreenSwipeMotion(
+      event.nativeEvent.translationX,
+      event.nativeEvent.velocityX,
+    );
+  }, [applyQuickPresetScreenSwipeMotion]);
+
+  const handleQuickPresetScreenSwipeStateChange = useCallback((
+    event: PanGestureHandlerStateChangeEvent,
+  ) => {
+    const { state, translationX, velocityX } = event.nativeEvent;
+
+    if (state === State.BEGAN) {
+      quickPresetScreenSwipeHandledRef.current = false;
+      return;
+    }
+
+    if (state === State.END && !quickPresetScreenSwipeHandledRef.current) {
+      applyQuickPresetScreenSwipeMotion(translationX, velocityX);
+    }
+
+    if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      quickPresetScreenSwipeHandledRef.current = false;
+    }
+  }, [applyQuickPresetScreenSwipeMotion]);
+
   const removeMenuPreset = useCallback((id: string) => {
     const removed = menuPresets.find((preset) => preset.id === id);
     const shouldResetView = Boolean(
@@ -15352,6 +15577,25 @@ export default function App() {
 
   const canFocusNavbarPresetsFromSectionGap =
     Platform.OS !== 'web' && quickPresetHeaderSwipeEnabled;
+  const flashQuickPresetEmptyArea = useCallback(() => {
+    if (quickPresetEmptyAreaFlashTimerRef.current) {
+      clearTimeout(quickPresetEmptyAreaFlashTimerRef.current);
+    }
+
+    setQuickPresetEmptyAreaFlashVisible(true);
+    quickPresetEmptyAreaFlashTimerRef.current = setTimeout(() => {
+      quickPresetEmptyAreaFlashTimerRef.current = null;
+      setQuickPresetEmptyAreaFlashVisible(false);
+    }, QUICK_PRESET_EMPTY_AREA_FLASH_MS);
+  }, []);
+
+  useEffect(() => () => {
+    if (quickPresetEmptyAreaFlashTimerRef.current) {
+      clearTimeout(quickPresetEmptyAreaFlashTimerRef.current);
+      quickPresetEmptyAreaFlashTimerRef.current = null;
+    }
+  }, []);
+
   const focusNavbarPresetsFromSectionGap = useCallback(() => {
     if (!canFocusNavbarPresetsFromSectionGap) {
       return;
@@ -15360,35 +15604,16 @@ export default function App() {
     lastListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
     lastRegisteredListTapRef.current = { pageX: 0, pageY: 0, timestamp: 0 };
     setQuickPresetScreenSwipeArmed(!quickPresetScreenSwipeArmedRef.current);
+    flashQuickPresetEmptyArea();
     triggerSubtleHaptic();
   }, [
     canFocusNavbarPresetsFromSectionGap,
+    flashQuickPresetEmptyArea,
   ]);
   const handleTodoListFrameTouchEnd = useCallback((event: GestureResponderEvent) => {
     const { pageX, pageY, timestamp } = event.nativeEvent;
     const start = listTouchStartRef.current;
-    const translationX = pageX - start.pageX;
-    const translationY = pageY - start.pageY;
     const elapsed = timestamp - start.timestamp;
-
-    if (quickPresetScreenSwipeEnabled) {
-      const absoluteTranslationX = Math.abs(translationX);
-      const horizontalVelocity = (
-        absoluteTranslationX * 1000 / Math.max(elapsed, 1)
-      );
-      const hasDistance = absoluteTranslationX >= QUICK_PRESET_HEADER_SWIPE_DISTANCE;
-      const hasVelocity = (
-        absoluteTranslationX >= QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X[1] &&
-        horizontalVelocity >= QUICK_PRESET_HEADER_SWIPE_VELOCITY
-      );
-      const isHorizontalSwipe = absoluteTranslationX > Math.abs(translationY);
-
-      if (isHorizontalSwipe && (hasDistance || hasVelocity)) {
-        todoSectionGapTouchRef.current = false;
-        applyQuickPresetSwipeDirection(translationX < 0 ? 1 : -1);
-        return;
-      }
-    }
 
     if (
       todoSectionGapTouchRef.current ||
@@ -15410,11 +15635,9 @@ export default function App() {
 
     handleListFrameTouchEnd(event);
   }, [
-    applyQuickPresetSwipeDirection,
     canFocusNavbarPresetsFromSectionGap,
     focusNavbarPresetsFromSectionGap,
     handleListFrameTouchEnd,
-    quickPresetScreenSwipeEnabled,
     todoSelectMode,
   ]);
   const renderVisibleTodoRowGap = useCallback((
@@ -15442,10 +15665,7 @@ export default function App() {
         onPressIn={() => {
           todoSectionGapTouchRef.current = true;
         }}
-        style={({ pressed }) => [
-          styles.todoListSectionGap,
-          pressed && styles.todoListSectionGapPressed,
-        ]}
+        style={styles.todoListSectionGap}
       />
     );
   }, [
@@ -16237,7 +16457,12 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView
+        style={[
+          styles.safeArea,
+          quickPresetEmptyAreaFlashVisible && styles.safeAreaPresetFlash,
+        ]}
+      >
         <StatusBar barStyle="dark-content" />
         <View style={styles.screen}>
         {!firebaseInitialSyncReady ? (
@@ -16280,29 +16505,29 @@ export default function App() {
             <View style={styles.appHeaderSelectActions}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={selectedTodosAllDone ? 'Mark selected active' : 'Mark selected done'}
-                onPress={() => markSelectedTodosDone(!selectedTodosAllDone)}
+                accessibilityLabel="Delete selected items"
+                onPress={deleteSelectedTodos}
                 style={({ pressed }) => [
-                  styles.appHeaderSideButton,
+                  styles.appHeaderActionButton,
+                  pressed && styles.appHeaderSideButtonPressed,
+                ]}
+              >
+                <Ionicons color="#D14A42" name="trash-outline" size={22} />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Mark selected done"
+                onPress={markSelectedTodosDone}
+                style={({ pressed }) => [
+                  styles.appHeaderActionButton,
                   pressed && styles.appHeaderSideButtonPressed,
                 ]}
               >
                 <Ionicons
                   color={NAV_ACCENT}
-                  name={selectedTodosAllDone ? 'arrow-undo' : 'checkmark'}
+                  name="checkmark"
                   size={23}
                 />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Delete selected items"
-                onPress={deleteSelectedTodos}
-                style={({ pressed }) => [
-                  styles.appHeaderSideButton,
-                  pressed && styles.appHeaderSideButtonPressed,
-                ]}
-              >
-                <Ionicons color="#D14A42" name="trash-outline" size={22} />
               </Pressable>
             </View>
           ) : (
@@ -16422,7 +16647,14 @@ export default function App() {
               />
             </View>
           ) : (
-            <View
+            <PanGestureHandler
+              activeOffsetX={QUICK_PRESET_SCREEN_SWIPE_ACTIVE_OFFSET_X}
+              enabled={quickPresetScreenSwipeEnabled}
+              failOffsetY={QUICK_PRESET_SCREEN_SWIPE_FAIL_OFFSET_Y}
+              onGestureEvent={handleQuickPresetScreenSwipeGesture}
+              onHandlerStateChange={handleQuickPresetScreenSwipeStateChange}
+            >
+              <View
                 collapsable={false}
                 onTouchEnd={handleTodoListFrameTouchEnd}
                 onTouchStart={handleListFrameTouchStart}
@@ -16635,9 +16867,11 @@ export default function App() {
                 renderItem={renderTodoItem}
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
+                style={styles.todoListForeground}
               />
               </View>
-            </View>
+              </View>
+            </PanGestureHandler>
           )}
 
         </View>
@@ -16769,7 +17003,11 @@ export default function App() {
               accessibilityRole="button"
               accessibilityHint="Opens the new todo drawer"
               accessibilityLabel="Add todo"
-              onPress={handleAddTodoPress}
+              onAccessibilityTap={
+                Platform.OS === 'android' ? handleAddTodoPress : undefined
+              }
+              onPress={Platform.OS === 'android' ? undefined : handleAddTodoPress}
+              onPressIn={Platform.OS === 'android' ? handleAddTodoPress : undefined}
               style={({ pressed }) => [
                 styles.bottomNavItem,
                 pressed && styles.bottomNavItemPressed,
@@ -17949,8 +18187,8 @@ export default function App() {
           </View>
         </Modal>
 
-        <Modal
-          animationType="fade"
+        <CreateDrawerHost
+          androidHostRef={createDrawerHostRef}
           onRequestClose={() => {
             if (createCommandPaletteVisible) {
               closeCreateCommandPalette();
@@ -17960,34 +18198,57 @@ export default function App() {
             closeCreateDrawer();
           }}
           onShow={scheduleCreateDrawerInputFocus}
-          statusBarTranslucent={Platform.OS === 'android'}
-          transparent
           visible={createDrawerVisible}
         >
           <View style={styles.createDrawerModalRoot}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Close new todo"
-              onPress={closeCreateDrawer}
-              style={styles.createDrawerBackdrop}
-            />
-            <View
+            <Animated.View
+              pointerEvents="box-none"
+              style={[
+                styles.createDrawerBackdrop,
+                Platform.OS === 'android' && !createDrawerPicker
+                  ? {
+                    opacity: keyboardAnimationProgress.interpolate({
+                      extrapolate: 'clamp',
+                      inputRange: [0, 0.8, 1],
+                      outputRange: [0, 0, 1],
+                    }),
+                  }
+                  : null,
+              ]}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close new todo"
+                onPress={closeCreateDrawer}
+                pointerEvents={createDrawerVisible ? 'auto' : 'none'}
+                style={StyleSheet.absoluteFillObject}
+              />
+            </Animated.View>
+            <KeyboardStickyView
+              enabled={!createDrawerUsesFullScreen && Platform.OS !== 'web'}
               pointerEvents="box-none"
               style={[
                 styles.createDrawerLayer,
-                { bottom: keyboardOverlayInset },
-                !createDrawerPicker &&
-                  !createDrawerUsesFullScreen &&
-                  styles.createDrawerLayerPrompt,
+                createDrawerUsesFullScreen ? { bottom: keyboardOverlayInset } : null,
                 createDrawerUsesFullScreen && styles.createDrawerLayerExpanded,
                 createDrawerListPickerHalfSheet
                   ? { height: createDrawerListPickerSheetHeight }
                   : null,
               ]}
             >
-              <View
+              <Animated.View
+                pointerEvents={createDrawerVisible ? 'auto' : 'none'}
                 style={[
                   styles.createDrawer,
+                  Platform.OS === 'android' && !createDrawerPicker
+                    ? {
+                      opacity: keyboardAnimationProgress.interpolate({
+                        extrapolate: 'clamp',
+                        inputRange: [0, 0.8, 1],
+                        outputRange: [0, 0, 1],
+                      }),
+                    }
+                    : null,
                   !createDrawerPicker &&
                     !createDrawerUsesFullScreen &&
                     styles.createDrawerPrompt,
@@ -18240,7 +18501,6 @@ export default function App() {
                       ]}
                     >
                       <TextInput
-                        key={createDrawerVisible ? 'new-todo-title-open' : 'new-todo-title-closed'}
                         ref={createInputRef}
                         autoCapitalize="sentences"
                         autoCorrect
@@ -18250,7 +18510,7 @@ export default function App() {
                           createDraftSelectionRef.current = event.nativeEvent.selection;
                         }}
                         onSubmitEditing={submitCreateTodo}
-                        placeholder="What would you like to do?"
+                        placeholder="Title"
                         placeholderTextColor="#D1D3D6"
                         returnKeyType="done"
                         selectionColor="#2F6F62"
@@ -18322,7 +18582,7 @@ export default function App() {
                     ) : null}
                   </View>
                 )}
-                {keyboardOverlayInset === 0 && !createCommandPaletteVisible ? (
+                {!createCommandPaletteVisible ? (
                   <View
                     style={[
                       styles.createDrawerToolbar,
@@ -18336,7 +18596,7 @@ export default function App() {
                     bounces={false}
                     contentContainerStyle={styles.createDrawerToolbarItems}
                     horizontal
-                    keyboardShouldPersistTaps="handled"
+                    keyboardShouldPersistTaps="always"
                     showsHorizontalScrollIndicator={false}
                     style={styles.createDrawerToolbarScroll}
                   >
@@ -18358,37 +18618,34 @@ export default function App() {
                     </Pressable>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={createDrawerHabitAccessibilityLabel}
-                      accessibilityState={{ selected: createDrawerHabitActive }}
-                      onPress={handleCreateDrawerHabitPress}
+                      accessibilityLabel={createDrawerListAccessibilityLabel}
+                      onPress={handleCreateDrawerListPress}
                       style={({ pressed }) => [
                         styles.createDrawerToolbarButton,
                         pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerHabitActive && styles.createDrawerToolbarButtonActive,
+                        createDrawerPicker === 'list' && styles.createDrawerToolbarButtonActive,
                       ]}
                     >
                       <Ionicons
-                        color={createDrawerHabitActive ? '#2F6F62' : '#8C847C'}
-                        name="notifications-outline"
+                        color={createDrawerListActive ? THEME_ACCENT : '#8C847C'}
+                        name="file-tray-outline"
                         size={22}
                       />
                     </Pressable>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={
-                        createDraftPinned ? 'Unpin new todo' : 'Pin new todo'
-                      }
-                      accessibilityState={{ selected: createDraftPinned }}
-                      onPress={toggleCreateDraftPinned}
+                      accessibilityLabel={createDrawerTagsAccessibilityLabel}
+                      accessibilityState={{ selected: createDrawerTagsActive }}
+                      onPress={handleCreateDrawerTagsPress}
                       style={({ pressed }) => [
                         styles.createDrawerToolbarButton,
                         pressed && styles.createDrawerToolbarButtonPressed,
-                        createDraftPinned && styles.createDrawerToolbarButtonActive,
+                        createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
                       ]}
                     >
                       <Ionicons
-                        color={createDraftPinned ? THEME_ACCENT : '#8C847C'}
-                        name={createDraftPinned ? 'pin' : 'pin-outline'}
+                        color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
+                        name="pricetags-outline"
                         size={22}
                       />
                     </Pressable>
@@ -18413,39 +18670,21 @@ export default function App() {
                         size={22}
                       />
                     </Pressable>
+                  </ScrollView>
+                  {!createDrawerPicker ? (
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={createDrawerTagsAccessibilityLabel}
-                      accessibilityState={{ selected: createDrawerTagsActive }}
-                      onPress={handleCreateDrawerTagsPress}
+                      accessibilityLabel="Close new todo"
+                      hitSlop={8}
+                      onPress={closeCreateDrawer}
                       style={({ pressed }) => [
                         styles.createDrawerToolbarButton,
                         pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
                       ]}
                     >
-                      <Ionicons
-                        color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
-                        name="pricetags-outline"
-                        size={22}
-                      />
+                      <Ionicons color="#5F6368" name="close" size={24} />
                     </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={createDrawerListAccessibilityLabel}
-                      onPress={handleCreateDrawerListPress}
-                      style={({ pressed }) => [
-                        styles.createDrawerInboxChip,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerPicker === 'list' && styles.createDrawerInboxChipActive,
-                      ]}
-                    >
-                      <Ionicons color={THEME_ACCENT} name="file-tray-outline" size={18} />
-                      <Text numberOfLines={1} style={styles.createDrawerInboxChipText}>
-                        {createDrawerListLabel}
-                      </Text>
-                    </Pressable>
-                  </ScrollView>
+                  ) : null}
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={
@@ -18478,24 +18717,10 @@ export default function App() {
                   </Pressable>
                   </View>
                 ) : null}
-              </View>
-              {keyboardOverlayInset === 0 && !createCommandPaletteVisible && !createDrawerPicker ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close new todo"
-                  hitSlop={8}
-                  onPress={closeCreateDrawer}
-                  style={({ pressed }) => [
-                    styles.createDrawerCloseButton,
-                    pressed && styles.createDrawerToolbarButtonPressed,
-                  ]}
-                >
-                  <Ionicons color="#5F6368" name="close" size={24} />
-                </Pressable>
-              ) : null}
-            </View>
+              </Animated.View>
+            </KeyboardStickyView>
           </View>
-        </Modal>
+        </CreateDrawerHost>
 
         <SimpleCalendarModal
           onClear={clearPickedDate}
@@ -20156,9 +20381,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: THEME_BG,
   },
+  safeAreaPresetFlash: {
+    backgroundColor: QUICK_PRESET_EMPTY_AREA_FLASH_COLOR,
+  },
   screen: {
     flex: 1,
-    backgroundColor: THEME_BG,
+    backgroundColor: 'transparent',
     position: 'relative',
   },
   startupSyncBar: {
@@ -22111,7 +22339,7 @@ const styles = StyleSheet.create({
   },
   appHeader: {
     alignItems: 'center',
-    backgroundColor: THEME_BG,
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     minHeight: 50,
     paddingBottom: 8,
@@ -22222,10 +22450,10 @@ const styles = StyleSheet.create({
     backgroundColor: THEME_ACCENT_SOFT,
   },
   quickPresetHeaderSwipeZone: {
-    backgroundColor: THEME_BG,
+    backgroundColor: 'transparent',
   },
   headerSearchRow: {
-    backgroundColor: THEME_BG,
+    backgroundColor: 'transparent',
     height: HEADER_SEARCH_ROW_HEIGHT,
     paddingBottom: 14,
     paddingHorizontal: HORIZONTAL_PADDING,
@@ -22383,7 +22611,7 @@ const styles = StyleSheet.create({
     opacity: 0.72,
   },
   listShell: {
-    backgroundColor: THEME_BG,
+    backgroundColor: 'transparent',
     flex: 1,
   },
   notificationPage: {
@@ -22528,9 +22756,13 @@ const styles = StyleSheet.create({
   },
   todoListFrame: {
     flex: 1,
+    position: 'relative',
   },
   todoListTapFrame: {
     flex: 1,
+  },
+  todoListForeground: {
+    backgroundColor: 'transparent',
   },
   listMenuBackdrop: {
     flex: 1,
@@ -22539,6 +22771,14 @@ const styles = StyleSheet.create({
   createDrawerModalRoot: {
     flex: 1,
     justifyContent: 'flex-end',
+  },
+  createDrawerInlineHost: {
+    ...StyleSheet.absoluteFillObject,
+    elevation: 16,
+    zIndex: 40,
+  },
+  createDrawerInlineHostHidden: {
+    opacity: 0,
   },
   createDrawerBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -22551,9 +22791,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 24,
     elevation: 8,
-  },
-  createDrawerLayerPrompt: {
-    top: TOP_SAFE_GAP,
   },
   createDrawerLayerExpanded: {
     top: 0,
@@ -22573,10 +22810,8 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   createDrawerPrompt: {
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    flex: 1,
-    minHeight: 0,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
     paddingBottom: Platform.OS === 'android' ? 12 : 10,
   },
   createDrawerExpanded: {
@@ -22596,9 +22831,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   createDrawerEditorPrompt: {
-    flex: 1,
-    minHeight: 0,
-    marginTop: 12,
+    marginTop: 6,
   },
   createDrawerEditorExpanded: {
     flex: 1,
@@ -22611,8 +22844,8 @@ const styles = StyleSheet.create({
   },
   createDrawerTitleRowPrompt: {
     flex: 0,
-    maxHeight: 72,
-    minHeight: 64,
+    maxHeight: 52,
+    minHeight: 44,
   },
   createDrawerTitleRowCommandHidden: {
     opacity: 0,
@@ -22630,12 +22863,12 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   createDrawerTitleInputPrompt: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: FONT_REGULAR,
-    lineHeight: 30,
-    maxHeight: 72,
-    minHeight: 64,
-    paddingTop: 8,
+    lineHeight: 23,
+    maxHeight: 52,
+    minHeight: 44,
+    paddingTop: 6,
     paddingBottom: 0,
   },
   createDrawerContentInput: {
@@ -22654,9 +22887,11 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   createDrawerContentInputPrompt: {
-    flex: 1,
-    maxHeight: '100%',
-    minHeight: 96,
+    fontSize: 15,
+    lineHeight: 21,
+    maxHeight: 92,
+    minHeight: 76,
+    paddingTop: 4,
   },
   createCommandPalette: {
     ...StyleSheet.absoluteFillObject,
@@ -22923,8 +23158,8 @@ const styles = StyleSheet.create({
   createDrawerToolbarPrompt: {
     borderTopWidth: 0,
     marginTop: 0,
-    minHeight: 56,
-    paddingTop: 4,
+    minHeight: 48,
+    paddingTop: 2,
   },
   createDrawerToolbarScroll: {
     flex: 1,
@@ -22947,42 +23182,6 @@ const styles = StyleSheet.create({
   },
   createDrawerToolbarButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
-  },
-  createDrawerCloseButton: {
-    alignItems: 'center',
-    backgroundColor: '#F1F3F5',
-    borderRadius: 16,
-    bottom: Platform.OS === 'android' ? 76 : 72,
-    elevation: 12,
-    height: 48,
-    justifyContent: 'center',
-    position: 'absolute',
-    right: 20,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    width: 48,
-    zIndex: 30,
-  },
-  createDrawerInboxChip: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    height: 40,
-    maxWidth: 132,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-  },
-  createDrawerInboxChipActive: {
-    backgroundColor: THEME_ACCENT_SOFT,
-  },
-  createDrawerInboxChipText: {
-    color: THEME_ACCENT,
-    flexShrink: 1,
-    fontSize: 14,
-    fontWeight: FONT_MEDIUM,
-    lineHeight: 18,
   },
   edgeBackZone: {
     position: 'absolute',
@@ -23444,10 +23643,6 @@ const styles = StyleSheet.create({
   },
   todoListSectionGap: {
     height: TODO_SECTION_GAP,
-  },
-  todoListSectionGapPressed: {
-    backgroundColor: 'rgba(209, 74, 66, 0.08)',
-    borderRadius: 4,
   },
   emptyListContent: {
     flexGrow: 1,

@@ -751,6 +751,10 @@ function TodoRowComponent({
       return;
     }
 
+    if (swipeDisabled) {
+      return;
+    }
+
     if (isSwipeOpen) {
       closeSwipeable();
       return;
@@ -769,6 +773,7 @@ function TodoRowComponent({
     item.id,
     onOpenDetail,
     selectMode,
+    swipeDisabled,
     toggleSelection,
   ]);
 
@@ -1121,7 +1126,7 @@ function TodoRowComponent({
 
   const rowContent = (
     <LongPressGestureHandler
-      enabled={!isPendingDelete}
+      enabled={!isPendingDelete && !swipeDisabled}
       minDurationMs={280}
       onHandlerStateChange={handleRowLongPressStateChange}
     >
@@ -1135,12 +1140,14 @@ function TodoRowComponent({
           accessibilityLabel={
             isPendingDelete
               ? `Deleting todo: ${item.text}`
+              : swipeDisabled
+                ? `Preset swipe mode: ${item.text}`
               : selectMode
                 ? (isSelected ? `Deselect todo: ${item.text}` : `Select todo: ${item.text}`)
                 : `Open todo details: ${item.text}`
           }
           activeOpacity={1}
-          disabled={isPendingDelete}
+          disabled={isPendingDelete || swipeDisabled}
           onPress={handleTodoPress}
           style={[
             styles.row,

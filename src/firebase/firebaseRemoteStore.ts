@@ -18,6 +18,12 @@ import {
   type Todo,
 } from '../todos';
 import {
+  cleanDevTestListMenuTree,
+  countDevTestListMenuNodes,
+  isDevTestMenuPreset,
+  isDevTestTodo,
+} from '../dev/seedTestTodos';
+import {
   normalizeAppSettings,
   type AppSettings,
 } from '../storage/appSettingsStore';
@@ -125,6 +131,32 @@ const runFirebaseWriteUntilSynced = async (write: () => Promise<void>) => {
 
 const toFirestoreJson = <T,>(value: T): T => (
   JSON.parse(JSON.stringify(value)) as T
+);
+
+const firebaseHistoryEntryHasDevTestData = (entry: AppSettings['history']['undo'][number]) => (
+  entry.snapshot.todos.some(isDevTestTodo) ||
+  entry.snapshot.deletedTodos.some(isDevTestTodo) ||
+  entry.snapshot.menuPresets.some(isDevTestMenuPreset) ||
+  countDevTestListMenuNodes(entry.snapshot.listMenuTree) > 0
+);
+
+const sanitizeFirebaseSettings = (settings: AppSettings) => {
+  const normalized = normalizeAppSettings(settings);
+
+  return {
+    ...normalized,
+    deletedTodos: normalized.deletedTodos.filter((todo) => !isDevTestTodo(todo)),
+    history: {
+      redo: normalized.history.redo.filter((entry) => !firebaseHistoryEntryHasDevTestData(entry)),
+      undo: normalized.history.undo.filter((entry) => !firebaseHistoryEntryHasDevTestData(entry)),
+    },
+    listMenuTree: cleanDevTestListMenuTree(normalized.listMenuTree),
+    menuPresets: normalized.menuPresets.filter((preset) => !isDevTestMenuPreset(preset)),
+  };
+};
+
+const sanitizeFirebaseTodos = (todos: Todo[]) => (
+  todos.filter((todo) => !isDevTestTodo(todo))
 );
 
 const todoDocumentId = (id: string) => encodeURIComponent(id);
@@ -258,12 +290,12 @@ const writeFirebaseAppDataSnapshotForUser = async (
   localChangeSyncedAt = 0,
 ) => {
   const database = getLocalTodoFirestore();
-  const normalizedSettings = normalizeAppSettings({
+  const normalizedSettings = sanitizeFirebaseSettings({
     ...snapshot.settings,
     deletedTodos: cloneDeletedTodos(snapshot.settings.deletedTodos),
   });
 
-  await writeTodosSnapshotForUser(database, userId, snapshot.todos);
+  await writeTodosSnapshotForUser(database, userId, sanitizeFirebaseTodos(snapshot.todos));
   await Promise.all([
     setDoc(
       settingsDocRef(database, userId),
@@ -327,6 +359,7 @@ const loadFirebaseAppDataForUser = async (
   const todos = todosSnapshot.docs
     .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
     .filter((todo): todo is Todo => Boolean(todo))
+    .filter((todo) => !isDevTestTodo(todo))
     .sort((first, second) =>
       Number(second.pinned) - Number(first.pinned) || second.createdAt - first.createdAt
     );
@@ -336,7 +369,7 @@ const loadFirebaseAppDataForUser = async (
     meta: normalizeRemoteMeta(syncMetaSnapshot.data()),
     snapshot: {
       notificationLogEntries: normalizeNotificationLogEntries(notificationLogData?.entries),
-      settings: normalizeAppSettings(settingsSnapshot.data()),
+      settings: sanitizeFirebaseSettings(normalizeAppSettings(settingsSnapshot.data())),
       todos,
     },
   };
@@ -358,7 +391,8 @@ const loadFirebaseTodosForUser = async (
   ]);
   const todos = todosSnapshot.docs
     .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
-    .filter((todo): todo is Todo => Boolean(todo));
+    .filter((todo): todo is Todo => Boolean(todo))
+    .filter((todo) => !isDevTestTodo(todo));
 
   return {
     meta: normalizeRemoteMeta(syncMetaSnapshot.data()),
@@ -430,8 +464,12 @@ const mergeAppDataSnapshots = (
   };
 };
 
-export const queueFirebaseTodoUpsert = (todo: Todo) => (
-  enqueueFirebaseWrite(async (localChangeAt) => {
+export const queueFirebaseTodoUpsert = (todo: Todo) => {
+  if (isDevTestTodo(todo)) {
+    return Promise.resolve();
+  }
+
+  return enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -444,8 +482,8 @@ export const queueFirebaseTodoUpsert = (todo: Todo) => (
       { merge: false },
     );
     await touchRemoteMeta(database, userId, 'todo-upsert', localChangeAt);
-  })
-);
+  });
+};
 
 export const queueFirebaseTodoDelete = (id: string) => (
   enqueueFirebaseWrite(async (localChangeAt) => {
@@ -457,8 +495,12 @@ export const queueFirebaseTodoDelete = (id: string) => (
   })
 );
 
-export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => (
-  enqueueFirebaseWrite(async (localChangeAt) => {
+export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => {
+  if (id.startsWith('dev-test-')) {
+    return Promise.resolve();
+  }
+
+  return enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -468,11 +510,15 @@ export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => (
       { merge: true },
     );
     await touchRemoteMeta(database, userId, 'todo-done', localChangeAt);
-  })
-);
+  });
+};
 
-export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filters']) => (
-  enqueueFirebaseWrite(async (localChangeAt) => {
+export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filters']) => {
+  if (id.startsWith('dev-test-')) {
+    return Promise.resolve();
+  }
+
+  return enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
@@ -485,14 +531,17 @@ export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filter
       { merge: true },
     );
     await touchRemoteMeta(database, userId, 'todo-filters', localChangeAt);
-  })
-);
+  });
+};
 
-export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => (
-  enqueueFirebaseWrite(async (localChangeAt) => {
-    if (todos.length === 0) {
-      return;
-    }
+export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => {
+  const sanitizedTodos = sanitizeFirebaseTodos(todos);
+
+  if (sanitizedTodos.length === 0) {
+    return Promise.resolve();
+  }
+
+  return enqueueFirebaseWrite(async (localChangeAt) => {
 
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
@@ -501,7 +550,7 @@ export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => (
       count: 0,
     };
 
-    for (const todo of todos.map(cloneTodo)) {
+    for (const todo of sanitizedTodos.map(cloneTodo)) {
       await commitBatchIfNeeded(batchState, database);
       batchState.batch.set(
         todoDocRef(database, userId, todo.id),
@@ -516,15 +565,15 @@ export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => (
 
     await commitBatch(batchState);
     await touchRemoteMeta(database, userId, 'todos-upsert-many', localChangeAt);
-  })
-);
+  });
+};
 
 export const queueFirebaseTodosReplaceAll = (todos: Todo[]) => (
   enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
 
-    await writeTodosSnapshotForUser(database, userId, todos);
+    await writeTodosSnapshotForUser(database, userId, sanitizeFirebaseTodos(todos));
     await touchRemoteMeta(database, userId, 'todos-replace-all', localChangeAt);
   })
 );
@@ -537,7 +586,7 @@ export const queueFirebaseSettingsSave = (settings: AppSettings) => (
     await setDoc(
       settingsDocRef(database, userId),
       {
-        ...toFirestoreJson(normalizeAppSettings(settings)),
+        ...toFirestoreJson(sanitizeFirebaseSettings(settings)),
         schemaVersion: FIREBASE_SCHEMA_VERSION,
       },
       { merge: false },

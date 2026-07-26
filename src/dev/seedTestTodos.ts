@@ -9,6 +9,7 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import {
+  DEFAULT_LIST_MENU_TREE,
   type ListOrderMode,
   type StoredListMenuNode,
   type StoredMenuPreset,
@@ -229,6 +230,46 @@ export const removeDevTestListMenuNodes = (
       };
     })
 );
+
+export const cleanDevTestListMenuTree = (
+  nodes: StoredListMenuNode[],
+): StoredListMenuNode[] => {
+  let changed = false;
+  const nextNodes: StoredListMenuNode[] = [];
+
+  nodes.forEach((node) => {
+    if (isDevSeedListNode(node)) {
+      const overwrittenDefaultNode = DEFAULT_LIST_MENU_TREE.find(
+        (defaultNode) => getLabelKey(defaultNode.label) === getLabelKey(node.label),
+      );
+
+      changed = true;
+      if (overwrittenDefaultNode) {
+        nextNodes.push(cloneSeedListNode(overwrittenDefaultNode));
+      }
+      return;
+    }
+
+    if (!node.children) {
+      nextNodes.push(node);
+      return;
+    }
+
+    const children = cleanDevTestListMenuTree(node.children);
+    if (children === node.children) {
+      nextNodes.push(node);
+      return;
+    }
+
+    changed = true;
+    nextNodes.push({
+      ...node,
+      ...(children.length > 0 ? { children } : { children: undefined }),
+    });
+  });
+
+  return changed ? nextNodes : nodes;
+};
 
 export const isDevTestMenuPreset = (preset: StoredMenuPreset) =>
   preset.id.startsWith(DEV_TEST_MENU_PRESET_ID_PREFIX);

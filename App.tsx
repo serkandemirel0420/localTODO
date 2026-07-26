@@ -144,6 +144,7 @@ import {
 } from './src/firebase/firebaseRemoteStore';
 import { isDevAppVariant } from './src/appVariant';
 import {
+  cleanDevTestListMenuTree,
   countDevTestListMenuNodes,
   createDevTestTodos,
   DEV_TEST_MENU_PRESET_COUNT,
@@ -152,7 +153,6 @@ import {
   isDevTestTodo,
   mergeDevTestListMenuTree,
   mergeDevTestMenuPresets,
-  removeDevTestListMenuNodes,
 } from './src/dev/seedTestTodos';
 import {
   cloneFilterColors,
@@ -242,6 +242,7 @@ import {
   getDatePickerMenuDisplayLabel,
   getRepeatPresetForMenuLabel,
   formatHabitMenuLabel,
+  HABIT_INTERVAL_OPTIONS,
   HABIT_ITEMS_FILTER_LABEL,
   HABIT_ITEMS_FILTER_VALUE,
   HABIT_PICKER_LABEL,
@@ -258,6 +259,7 @@ import {
   REPEATING_ITEMS_FILTER_VALUE,
   removeRepeatStatusFilters,
   REPEAT_PICKER_LABEL,
+  REPEAT_PRESETS,
   toggleHabitItemsFilterValue,
   toggleRepeatingItemsFilterValue,
   type HabitIntervalHours,
@@ -302,6 +304,24 @@ type SearchKeywordEditTarget =
 
 type UndoSnapshot = AppHistorySnapshot;
 type UndoHistoryEntry = AppHistoryEntry;
+
+const historyEntryHasDevTestData = (entry: UndoHistoryEntry) => (
+  entry.snapshot.todos.some(isDevTestTodo) ||
+  entry.snapshot.deletedTodos.some(isDevTestTodo) ||
+  entry.snapshot.menuPresets.some(isDevTestMenuPreset) ||
+  countDevTestListMenuNodes(entry.snapshot.listMenuTree) > 0
+);
+
+const removeDevTestDataFromSettings = (settings: AppSettings): AppSettings => ({
+  ...settings,
+  deletedTodos: settings.deletedTodos.filter((todo) => !isDevTestTodo(todo)),
+  history: {
+    redo: settings.history.redo.filter((entry) => !historyEntryHasDevTestData(entry)),
+    undo: settings.history.undo.filter((entry) => !historyEntryHasDevTestData(entry)),
+  },
+  listMenuTree: cleanDevTestListMenuTree(settings.listMenuTree),
+  menuPresets: settings.menuPresets.filter((preset) => !isDevTestMenuPreset(preset)),
+});
 
 type HistoryTodoRecord = {
   status: 'active';
@@ -1493,7 +1513,7 @@ const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
 const QUICK_PRESET_HEADER_SWIPE_DISTANCE = 34;
 const QUICK_PRESET_HEADER_SWIPE_VELOCITY = 420;
 const QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-12, 12];
-const QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y: [number, number] = [-22, 22];
+const QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y: [number, number] = [-8, 8];
 const MENU_DISMISS_RELEASE = 52;
 const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 116;
 
@@ -2021,6 +2041,188 @@ const buildActiveFilterItems = (
 type NavTab = 'calendar' | 'menu' | 'notifications' | 'search' | 'settings';
 
 type CreateDrawerPicker = 'date' | 'list' | 'priority' | 'tags';
+type CreateCommandGroup =
+  | 'Date'
+  | 'Reminder'
+  | 'Priority'
+  | 'Tags'
+  | 'Lists'
+  | 'Schedule'
+  | 'Task';
+type CreateCommandAction =
+  | { kind: 'clearDate' }
+  | { kind: 'date'; value: string }
+  | { kind: 'habit'; value: HabitIntervalHours | null }
+  | { kind: 'list'; value: string | null }
+  | { kind: 'pin' }
+  | { kind: 'priority'; value: string }
+  | { kind: 'reminder' }
+  | { kind: 'repeat'; value: RepeatPreset }
+  | { kind: 'tag'; value: string };
+type CreateCommandItem = {
+  action: CreateCommandAction;
+  group: CreateCommandGroup;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  id: string;
+  label: string;
+  searchText: string;
+};
+
+const CREATE_COMMAND_GROUP_ORDER: Record<CreateCommandGroup, number> = {
+  Date: 0,
+  Reminder: 1,
+  Priority: 2,
+  Tags: 3,
+  Lists: 4,
+  Schedule: 5,
+  Task: 6,
+};
+
+const CREATE_COMMAND_SHORTCUTS = [
+  { group: 'Date', label: 'Date', shortcut: 'd' },
+  { group: 'Reminder', label: 'Reminder', shortcut: 'r' },
+  { group: 'Tags', label: 'Tags', shortcut: 't' },
+  { group: 'Lists', label: 'Lists', shortcut: 'l' },
+  { group: 'Priority', label: 'Priority', shortcut: 'p' },
+  { group: 'Schedule', label: 'Schedule', shortcut: 's' },
+] as const satisfies ReadonlyArray<{
+  group: CreateCommandGroup;
+  label: string;
+  shortcut: string;
+}>;
+
+const CREATE_COMMAND_GROUP_SHORTCUTS = Object.fromEntries(
+  CREATE_COMMAND_SHORTCUTS.map((item) => [item.shortcut, item.group]),
+) as Partial<Record<string, CreateCommandGroup>>;
+
+const CREATE_COMMAND_PALETTE_ROW_HEIGHT = 50;
+
+const normalizeCreateCommandSearchText = (value: string) => (
+  normalizeTodoText(value)
+    .replace(/#/g, '')
+    .replace(/\s+/g, ' ')
+);
+
+const getCreateCommandSubsequenceScore = (needle: string, haystack: string) => {
+  if (!needle || !haystack) {
+    return -1;
+  }
+
+  let needleIndex = 0;
+  let firstMatchIndex = -1;
+  let previousMatchIndex = -1;
+  let gapCount = 0;
+
+  for (let haystackIndex = 0; haystackIndex < haystack.length; haystackIndex += 1) {
+    if (haystack[haystackIndex] !== needle[needleIndex]) {
+      continue;
+    }
+
+    if (firstMatchIndex < 0) {
+      firstMatchIndex = haystackIndex;
+    }
+    if (previousMatchIndex >= 0) {
+      gapCount += Math.max(0, haystackIndex - previousMatchIndex - 1);
+    }
+
+    previousMatchIndex = haystackIndex;
+    needleIndex += 1;
+    if (needleIndex === needle.length) {
+      return Math.max(1, 520 - firstMatchIndex * 4 - gapCount * 3);
+    }
+  }
+
+  return -1;
+};
+
+const getCreateCommandTextScore = (
+  query: string,
+  candidate: string,
+  allowSubsequence = true,
+) => {
+  const normalizedQuery = normalizeCreateCommandSearchText(query);
+  const normalizedCandidate = normalizeCreateCommandSearchText(candidate);
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  if (normalizedCandidate === normalizedQuery) {
+    return 1000;
+  }
+
+  if (normalizedCandidate.startsWith(normalizedQuery)) {
+    return 900 - Math.max(0, normalizedCandidate.length - normalizedQuery.length);
+  }
+
+  const substringIndex = normalizedCandidate.indexOf(normalizedQuery);
+  if (substringIndex >= 0) {
+    return 800 - substringIndex * 4;
+  }
+
+  if (!allowSubsequence) {
+    return -1;
+  }
+
+  const compactQuery = normalizedQuery.replace(/\s+/g, '');
+  const compactCandidate = normalizedCandidate.replace(/\s+/g, '');
+  return getCreateCommandSubsequenceScore(compactQuery, compactCandidate);
+};
+
+const filterCreateCommandItems = (
+  commands: CreateCommandItem[],
+  query: string,
+  group: CreateCommandGroup | null = null,
+): CreateCommandItem[] => {
+  const normalizedQuery = normalizeCreateCommandSearchText(query);
+  const scopedCommands = group
+    ? commands.filter((command) => command.group === group)
+    : commands;
+
+  if (!normalizedQuery) {
+    return scopedCommands;
+  }
+
+  return scopedCommands
+    .map((command, index) => {
+      const labelScore = getCreateCommandTextScore(normalizedQuery, command.label);
+      const fullTextScore = getCreateCommandTextScore(
+        normalizedQuery,
+        command.searchText,
+        false,
+      );
+      const score = Math.max(
+        labelScore >= 0 ? labelScore + 160 : -1,
+        fullTextScore,
+      );
+
+      return { command, index, score };
+    })
+    .filter((result) => result.score >= 0)
+    .sort((first, second) => (
+      second.score - first.score || first.index - second.index
+    ))
+    .map((result) => result.command);
+};
+
+const getInsertedSpaceIndex = (previousText: string, nextText: string): number | null => {
+  if (nextText.length !== previousText.length + 1) {
+    return null;
+  }
+
+  let insertedSpaceIndex: number | null = null;
+  for (let index = 0; index < nextText.length; index += 1) {
+    if (
+      nextText[index] === ' '
+      && nextText.slice(0, index) === previousText.slice(0, index)
+      && nextText.slice(index + 1) === previousText.slice(index)
+    ) {
+      insertedSpaceIndex = index;
+    }
+  }
+
+  return insertedSpaceIndex;
+};
+
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
 const CREATE_DRAWER_DATE_PICKER_MENU_ITEMS = DATE_PICKER_MENU_ITEMS.filter(
@@ -2318,7 +2520,7 @@ const isInitialSeedTodo = (todo: Todo) => {
 };
 
 const removeInitialSeedTodos = (todos: Todo[]) =>
-  todos.filter((todo) => !isInitialSeedTodo(todo));
+  todos.filter((todo) => !isInitialSeedTodo(todo) && !isDevTestTodo(todo));
 
 const getGoogleClientIdForPlatform = () => {
   if (Platform.OS === 'ios') {
@@ -4287,6 +4489,291 @@ function SettingsColorRow({
 
 const MemoizedSettingsColorRow = React.memo(SettingsColorRow);
 
+type CreateCommandPaletteProps = {
+  commands: CreateCommandItem[];
+  inputRef: React.RefObject<TextInput | null>;
+  onClose: () => void;
+  onQueryChange: (value: string) => void;
+  onSelect: (command: CreateCommandItem) => void;
+  query: string;
+};
+
+function CreateCommandPalette({
+  commands: allCommands,
+  inputRef,
+  onClose,
+  onQueryChange,
+  onSelect,
+  query,
+}: CreateCommandPaletteProps) {
+  const resultsScrollRef = useRef<ScrollView>(null);
+  const ignoreNextShortcutSpaceChangeRef = useRef(false);
+  const focusFirstAfterShortcutRef = useRef(false);
+  const [activeShortcut, setActiveShortcut] = useState<string | null>(null);
+  const [focusedCommandIndex, setFocusedCommandIndex] = useState(-1);
+  const [, setSpaceCycleRevision] = useState(0);
+  const activeGroup = activeShortcut
+    ? CREATE_COMMAND_GROUP_SHORTCUTS[activeShortcut] ?? null
+    : null;
+  const commands = useMemo(
+    () => filterCreateCommandItems(allCommands, query, activeGroup),
+    [activeGroup, allCommands, query],
+  );
+  const firstCommand = commands[0];
+  const focusedCommand = commands[focusedCommandIndex] ?? firstCommand;
+  const normalizedQuery = normalizeCreateCommandSearchText(query);
+  const typedShortcut = normalizedQuery.length === 1
+    && CREATE_COMMAND_GROUP_SHORTCUTS[normalizedQuery]
+    ? normalizedQuery
+    : null;
+
+  const confirmShortcut = (shortcut: string) => {
+    focusFirstAfterShortcutRef.current = true;
+    setActiveShortcut(shortcut);
+    onQueryChange('');
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const handleShortcutPress = (shortcut: string) => {
+    const nextShortcut = activeShortcut === shortcut ? null : shortcut;
+    focusFirstAfterShortcutRef.current = nextShortcut !== null;
+    setActiveShortcut(nextShortcut);
+    onQueryChange('');
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const focusNextCommand = () => {
+    setSpaceCycleRevision((current) => current + 1);
+    if (commands.length === 0) {
+      return;
+    }
+
+    setFocusedCommandIndex((current) => {
+      const next = (current + 1) % commands.length;
+      requestAnimationFrame(() => {
+        resultsScrollRef.current?.scrollTo({
+          animated: next !== 0,
+          y: next * CREATE_COMMAND_PALETTE_ROW_HEIGHT,
+        });
+      });
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const shouldFocusFirst = focusFirstAfterShortcutRef.current && commands.length > 0;
+    focusFirstAfterShortcutRef.current = false;
+    setFocusedCommandIndex(shouldFocusFirst ? 0 : -1);
+    resultsScrollRef.current?.scrollTo({ animated: false, y: 0 });
+  }, [activeShortcut, commands, query]);
+
+  return (
+    <View
+      accessibilityLabel="Quick details menu"
+      style={styles.createCommandPalette}
+    >
+      <View style={styles.createCommandPaletteSearchRow}>
+        <Ionicons color="#8B9098" name="search" size={18} />
+        <TextInput
+          ref={inputRef}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoFocus
+          maxLength={80}
+          onChangeText={(value) => {
+            const containsSpace = /\s/.test(value);
+            const compactValue = value.replace(/\s+/g, '');
+            const normalizedValue = normalizeCreateCommandSearchText(compactValue);
+            const shortcut = normalizedValue.length === 1
+              && CREATE_COMMAND_GROUP_SHORTCUTS[normalizedValue]
+              ? normalizedValue
+              : null;
+
+            if (ignoreNextShortcutSpaceChangeRef.current && containsSpace) {
+              ignoreNextShortcutSpaceChangeRef.current = false;
+              return;
+            }
+            ignoreNextShortcutSpaceChangeRef.current = false;
+
+            if (containsSpace && shortcut) {
+              confirmShortcut(shortcut);
+              return;
+            }
+
+            onQueryChange(compactValue);
+          }}
+          onKeyPress={(event) => {
+            if (event.nativeEvent.key === 'Escape') {
+              onClose();
+              return;
+            }
+
+            if (
+              event.nativeEvent.key === 'Backspace'
+              && !normalizedQuery
+              && activeShortcut
+            ) {
+              focusFirstAfterShortcutRef.current = false;
+              setActiveShortcut(null);
+              setFocusedCommandIndex(-1);
+              resultsScrollRef.current?.scrollTo({ animated: false, y: 0 });
+              return;
+            }
+
+            if (event.nativeEvent.key === ' ') {
+              if (typedShortcut) {
+                ignoreNextShortcutSpaceChangeRef.current = true;
+                confirmShortcut(typedShortcut);
+                return;
+              }
+
+              focusNextCommand();
+            }
+          }}
+          onSubmitEditing={() => {
+            if (focusedCommand) {
+              onSelect(focusedCommand);
+            }
+          }}
+          placeholder="Search details…"
+          placeholderTextColor="#A4A8AF"
+          returnKeyType="done"
+          selectionColor={THEME_ACCENT}
+          style={styles.createCommandPaletteSearchInput}
+          value={query}
+        />
+        <View style={styles.createCommandPaletteSpaceKey}>
+          <Text style={styles.createCommandPaletteSpaceKeyText}>SPACE ↓</Text>
+        </View>
+      </View>
+      <ScrollView
+        alwaysBounceHorizontal={false}
+        bounces={false}
+        contentContainerStyle={styles.createCommandPaletteShortcutItems}
+        horizontal
+        keyboardShouldPersistTaps="always"
+        showsHorizontalScrollIndicator={false}
+        style={styles.createCommandPaletteShortcutScroll}
+      >
+        {CREATE_COMMAND_SHORTCUTS.map((item) => {
+          const selected = activeShortcut === item.shortcut;
+
+          return (
+            <Pressable
+              accessibilityLabel={`Filter ${item.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              key={item.shortcut}
+              onPress={() => handleShortcutPress(item.shortcut)}
+              style={({ pressed }) => [
+                styles.createCommandPaletteShortcut,
+                selected && styles.createCommandPaletteShortcutSelected,
+                pressed && styles.createCommandPaletteRowPressed,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.createCommandPaletteShortcutKey,
+                  selected && styles.createCommandPaletteShortcutKeySelected,
+                ]}
+              >
+                {item.shortcut.toUpperCase()}
+              </Text>
+              <Text
+                style={[
+                  styles.createCommandPaletteShortcutLabel,
+                  selected && styles.createCommandPaletteShortcutLabelSelected,
+                ]}
+              >
+                {item.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      <ScrollView
+        contentContainerStyle={styles.createCommandPaletteResults}
+        keyboardShouldPersistTaps="always"
+        ref={resultsScrollRef}
+        showsVerticalScrollIndicator={false}
+        style={styles.createCommandPaletteResultsScroll}
+      >
+        {commands.length === 0 ? (
+          <View style={styles.createCommandPaletteEmpty}>
+            <Ionicons color="#A4A8AF" name="search-outline" size={24} />
+            <Text style={styles.createCommandPaletteEmptyTitle}>No match yet</Text>
+            <Text style={styles.createCommandPaletteEmptyText}>
+              Try any part of a date, priority, tag, or list name.
+            </Text>
+          </View>
+        ) : commands.map((command, index) => {
+          const focused = index === focusedCommandIndex;
+
+          return (
+            <Pressable
+              accessibilityHint={focused ? 'Press Done to choose this result.' : undefined}
+              accessibilityLabel={`${command.group}: ${command.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: focused }}
+              key={command.id}
+              onPress={() => onSelect(command)}
+              style={({ pressed }) => [
+                styles.createCommandPaletteRow,
+                focused && styles.createCommandPaletteRowFocused,
+                pressed && styles.createCommandPaletteRowPressed,
+              ]}
+            >
+              <View
+                style={[
+                  styles.createCommandPaletteRowIcon,
+                  focused && styles.createCommandPaletteRowIconFocused,
+                ]}
+              >
+                <Ionicons
+                  color={focused ? THEME_ACCENT : '#737982'}
+                  name={command.icon}
+                  size={18}
+                />
+              </View>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.createCommandPaletteRowLabel,
+                  focused && styles.createCommandPaletteRowLabelFocused,
+                ]}
+              >
+                {command.label}
+              </Text>
+              <Text
+                style={[
+                  styles.createCommandPaletteRowGroup,
+                  focused && styles.createCommandPaletteRowGroupFocused,
+                ]}
+              >
+                {command.group}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      <View style={styles.createCommandPaletteFooter}>
+        <Pressable
+          accessibilityLabel="Close quick details without selecting"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={onClose}
+          style={({ pressed }) => [
+            styles.createCommandPaletteClose,
+            pressed && styles.createCommandPaletteRowPressed,
+          ]}
+        >
+          <Ionicons color="#747982" name="close" size={20} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 export default function App() {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const todoTextMaxLength = useMemo(
@@ -4348,6 +4835,8 @@ export default function App() {
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
   const [createDraftTags, setCreateDraftTags] = useState<string[]>([]);
   const createDraftCopiesTodoSettingsRef = useRef(false);
+  const [createCommandPaletteVisible, setCreateCommandPaletteVisible] = useState(false);
+  const [createCommandQuery, setCreateCommandQuery] = useState('');
   const [createFromSettingsCueVisible, setCreateFromSettingsCueVisible] = useState(false);
   const [createDraftFilters, setCreateDraftFilters] = useState<SelectedFilters>(
     () => getDefaultCreateDraftFilters(DEFAULT_LIST_MENU_TREE),
@@ -4554,8 +5043,14 @@ export default function App() {
   const searchInputRef = useRef<TextInput>(null);
   const suppressHeaderSearchFocusRef = useRef(false);
   const suppressHeaderSearchFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const createCommandInputRef = useRef<TextInput>(null);
+  const createCommandReturnSelectionRef = useRef({ end: 0, start: 0 });
+  const createCommandRestoreAfterPickerRef = useRef(false);
   const createContentInputRef = useRef<TextInput>(null);
   const createInputRef = useRef<TextInput>(null);
+  const createDraftSelectionRef = useRef({ end: 0, start: 0 });
+  const createDraftTextValueRef = useRef(createDraftText);
+  const createInputFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
   const presetSearchKeywordInputRef = useRef<TextInput>(null);
   const listSearchKeywordTitleInputRef = useRef<TextInput>(null);
@@ -4633,7 +5128,6 @@ export default function App() {
   const menuDismissHapticRef = useRef(0);
   const didApplyTodoListInitialOffsetRef = useRef(false);
   const hadTodoListRowsRef = useRef(false);
-  const devTestTodosSeededRef = useRef(false);
   const listTouchStartRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const todoSectionGapTouchRef = useRef(false);
   const todoListContentTouchStartRef = useRef(0);
@@ -4886,30 +5380,31 @@ export default function App() {
     settings: AppSettings,
     options: { preserveVisibleView?: boolean } = {},
   ) => {
+    const cleanSettings = removeDevTestDataFromSettings(settings);
     const preserveVisibleView = options.preserveVisibleView === true;
     const appliedSelectedFilters = preserveVisibleView
       ? cloneTodoFilters(selectedFiltersRef.current)
-      : cloneTodoFilters(settings.selectedFilters);
+      : cloneTodoFilters(cleanSettings.selectedFilters);
     const appliedRequiredFilters = pruneTodoFilters(
       preserveVisibleView
         ? cloneTodoFilters(requiredFiltersRef.current)
-        : cloneTodoFilters(settings.requiredFilters),
+        : cloneTodoFilters(cleanSettings.requiredFilters),
       appliedSelectedFilters,
     );
     const appliedSettings: AppSettings = {
-      ...settings,
+      ...cleanSettings,
       avoidedFilters: preserveVisibleView
         ? cloneTodoFilters(avoidedFiltersRef.current)
-        : cloneTodoFilters(settings.avoidedFilters),
-      hideDoneTodos: preserveVisibleView ? hideDoneTodosRef.current : settings.hideDoneTodos,
-      listOrderMode: preserveVisibleView ? listOrderModeRef.current : settings.listOrderMode,
+        : cloneTodoFilters(cleanSettings.avoidedFilters),
+      hideDoneTodos: preserveVisibleView ? hideDoneTodosRef.current : cleanSettings.hideDoneTodos,
+      listOrderMode: preserveVisibleView ? listOrderModeRef.current : cleanSettings.listOrderMode,
       metaTagVisibility: preserveVisibleView
         ? cloneMetaTagVisibility(metaTagVisibilityRef.current)
-        : cloneMetaTagVisibility(settings.metaTagVisibility),
+        : cloneMetaTagVisibility(cleanSettings.metaTagVisibility),
       requiredFilters: appliedRequiredFilters,
       selectedFilters: appliedSelectedFilters,
-      todoGroupMode: preserveVisibleView ? todoGroupModeRef.current : settings.todoGroupMode,
-      todoSortMode: preserveVisibleView ? todoSortModeRef.current : settings.todoSortMode,
+      todoGroupMode: preserveVisibleView ? todoGroupModeRef.current : cleanSettings.todoGroupMode,
+      todoSortMode: preserveVisibleView ? todoSortModeRef.current : cleanSettings.todoSortMode,
     };
     const nextLastCreateTodoFilters = getRememberedCreateDraftFilters(
       appliedSettings.listMenuTree,
@@ -5327,8 +5822,8 @@ export default function App() {
   ]);
 
   const devTestTodoCount = useMemo(
-    () => todos.filter(isDevTestTodo).length,
-    [todos],
+    () => todos.filter(isDevTestTodo).length + deletedTodos.filter(isDevTestTodo).length,
+    [deletedTodos, todos],
   );
   const devTestMenuPresetCount = useMemo(
     () => menuPresets.filter(isDevTestMenuPreset).length,
@@ -5337,6 +5832,13 @@ export default function App() {
   const devTestListMenuNodeCount = useMemo(
     () => countDevTestListMenuNodes(listMenuTree),
     [listMenuTree],
+  );
+  const devTestHistoryEntryCount = useMemo(
+    () => (
+      undoHistory.filter(historyEntryHasDevTestData).length +
+      redoHistory.filter(historyEntryHasDevTestData).length
+    ),
+    [redoHistory, undoHistory],
   );
 
   const seedDevTestSettings = useCallback(() => {
@@ -5362,29 +5864,6 @@ export default function App() {
 
     return seededListLabels;
   }, [addCustomTagsForMenuPresets, persistAppSettings]);
-
-  useEffect(() => {
-    if (!isDevAppVariant || !loaded || !settingsLoaded || devTestTodosSeededRef.current) {
-      return;
-    }
-
-    devTestTodosSeededRef.current = true;
-
-    if (todosRef.current.length > 0 || todosRef.current.some(isDevTestTodo)) {
-      return;
-    }
-
-    const testTodos = createDevTestTodos(seedDevTestSettings());
-    setTodos((current) => {
-      if (current.length > 0 || current.some(isDevTestTodo)) {
-        return current;
-      }
-
-      localTodoStore.upsertMany(testTodos).catch(() => undefined);
-      reconcileTodoAlarms(testTodos).catch(() => undefined);
-      return testTodos;
-    });
-  }, [loaded, seedDevTestSettings, settingsLoaded]);
 
   const clearTodoMenuHighlightRequest = useCallback(() => {
     if (todoMenuHighlightTimerRef.current) {
@@ -6752,6 +7231,23 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
+  const scheduleCreateDrawerInputFocus = useCallback(() => {
+    if (createInputFocusTimerRef.current) {
+      clearTimeout(createInputFocusTimerRef.current);
+    }
+
+    createInputFocusTimerRef.current = setTimeout(() => {
+      createInputFocusTimerRef.current = null;
+      createInputRef.current?.focus();
+    }, Platform.OS === 'android' ? 180 : 0);
+  }, []);
+
+  useEffect(() => () => {
+    if (createInputFocusTimerRef.current) {
+      clearTimeout(createInputFocusTimerRef.current);
+    }
+  }, []);
+
   const backToCreateDrawerInput = useCallback(() => {
     Keyboard.dismiss();
     setDatePickerVisible(false);
@@ -6759,12 +7255,22 @@ export default function App() {
     setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
     setCreateDrawerPicker(null);
-  }, []);
+    scheduleCreateDrawerInputFocus();
+  }, [scheduleCreateDrawerInputFocus]);
 
   const resetCreateDrawerState = useCallback((filters = lastCreateTodoFilters) => {
+    if (createInputFocusTimerRef.current) {
+      clearTimeout(createInputFocusTimerRef.current);
+      createInputFocusTimerRef.current = null;
+    }
     createDraftCopiesTodoSettingsRef.current = false;
+    createCommandRestoreAfterPickerRef.current = false;
+    createCommandReturnSelectionRef.current = { end: 0, start: 0 };
+    createDraftSelectionRef.current = { end: 0, start: 0 };
     const nextFilters = getRememberedCreateDraftFilters(listMenuTree, filters);
     const nextTags = normalizeTodoFilters(filters).tag;
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
     setCreateDraftText('');
@@ -6778,6 +7284,59 @@ export default function App() {
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
+
+  const focusCreateTitleAtCommandCursor = useCallback(() => {
+    const selection = createCommandReturnSelectionRef.current;
+    if (createInputFocusTimerRef.current) {
+      clearTimeout(createInputFocusTimerRef.current);
+    }
+
+    createInputFocusTimerRef.current = setTimeout(() => {
+      createInputFocusTimerRef.current = null;
+      const input = createInputRef.current;
+      input?.focus();
+      requestAnimationFrame(() => {
+        const nativeInput = input as (TextInput & {
+          setNativeProps?: (props: { selection: { end: number; start: number } }) => void;
+          setSelectionRange?: (start: number, end: number) => void;
+        }) | null;
+        if (typeof nativeInput?.setNativeProps === 'function') {
+          nativeInput.setNativeProps({ selection });
+        } else if (typeof nativeInput?.setSelectionRange === 'function') {
+          nativeInput.setSelectionRange(selection.start, selection.end);
+        }
+        createDraftSelectionRef.current = selection;
+      });
+    }, Platform.OS === 'android' ? 180 : 0);
+  }, []);
+
+  const restoreCreateCommandFocusAfterPicker = useCallback(() => {
+    if (!createCommandRestoreAfterPickerRef.current) {
+      return;
+    }
+
+    createCommandRestoreAfterPickerRef.current = false;
+    focusCreateTitleAtCommandCursor();
+  }, [focusCreateTitleAtCommandCursor]);
+
+  const closeCreateCommandPalette = useCallback((restoreFocus = true) => {
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
+    if (restoreFocus) {
+      focusCreateTitleAtCommandCursor();
+    }
+  }, [focusCreateTitleAtCommandCursor]);
+
+  const openCreateCommandPalette = useCallback((cursorPosition: number) => {
+    const selection = { end: cursorPosition, start: cursorPosition };
+    createCommandReturnSelectionRef.current = selection;
+    createDraftSelectionRef.current = selection;
+    setCreateDrawerPicker(null);
+    setCreateCommandQuery('');
+    setCreateCommandPaletteVisible(true);
+    requestAnimationFrame(() => createCommandInputRef.current?.focus());
+    triggerSubtleHaptic();
+  }, []);
 
   const openTodoAlarmDetail = useCallback((id: string) => {
     if (!loadedRef.current) {
@@ -6965,6 +7524,7 @@ export default function App() {
 
     if (datePickerVisible) {
       setDatePickerVisible(false);
+      restoreCreateCommandFocusAfterPicker();
       return true;
     }
 
@@ -6979,6 +7539,11 @@ export default function App() {
     }
 
     if (createDrawerVisible) {
+      if (createCommandPaletteVisible) {
+        closeCreateCommandPalette();
+        return true;
+      }
+
       if (createDrawerPicker) {
         backToCreateDrawerInput();
         return true;
@@ -7048,6 +7613,8 @@ export default function App() {
     closePresetSaveModal,
     closeSettingsModal,
     closeTodoDetailModal,
+    closeCreateCommandPalette,
+    createCommandPaletteVisible,
     createDrawerPicker,
     createDrawerVisible,
     datePickerVisible,
@@ -7061,6 +7628,7 @@ export default function App() {
     repeatReminderModalVisible,
     presetSaveModalVisible,
     resetCreateDrawerState,
+    restoreCreateCommandFocusAfterPicker,
     closeFilterConfigModal,
     filterConfigModalVisible,
     settingsModalVisible,
@@ -7223,7 +7791,6 @@ export default function App() {
         todoTextMaxLength,
       ),
     );
-    Keyboard.dismiss();
     setCreateDrawerVisible(true);
     triggerSubtleHaptic();
   }, [
@@ -7258,6 +7825,8 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
     setCreateDrawerPicker(null);
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
@@ -7276,7 +7845,6 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
-    Keyboard.dismiss();
     hideCreateFromSettingsCue();
     setCreateDrawerVisible(true);
     triggerSubtleHaptic();
@@ -7299,6 +7867,8 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
     setCreateDrawerPicker(null);
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
@@ -7312,7 +7882,6 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
-    Keyboard.dismiss();
     hideCreateFromSettingsCue();
     setCreateDrawerVisible(true);
     triggerSubtleHaptic();
@@ -7343,6 +7912,10 @@ export default function App() {
       setCreateDrawerExpanded(false);
     }
   }, [createDrawerVisible]);
+
+  useEffect(() => {
+    createDraftTextValueRef.current = createDraftText;
+  }, [createDraftText]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -7513,6 +8086,8 @@ export default function App() {
 
   const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
     Keyboard.dismiss();
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
     setHabitReminderModalVisible(false);
@@ -7577,6 +8152,7 @@ export default function App() {
     ? `List: ${createDrawerListLabel}`
     : 'List: No list';
   const createDrawerListPickerOpen = createDrawerPicker === 'list';
+  const createDrawerUsesFullScreen = createDrawerExpanded || createCommandPaletteVisible;
   const createDrawerListPickerHalfSheet =
     createDrawerListPickerOpen && !createDrawerExpanded && keyboardOverlayInset === 0;
   const createDrawerListPickerSheetHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
@@ -7707,24 +8283,46 @@ export default function App() {
   const clearDevTestTodos = useCallback(() => {
     const hasDevTestData =
       todosRef.current.some(isDevTestTodo) ||
+      deletedTodosRef.current.some(isDevTestTodo) ||
       menuPresetsRef.current.some(isDevTestMenuPreset) ||
-      countDevTestListMenuNodes(listMenuTreeRef.current) > 0;
+      countDevTestListMenuNodes(listMenuTreeRef.current) > 0 ||
+      undoHistory.some(historyEntryHasDevTestData) ||
+      redoHistory.some(historyEntryHasDevTestData);
 
     if (!hasDevTestData) {
       return;
     }
 
-    recordUndo('Clear test data');
-    const nextListMenuTree = removeDevTestListMenuNodes(listMenuTreeRef.current);
+    const nextListMenuTree = cleanDevTestListMenuTree(listMenuTreeRef.current);
     const nextMenuPresets = menuPresetsRef.current.filter(
       (preset) => !isDevTestMenuPreset(preset),
+    );
+    const nextDeletedTodos = deletedTodosRef.current.filter(
+      (todo) => !isDevTestTodo(todo),
+    );
+    const nextUndoHistory = undoHistory.filter(
+      (entry) => !historyEntryHasDevTestData(entry),
+    );
+    const nextRedoHistory = redoHistory.filter(
+      (entry) => !historyEntryHasDevTestData(entry),
     );
 
     listMenuTreeRef.current = nextListMenuTree;
     menuPresetsRef.current = nextMenuPresets;
+    deletedTodosRef.current = nextDeletedTodos;
     setListMenuTree(nextListMenuTree);
     setMenuPresets(nextMenuPresets);
+    setDeletedTodos(nextDeletedTodos);
+    setUndoHistory(nextUndoHistory);
+    setRedoHistory(nextRedoHistory);
+    clearHeaderUndoButton();
+    clearUndoToast();
     void persistAppSettings({
+      deletedTodos: nextDeletedTodos,
+      history: {
+        redo: nextRedoHistory,
+        undo: nextUndoHistory,
+      },
       listMenuTree: nextListMenuTree,
       menuPresets: nextMenuPresets,
     });
@@ -7747,7 +8345,7 @@ export default function App() {
       triggerSubtleHaptic();
       return next;
     });
-  }, [persistAppSettings, recordUndo]);
+  }, [clearHeaderUndoButton, clearUndoToast, persistAppSettings, redoHistory, undoHistory]);
 
   const deleteDeletedTodoPermanently = useCallback((id: string) => {
     const deletedTodo = deletedTodos.find((todo) => todo.id === id);
@@ -8054,7 +8652,8 @@ export default function App() {
   const closeDatePicker = useCallback(() => {
     datePickerRepeatRef.current = null;
     setDatePickerVisible(false);
-  }, []);
+    restoreCreateCommandFocusAfterPicker();
+  }, [restoreCreateCommandFocusAfterPicker]);
 
   const applyPickedDate = useCallback((date: Date) => {
     const isoDate = toISODateString(date);
@@ -8346,7 +8945,18 @@ export default function App() {
     }
 
     triggerSubtleHaptic();
-  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+    restoreCreateCommandFocusAfterPicker();
+  }, [
+    getCurrentTodoEditTargetIds,
+    restoreCreateCommandFocusAfterPicker,
+    updateTodoFiltersForIds,
+  ]);
+
+  const handleReminderTimeModalClose = useCallback((source: ReminderTimeModalSource) => {
+    if (source === 'create') {
+      restoreCreateCommandFocusAfterPicker();
+    }
+  }, [restoreCreateCommandFocusAfterPicker]);
 
   const openCreateHabitModal = useCallback(() => {
     const current = decodeTodoReminder(createDraftFilters.reminder);
@@ -8361,13 +8971,16 @@ export default function App() {
 
   const handleCreateDrawerHabitPress = useCallback(() => {
     Keyboard.dismiss();
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
     setCreateDrawerPicker(null);
     openCreateHabitModal();
   }, [openCreateHabitModal]);
 
   const closeCreateHabitModal = useCallback(() => {
     setHabitReminderModalVisible(false);
-  }, []);
+    restoreCreateCommandFocusAfterPicker();
+  }, [restoreCreateCommandFocusAfterPicker]);
 
   const confirmCreateHabit = useCallback((habitHours: HabitIntervalHours | null) => {
     if (habitReminderApplyRef.current === 'create') {
@@ -8409,7 +9022,12 @@ export default function App() {
     setHabitDraft(habitHours);
     setHabitReminderModalVisible(false);
     triggerSubtleHaptic();
-  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+    restoreCreateCommandFocusAfterPicker();
+  }, [
+    getCurrentTodoEditTargetIds,
+    restoreCreateCommandFocusAfterPicker,
+    updateTodoFiltersForIds,
+  ]);
 
   const openCreateRepeatModal = useCallback(() => {
     reminderTimeModalRef.current?.close();
@@ -8422,7 +9040,8 @@ export default function App() {
 
   const closeCreateRepeatModal = useCallback(() => {
     setRepeatReminderModalVisible(false);
-  }, []);
+    restoreCreateCommandFocusAfterPicker();
+  }, [restoreCreateCommandFocusAfterPicker]);
 
   const confirmCreateRepeat = useCallback((repeat: RepeatPreset) => {
     if (repeatReminderApplyRef.current === 'create') {
@@ -8451,7 +9070,12 @@ export default function App() {
 
     setRepeatReminderModalVisible(false);
     triggerSubtleHaptic();
-  }, [getCurrentTodoEditTargetIds, updateTodoFiltersForIds]);
+    restoreCreateCommandFocusAfterPicker();
+  }, [
+    getCurrentTodoEditTargetIds,
+    restoreCreateCommandFocusAfterPicker,
+    updateTodoFiltersForIds,
+  ]);
 
   const clearCreateReminderTime = useCallback(() => {
     setCreateDraftFilters((draft) => {
@@ -9684,6 +10308,8 @@ export default function App() {
       setQuickPresetScreenSwipeArmed(false);
     }
   }, [quickPresetHeaderSwipeEnabled, quickPresetScreenSwipeArmed]);
+  // Empty presets still need this offset: the header/footer spacers provide
+  // the blank canvas with enough vertical range to scroll while red mode is armed.
   const todoListOneHandedOffset = useMemo(() => {
     const viewportHeight = todoListFrameHeight || windowHeight;
     const calculatedOffset = Math.max(
@@ -10153,6 +10779,7 @@ export default function App() {
   }, [
     appTodoListData.length,
     openQuickPresetNavSlotNumber,
+    quickPresetScreenSwipeEnabled,
     todoListOneHandedOffset,
     todoListSearchOffset,
   ]);
@@ -10220,6 +10847,7 @@ export default function App() {
 
     if (options.ensureAfterDataUpdate) {
       pendingQuickPresetScrollTargetRef.current = target;
+      return;
     }
 
     scrollOffsetY.current = nextOffset;
@@ -11088,6 +11716,236 @@ export default function App() {
       getDateMenuItemDisplayLabel(menuLabel, dateLabels, dateLabelDisplayMode),
     [dateLabelDisplayMode],
   );
+
+  const createCommandItems = useMemo<CreateCommandItem[]>(() => {
+    const dateMenuItems = getDateMenuItemsForDateLabels(
+      CREATE_DRAWER_DATE_PICKER_MENU_ITEMS.filter((label) => (
+        label !== REMINDER_PICKER_LABEL && label !== REPEAT_PICKER_LABEL
+      )),
+      createDraftFilters.date,
+      new Date(),
+      { sortSelectedCustomDate: true },
+    );
+    const dateCommands: CreateCommandItem[] = [
+      {
+        action: { kind: 'clearDate' },
+        group: 'Date',
+        icon: 'calendar-clear-outline',
+        id: 'create-command-date-none',
+        label: 'No date',
+        searchText: 'no date clear date calendar due schedule',
+      },
+      ...dateMenuItems.map((label) => {
+        const displayLabel = getDatePickerMenuDisplayLabel(
+          label,
+          createDraftFilters.date,
+          createDraftFilters.reminder,
+          getDateMenuDisplayLabel,
+        );
+
+        return {
+          action: { kind: 'date' as const, value: label },
+          group: 'Date' as const,
+          icon: 'calendar-outline' as const,
+          id: `create-command-date-${label}`,
+          label: displayLabel,
+          searchText: `${label} ${displayLabel} date calendar due schedule`,
+        };
+      }),
+    ];
+    const priorityCommands: CreateCommandItem[] = PRIORITY_MENU_ITEMS.map((label) => ({
+      action: { kind: 'priority', value: label },
+      group: 'Priority',
+      icon: label === 'High' ? 'flag' : 'flag-outline',
+      id: `create-command-priority-${label}`,
+      label: label === 'None' ? 'No priority' : `${label} priority`,
+      searchText: `${label} priority importance urgent`,
+    }));
+    const tagCommands: CreateCommandItem[] = availableTodoTags.map((tag) => ({
+      action: { kind: 'tag', value: tag },
+      group: 'Tags',
+      icon: 'pricetags-outline',
+      id: `create-command-tag-${tag}`,
+      label: tag.startsWith('#') ? tag : `#${tag}`,
+      searchText: `${tag} #${tag} tag hashtag label`,
+    }));
+    const allListLabels = collectListNodeLabels(listMenuTree);
+    const orderedListLabels = listOrderMode === 'alphabetical'
+      ? [...allListLabels].sort((first, second) => first.localeCompare(second, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }))
+      : allListLabels;
+    const listCommands: CreateCommandItem[] = [
+      {
+        action: { kind: 'list', value: null },
+        group: 'Lists',
+        icon: 'file-tray-outline',
+        id: 'create-command-list-none',
+        label: 'No list',
+        searchText: 'no list clear list inbox category',
+      },
+      ...orderedListLabels.map((label) => ({
+        action: { kind: 'list' as const, value: label },
+        group: 'Lists' as const,
+        icon: 'file-tray-outline' as const,
+        id: `create-command-list-${label}`,
+        label,
+        searchText: `${label} list inbox category section`,
+      })),
+    ];
+    const reminderLabel = getDatePickerMenuDisplayLabel(
+      REMINDER_PICKER_LABEL,
+      createDraftFilters.date,
+      createDraftFilters.reminder,
+      getDateMenuDisplayLabel,
+    );
+    const reminderCommands: CreateCommandItem[] = [{
+      action: { kind: 'reminder' },
+      group: 'Reminder',
+      icon: 'alarm-outline',
+      id: 'create-command-reminder',
+      label: createDrawerReminder.time ? `Reminder · ${reminderLabel}` : 'Set reminder time',
+      searchText: `${reminderLabel} reminder alarm notification time schedule`,
+    }];
+    const scheduleCommands: CreateCommandItem[] = [
+      ...HABIT_INTERVAL_OPTIONS.map((option) => ({
+        action: { kind: 'habit' as const, value: option.hours },
+        group: 'Schedule' as const,
+        icon: 'notifications-outline' as const,
+        id: `create-command-habit-${option.hours ?? 'none'}`,
+        label: option.hours ? `Habit · ${option.label}` : 'No habit reminder',
+        searchText: `${option.label} habit reminder notification interval schedule`,
+      })),
+      ...REPEAT_PRESETS.map((preset) => ({
+        action: { kind: 'repeat' as const, value: preset.id },
+        group: 'Schedule' as const,
+        icon: 'repeat-outline' as const,
+        id: `create-command-repeat-${preset.id}`,
+        label: preset.id === 'none' ? 'Not repeating' : `Repeat · ${preset.label}`,
+        searchText: `${preset.label} repeat repeating recurring schedule`,
+      })),
+    ];
+    const taskCommands: CreateCommandItem[] = [{
+      action: { kind: 'pin' },
+      group: 'Task',
+      icon: createDraftPinned ? 'pin' : 'pin-outline',
+      id: 'create-command-pin',
+      label: createDraftPinned ? 'Unpin task' : 'Pin task',
+      searchText: 'pin unpin task favorite important keep top',
+    }];
+
+    return [
+      ...dateCommands,
+      ...reminderCommands,
+      ...priorityCommands,
+      ...tagCommands,
+      ...listCommands,
+      ...scheduleCommands,
+      ...taskCommands,
+    ].sort((first, second) => (
+      CREATE_COMMAND_GROUP_ORDER[first.group] - CREATE_COMMAND_GROUP_ORDER[second.group]
+    ));
+  }, [
+    availableTodoTags,
+    createDraftFilters.date,
+    createDraftFilters.reminder,
+    createDraftPinned,
+    createDrawerReminder.time,
+    getDateMenuDisplayLabel,
+    listMenuTree,
+    listOrderMode,
+  ]);
+
+  const applyCreateCommand = useCallback((command: CreateCommandItem) => {
+    const opensSecondaryPicker =
+      command.action.kind === 'reminder'
+      || (
+        command.action.kind === 'date'
+        && command.action.value === CUSTOM_DATE_LABEL
+      );
+
+    if (opensSecondaryPicker) {
+      createCommandRestoreAfterPickerRef.current = true;
+      closeCreateCommandPalette(false);
+      Keyboard.dismiss();
+    } else {
+      closeCreateCommandPalette();
+    }
+
+    switch (command.action.kind) {
+      case 'clearDate':
+        clearCreateDraftDate();
+        break;
+      case 'date':
+        handleCreateDrawerDatePress(command.action.value);
+        break;
+      case 'habit':
+        habitReminderApplyRef.current = 'create';
+        confirmCreateHabit(command.action.value);
+        break;
+      case 'list':
+        if (command.action.value === null) {
+          clearCreateDraftList(true);
+        } else {
+          setCreateDraftFilterValue('list', command.action.value);
+        }
+        break;
+      case 'pin':
+        toggleCreateDraftPinned();
+        break;
+      case 'priority':
+        setCreateDraftFilterValue('priority', command.action.value);
+        break;
+      case 'reminder':
+        openCreateReminderModal();
+        break;
+      case 'repeat':
+        repeatReminderApplyRef.current = 'create';
+        confirmCreateRepeat(command.action.value);
+        break;
+      case 'tag':
+        toggleCreateDraftTag(command.action.value);
+        break;
+      default:
+        break;
+    }
+  }, [
+    clearCreateDraftDate,
+    clearCreateDraftList,
+    closeCreateCommandPalette,
+    confirmCreateHabit,
+    confirmCreateRepeat,
+    handleCreateDrawerDatePress,
+    openCreateReminderModal,
+    setCreateDraftFilterValue,
+    toggleCreateDraftPinned,
+    toggleCreateDraftTag,
+  ]);
+
+  const handleCreateCommandQueryChange = useCallback((value: string) => {
+    setCreateCommandQuery(value.replace(/\s+/g, ''));
+  }, []);
+
+  const handleCreateDraftTextChange = useCallback((nextText: string) => {
+    const previousText = createDraftTextValueRef.current;
+    const insertedSpaceIndex = getInsertedSpaceIndex(previousText, nextText);
+    const opensCommandPalette =
+      !createCommandPaletteVisible
+      && insertedSpaceIndex !== null
+      && insertedSpaceIndex > 0
+      && previousText[insertedSpaceIndex - 1] === ' ';
+
+    if (opensCommandPalette && insertedSpaceIndex !== null) {
+      createDraftTextValueRef.current = previousText;
+      setCreateDraftText(previousText);
+      openCreateCommandPalette(insertedSpaceIndex);
+      return;
+    }
+
+    createDraftTextValueRef.current = nextText;
+    setCreateDraftText(nextText);
+  }, [createCommandPaletteVisible, openCreateCommandPalette]);
 
   const selectTodoGroupMode = useCallback((groupMode: TodoGroupMode) => {
     if (effectiveGroupMode === groupMode) {
@@ -12360,6 +13218,23 @@ export default function App() {
     quickPresetNavItems,
   ]);
 
+  const applyQuickPresetSwipeDirection = useCallback((direction: -1 | 1) => {
+    const targetItem = quickPresetNavItems[currentQuickPresetSwipeItemIndex + direction];
+
+    if (!targetItem?.preset) {
+      return;
+    }
+
+    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now(), {
+      scrollTarget: quickPresetScreenSwipeEnabled ? 'search' : 'top',
+    });
+  }, [
+    applyQuickPresetNavPreset,
+    currentQuickPresetSwipeItemIndex,
+    quickPresetScreenSwipeEnabled,
+    quickPresetNavItems,
+  ]);
+
   const handleQuickPresetHeaderSwipeStateChange = useCallback((
     event: PanGestureHandlerStateChangeEvent,
   ) => {
@@ -12382,21 +13257,11 @@ export default function App() {
     const direction = hasDistance
       ? translationX < 0 ? 1 : -1
       : velocityX < 0 ? 1 : -1;
-    const targetItem = quickPresetNavItems[currentQuickPresetSwipeItemIndex + direction];
-
-    if (!targetItem?.preset) {
-      return;
-    }
-
-    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now(), {
-      scrollTarget: quickPresetScreenSwipeEnabled ? 'search' : 'top',
-    });
+    applyQuickPresetSwipeDirection(direction);
   }, [
-    applyQuickPresetNavPreset,
+    applyQuickPresetSwipeDirection,
     currentQuickPresetSwipeItemIndex,
     quickPresetHeaderSwipeEnabled,
-    quickPresetScreenSwipeEnabled,
-    quickPresetNavItems,
   ]);
 
   const removeMenuPreset = useCallback((id: string) => {
@@ -14500,6 +15365,31 @@ export default function App() {
     canFocusNavbarPresetsFromSectionGap,
   ]);
   const handleTodoListFrameTouchEnd = useCallback((event: GestureResponderEvent) => {
+    const { pageX, pageY, timestamp } = event.nativeEvent;
+    const start = listTouchStartRef.current;
+    const translationX = pageX - start.pageX;
+    const translationY = pageY - start.pageY;
+    const elapsed = timestamp - start.timestamp;
+
+    if (quickPresetScreenSwipeEnabled) {
+      const absoluteTranslationX = Math.abs(translationX);
+      const horizontalVelocity = (
+        absoluteTranslationX * 1000 / Math.max(elapsed, 1)
+      );
+      const hasDistance = absoluteTranslationX >= QUICK_PRESET_HEADER_SWIPE_DISTANCE;
+      const hasVelocity = (
+        absoluteTranslationX >= QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X[1] &&
+        horizontalVelocity >= QUICK_PRESET_HEADER_SWIPE_VELOCITY
+      );
+      const isHorizontalSwipe = absoluteTranslationX > Math.abs(translationY);
+
+      if (isHorizontalSwipe && (hasDistance || hasVelocity)) {
+        todoSectionGapTouchRef.current = false;
+        applyQuickPresetSwipeDirection(translationX < 0 ? 1 : -1);
+        return;
+      }
+    }
+
     if (
       todoSectionGapTouchRef.current ||
       todoSelectMode ||
@@ -14509,10 +15399,7 @@ export default function App() {
       return;
     }
 
-    const { pageX, pageY, timestamp } = event.nativeEvent;
-    const start = listTouchStartRef.current;
     const moved = Math.hypot(pageX - start.pageX, pageY - start.pageY);
-    const elapsed = timestamp - start.timestamp;
     const startedOnListContent =
       Math.abs(start.timestamp - todoListContentTouchStartRef.current) < 48;
 
@@ -14523,9 +15410,11 @@ export default function App() {
 
     handleListFrameTouchEnd(event);
   }, [
+    applyQuickPresetSwipeDirection,
     canFocusNavbarPresetsFromSectionGap,
     focusNavbarPresetsFromSectionGap,
     handleListFrameTouchEnd,
+    quickPresetScreenSwipeEnabled,
     todoSelectMode,
   ]);
   const renderVisibleTodoRowGap = useCallback((
@@ -14618,7 +15507,7 @@ export default function App() {
 
       if (item.type === 'searchListHeader') {
         const isExpanded = !item.isCollapsed;
-        const hasExpandedTodos = isExpanded && item.count > 0;
+        const hasExpandedContent = isExpanded;
         const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
@@ -14627,13 +15516,13 @@ export default function App() {
               collapsable={false}
               style={[
                 styles.todoSectionCardShadow,
-                hasExpandedTodos && styles.todoSectionCardShadowExpanded,
+                hasExpandedContent && styles.todoSectionCardShadowExpanded,
               ]}
             >
               <View
                 style={[
                   styles.todoSectionCard,
-                  hasExpandedTodos && styles.todoSectionCardExpanded,
+                  hasExpandedContent && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
                 ]}
               >
@@ -14872,7 +15761,7 @@ export default function App() {
 
       if (item.type === 'searchPresetHeader') {
         const isExpanded = !item.isCollapsed;
-        const hasExpandedTodos = isExpanded && item.count > 0;
+        const hasExpandedContent = isExpanded;
         const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
@@ -14881,13 +15770,13 @@ export default function App() {
               collapsable={false}
               style={[
                 styles.todoSectionCardShadow,
-                hasExpandedTodos && styles.todoSectionCardShadowExpanded,
+                hasExpandedContent && styles.todoSectionCardShadowExpanded,
               ]}
             >
               <View
                 style={[
                   styles.todoSectionCard,
-                  hasExpandedTodos && styles.todoSectionCardExpanded,
+                  hasExpandedContent && styles.todoSectionCardExpanded,
                   styles.todoSectionHeader,
                 ]}
               >
@@ -15533,13 +16422,7 @@ export default function App() {
               />
             </View>
           ) : (
-            <PanGestureHandler
-              activeOffsetX={QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X}
-              enabled={quickPresetScreenSwipeEnabled}
-              failOffsetY={QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y}
-              onHandlerStateChange={handleQuickPresetHeaderSwipeStateChange}
-            >
-              <View
+            <View
                 collapsable={false}
                 onTouchEnd={handleTodoListFrameTouchEnd}
                 onTouchStart={handleListFrameTouchStart}
@@ -15755,7 +16638,6 @@ export default function App() {
               />
               </View>
             </View>
-            </PanGestureHandler>
           )}
 
         </View>
@@ -17069,7 +17951,15 @@ export default function App() {
 
         <Modal
           animationType="fade"
-          onRequestClose={closeCreateDrawer}
+          onRequestClose={() => {
+            if (createCommandPaletteVisible) {
+              closeCreateCommandPalette();
+              return;
+            }
+
+            closeCreateDrawer();
+          }}
+          onShow={scheduleCreateDrawerInputFocus}
           statusBarTranslucent={Platform.OS === 'android'}
           transparent
           visible={createDrawerVisible}
@@ -17086,7 +17976,10 @@ export default function App() {
               style={[
                 styles.createDrawerLayer,
                 { bottom: keyboardOverlayInset },
-                createDrawerExpanded && styles.createDrawerLayerExpanded,
+                !createDrawerPicker &&
+                  !createDrawerUsesFullScreen &&
+                  styles.createDrawerLayerPrompt,
+                createDrawerUsesFullScreen && styles.createDrawerLayerExpanded,
                 createDrawerListPickerHalfSheet
                   ? { height: createDrawerListPickerSheetHeight }
                   : null,
@@ -17095,34 +17988,38 @@ export default function App() {
               <View
                 style={[
                   styles.createDrawer,
-                  createDrawerExpanded && styles.createDrawerExpanded,
+                  !createDrawerPicker &&
+                    !createDrawerUsesFullScreen &&
+                    styles.createDrawerPrompt,
+                  createDrawerUsesFullScreen && styles.createDrawerExpanded,
                   createDrawerListPickerHalfSheet && styles.createDrawerListPickerSheet,
                 ]}
               >
-                {!createDrawerExpanded ? (
+                {!createDrawerExpanded && createDrawerPicker ? (
                   <View style={styles.menuDragHandle} accessibilityRole="adjustable">
                     <View style={styles.menuDragPill} />
                   </View>
                 ) : null}
                 {createDrawerPicker ? (
-                  <ScrollView
-                    contentContainerStyle={
-                      createDrawerListPickerHalfSheet
-                        ? [
-                          styles.createDrawerListPickerContent,
-                          { paddingTop: createDrawerListPickerTopSpace },
-                        ]
-                        : undefined
-                    }
-                    keyboardShouldPersistTaps="handled"
-                    showsVerticalScrollIndicator={false}
-                    style={[
-                      styles.createDrawerPicker,
-                      !createDrawerExpanded && { maxHeight: createDrawerPickerMaxHeight },
-                      createDrawerExpanded && styles.createDrawerPickerExpanded,
-                      createDrawerListPickerHalfSheet && styles.createDrawerListPickerScroll,
-                    ]}
-                  >
+                  <>
+                    <ScrollView
+                      contentContainerStyle={
+                        createDrawerListPickerHalfSheet
+                          ? [
+                            styles.createDrawerListPickerContent,
+                            { paddingTop: createDrawerListPickerTopSpace },
+                          ]
+                          : undefined
+                      }
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator={false}
+                      style={[
+                        styles.createDrawerPicker,
+                        !createDrawerExpanded && { maxHeight: createDrawerPickerMaxHeight },
+                        createDrawerExpanded && styles.createDrawerPickerExpanded,
+                        createDrawerListPickerHalfSheet && styles.createDrawerListPickerScroll,
+                      ]}
+                    >
                     {createDrawerPicker === 'tags' && createDrawerPickerItems.length === 0 ? (
                       <Text style={styles.createDrawerPickerEmptyText}>
                         No tags
@@ -17308,28 +18205,61 @@ export default function App() {
                         </Pressable>
                       );
                     })}
-                  </ScrollView>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Close new todo"
+                        hitSlop={8}
+                        onPress={closeCreateDrawer}
+                        style={({ pressed }) => [
+                          styles.createDrawerPickerCloseButton,
+                          pressed && styles.createDrawerToolbarButtonPressed,
+                        ]}
+                      >
+                        <Ionicons color="#5F6368" name="close" size={24} />
+                      </Pressable>
+                    </ScrollView>
+                  </>
                 ) : (
                   <View
                     style={[
                       styles.createDrawerEditor,
-                      createDrawerExpanded && styles.createDrawerEditorExpanded,
+                      !createDrawerUsesFullScreen && styles.createDrawerEditorPrompt,
+                      createDrawerUsesFullScreen && styles.createDrawerEditorExpanded,
                     ]}
                   >
-                    <View style={styles.createDrawerTitleRow}>
+                    <View
+                      accessibilityElementsHidden={createCommandPaletteVisible}
+                      importantForAccessibility={
+                        createCommandPaletteVisible ? 'no-hide-descendants' : 'auto'
+                      }
+                      pointerEvents={createCommandPaletteVisible ? 'none' : 'auto'}
+                      style={[
+                        styles.createDrawerTitleRow,
+                        !createDrawerExpanded && styles.createDrawerTitleRowPrompt,
+                        createCommandPaletteVisible && styles.createDrawerTitleRowCommandHidden,
+                      ]}
+                    >
                       <TextInput
+                        key={createDrawerVisible ? 'new-todo-title-open' : 'new-todo-title-closed'}
                         ref={createInputRef}
                         autoCapitalize="sentences"
                         autoCorrect
                         multiline
-                        onChangeText={setCreateDraftText}
-                        onSubmitEditing={() => createContentInputRef.current?.focus()}
-                        placeholder="Task title"
-                        placeholderTextColor="#B5ADA5"
-                        returnKeyType="next"
+                        onChangeText={handleCreateDraftTextChange}
+                        onSelectionChange={(event) => {
+                          createDraftSelectionRef.current = event.nativeEvent.selection;
+                        }}
+                        onSubmitEditing={submitCreateTodo}
+                        placeholder="What would you like to do?"
+                        placeholderTextColor="#D1D3D6"
+                        returnKeyType="done"
                         selectionColor="#2F6F62"
                         scrollEnabled={false}
-                        style={styles.createDrawerTitleInput}
+                        showSoftInputOnFocus
+                        style={[
+                          styles.createDrawerTitleInput,
+                          !createDrawerExpanded && styles.createDrawerTitleInputPrompt,
+                        ]}
                         submitBehavior="submit"
                         textAlignVertical="top"
                         value={createDraftText}
@@ -17359,26 +18289,48 @@ export default function App() {
                         />
                       </Pressable>
                     </View>
-                    <TextInput
-                      ref={createContentInputRef}
-                      autoCapitalize="sentences"
-                      autoCorrect
-                      multiline
-                      onChangeText={setCreateDraftContent}
-                      placeholder="Content"
-                      placeholderTextColor="#B5ADA5"
-                      selectionColor="#2F6F62"
-                      scrollEnabled
-                      style={[
-                        styles.createDrawerContentInput,
-                        createDrawerExpanded && styles.createDrawerContentInputExpanded,
-                      ]}
-                      textAlignVertical="top"
-                      value={createDraftContent}
-                    />
+                    {createCommandPaletteVisible ? (
+                      <CreateCommandPalette
+                        commands={createCommandItems}
+                        inputRef={createCommandInputRef}
+                        onClose={() => closeCreateCommandPalette()}
+                        onQueryChange={handleCreateCommandQueryChange}
+                        onSelect={applyCreateCommand}
+                        query={createCommandQuery}
+                      />
+                    ) : null}
+                    {!createCommandPaletteVisible ? (
+                      <TextInput
+                        ref={createContentInputRef}
+                        autoCapitalize="sentences"
+                        autoCorrect
+                        multiline
+                        onChangeText={setCreateDraftContent}
+                        placeholder="Content"
+                        placeholderTextColor="#B5ADA5"
+                        selectionColor="#2F6F62"
+                        scrollEnabled
+                        style={[
+                          styles.createDrawerContentInput,
+                          createDrawerExpanded
+                            ? styles.createDrawerContentInputExpanded
+                            : styles.createDrawerContentInputPrompt,
+                        ]}
+                        textAlignVertical="top"
+                        value={createDraftContent}
+                      />
+                    ) : null}
                   </View>
                 )}
-                <View style={styles.createDrawerToolbar}>
+                {keyboardOverlayInset === 0 && !createCommandPaletteVisible ? (
+                  <View
+                    style={[
+                      styles.createDrawerToolbar,
+                      !createDrawerPicker &&
+                        !createDrawerExpanded &&
+                        styles.createDrawerToolbarPrompt,
+                    ]}
+                  >
                   <ScrollView
                     alwaysBounceHorizontal={false}
                     bounces={false}
@@ -17524,8 +18476,23 @@ export default function App() {
                       size={24}
                     />
                   </Pressable>
-                </View>
+                  </View>
+                ) : null}
               </View>
+              {keyboardOverlayInset === 0 && !createCommandPaletteVisible && !createDrawerPicker ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close new todo"
+                  hitSlop={8}
+                  onPress={closeCreateDrawer}
+                  style={({ pressed }) => [
+                    styles.createDrawerCloseButton,
+                    pressed && styles.createDrawerToolbarButtonPressed,
+                  ]}
+                >
+                  <Ionicons color="#5F6368" name="close" size={24} />
+                </Pressable>
+              ) : null}
             </View>
           </View>
         </Modal>
@@ -17540,6 +18507,7 @@ export default function App() {
 
         <ReminderTimeModal
           ref={reminderTimeModalRef}
+          onClose={handleReminderTimeModalClose}
           onConfirm={confirmReminderTime}
         />
 
@@ -18604,7 +19572,7 @@ export default function App() {
                     <View style={styles.settingsRowTextWrap}>
                       <Text style={styles.settingsSectionTitle}>Dev test data</Text>
                       <Text style={styles.settingsSectionSubtitle}>
-                        {devTestTodoCount}/{DEV_TEST_TODO_COUNT} todos · {devTestMenuPresetCount}/{DEV_TEST_MENU_PRESET_COUNT} saved lists · {devTestListMenuNodeCount} seed lists
+                        {devTestTodoCount}/{DEV_TEST_TODO_COUNT} todos · {devTestMenuPresetCount}/{DEV_TEST_MENU_PRESET_COUNT} saved lists · {devTestListMenuNodeCount} seed lists · {devTestHistoryEntryCount} history
                       </Text>
                     </View>
                   </View>
@@ -18628,14 +19596,16 @@ export default function App() {
                       disabled={
                         devTestTodoCount === 0 &&
                         devTestMenuPresetCount === 0 &&
-                        devTestListMenuNodeCount === 0
+                        devTestListMenuNodeCount === 0 &&
+                        devTestHistoryEntryCount === 0
                       }
                       onPress={clearDevTestTodos}
                       style={({ pressed }) => [
                         styles.settingsRestoreButton,
-                        devTestTodoCount === 0 &&
+                          devTestTodoCount === 0 &&
                           devTestMenuPresetCount === 0 &&
                           devTestListMenuNodeCount === 0 &&
+                          devTestHistoryEntryCount === 0 &&
                           styles.settingsButtonDisabled,
                         pressed && styles.settingsSecondaryButtonPressed,
                       ]}
@@ -21274,7 +22244,7 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     zIndex: 40,
-    elevation: 12,
+    elevation: 30,
   },
   todoUndoButton: {
     alignItems: 'center',
@@ -21582,6 +22552,9 @@ const styles = StyleSheet.create({
     zIndex: 24,
     elevation: 8,
   },
+  createDrawerLayerPrompt: {
+    top: TOP_SAFE_GAP,
+  },
   createDrawerLayerExpanded: {
     top: 0,
   },
@@ -21599,6 +22572,13 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -8 },
     elevation: 10,
   },
+  createDrawerPrompt: {
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    flex: 1,
+    minHeight: 0,
+    paddingBottom: Platform.OS === 'android' ? 12 : 10,
+  },
   createDrawerExpanded: {
     borderTopLeftRadius: 0,
     borderTopRightRadius: 0,
@@ -21613,6 +22593,12 @@ const styles = StyleSheet.create({
   },
   createDrawerEditor: {
     marginTop: 4,
+    position: 'relative',
+  },
+  createDrawerEditorPrompt: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 12,
   },
   createDrawerEditorExpanded: {
     flex: 1,
@@ -21622,6 +22608,14 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     flexDirection: 'row',
     gap: 12,
+  },
+  createDrawerTitleRowPrompt: {
+    flex: 0,
+    maxHeight: 72,
+    minHeight: 64,
+  },
+  createDrawerTitleRowCommandHidden: {
+    opacity: 0,
   },
   createDrawerTitleInput: {
     color: THEME_TEXT,
@@ -21634,6 +22628,15 @@ const styles = StyleSheet.create({
     minWidth: 0,
     paddingHorizontal: 0,
     paddingVertical: 5,
+  },
+  createDrawerTitleInputPrompt: {
+    fontSize: 22,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 30,
+    maxHeight: 72,
+    minHeight: 64,
+    paddingTop: 8,
+    paddingBottom: 0,
   },
   createDrawerContentInput: {
     color: '#3A332E',
@@ -21649,6 +22652,196 @@ const styles = StyleSheet.create({
   createDrawerContentInputExpanded: {
     flex: 1,
     maxHeight: '100%',
+  },
+  createDrawerContentInputPrompt: {
+    flex: 1,
+    maxHeight: '100%',
+    minHeight: 96,
+  },
+  createCommandPalette: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    zIndex: 5,
+  },
+  createCommandPaletteClose: {
+    alignItems: 'center',
+    backgroundColor: '#F1F4FA',
+    borderColor: '#E1E6F0',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 40,
+    justifyContent: 'center',
+    width: '100%',
+  },
+  createCommandPaletteFooter: {
+    alignItems: 'stretch',
+    borderTopColor: '#EEF0F4',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    minHeight: 52,
+    paddingBottom: 4,
+    paddingHorizontal: 12,
+    paddingTop: 6,
+  },
+  createCommandPaletteSearchRow: {
+    alignItems: 'center',
+    backgroundColor: '#F1F4FA',
+    borderColor: '#E1E6F0',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+    marginHorizontal: 12,
+    marginTop: 10,
+    minHeight: 46,
+    paddingHorizontal: 12,
+  },
+  createCommandPaletteSearchInput: {
+    color: THEME_TEXT,
+    flex: 1,
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    minWidth: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 9,
+  },
+  createCommandPaletteShortcutScroll: {
+    flexGrow: 0,
+    marginBottom: 8,
+    maxHeight: 36,
+  },
+  createCommandPaletteShortcutItems: {
+    gap: 6,
+    paddingHorizontal: 12,
+  },
+  createCommandPaletteShortcut: {
+    alignItems: 'center',
+    borderColor: '#E1E6F0',
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 34,
+    paddingHorizontal: 9,
+  },
+  createCommandPaletteShortcutSelected: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT,
+  },
+  createCommandPaletteShortcutKey: {
+    color: '#777E89',
+    fontSize: 10,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 13,
+  },
+  createCommandPaletteShortcutKeySelected: {
+    color: THEME_ACCENT,
+  },
+  createCommandPaletteShortcutLabel: {
+    color: '#555B65',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+  },
+  createCommandPaletteShortcutLabelSelected: {
+    color: THEME_ACCENT,
+  },
+  createCommandPaletteSpaceKey: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D9DEE8',
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  createCommandPaletteSpaceKeyText: {
+    color: '#7A808A',
+    fontSize: 9,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0.7,
+    lineHeight: 11,
+  },
+  createCommandPaletteResults: {
+    paddingBottom: 10,
+    paddingHorizontal: 8,
+  },
+  createCommandPaletteResultsScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  createCommandPaletteRow: {
+    alignItems: 'center',
+    borderColor: 'transparent',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: CREATE_COMMAND_PALETTE_ROW_HEIGHT,
+    paddingHorizontal: 9,
+  },
+  createCommandPaletteRowFocused: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: THEME_ACCENT,
+  },
+  createCommandPaletteRowPressed: {
+    backgroundColor: '#EDEFF5',
+  },
+  createCommandPaletteRowIcon: {
+    alignItems: 'center',
+    backgroundColor: '#F0F2F6',
+    borderRadius: 10,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  createCommandPaletteRowIconFocused: {
+    backgroundColor: '#FFFFFF',
+  },
+  createCommandPaletteRowLabel: {
+    color: '#282C33',
+    flex: 1,
+    fontSize: 15,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 20,
+    minWidth: 0,
+  },
+  createCommandPaletteRowLabelFocused: {
+    color: THEME_ACCENT,
+    fontWeight: FONT_MEDIUM,
+  },
+  createCommandPaletteRowGroup: {
+    color: '#91969E',
+    fontSize: 10,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0.6,
+    lineHeight: 13,
+    textTransform: 'uppercase',
+  },
+  createCommandPaletteRowGroupFocused: {
+    color: THEME_ACCENT,
+  },
+  createCommandPaletteEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 126,
+    paddingHorizontal: 28,
+    paddingVertical: 18,
+  },
+  createCommandPaletteEmptyTitle: {
+    color: THEME_TEXT,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 19,
+    marginTop: 7,
+  },
+  createCommandPaletteEmptyText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 17,
+    marginTop: 2,
+    textAlign: 'center',
   },
   createDrawerPicker: {
     marginTop: 4,
@@ -21709,6 +22902,14 @@ const styles = StyleSheet.create({
     color: THEME_ACCENT,
     fontWeight: FONT_MEDIUM,
   },
+  createDrawerPickerCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#F1F3F5',
+    borderRadius: 12,
+    justifyContent: 'center',
+    minHeight: 46,
+    width: '100%',
+  },
   createDrawerToolbar: {
     alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -21718,6 +22919,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
     minHeight: 48,
     paddingTop: 6,
+  },
+  createDrawerToolbarPrompt: {
+    borderTopWidth: 0,
+    marginTop: 0,
+    minHeight: 56,
+    paddingTop: 4,
   },
   createDrawerToolbarScroll: {
     flex: 1,
@@ -21740,6 +22947,23 @@ const styles = StyleSheet.create({
   },
   createDrawerToolbarButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
+  },
+  createDrawerCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#F1F3F5',
+    borderRadius: 16,
+    bottom: Platform.OS === 'android' ? 76 : 72,
+    elevation: 12,
+    height: 48,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 20,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    width: 48,
+    zIndex: 30,
   },
   createDrawerInboxChip: {
     alignItems: 'center',
@@ -22241,6 +23465,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   todoSectionCardShadowExpanded: {
+    backgroundColor: 'transparent',
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     elevation: 0,

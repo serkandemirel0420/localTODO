@@ -658,9 +658,25 @@ export const updateListNodeDisplaySettings = (
   },
 ): StoredListMenuNode[] => {
   const target = label.toLocaleLowerCase();
+  let changed = false;
 
-  return nodes.map((node) => {
+  const nextNodes = nodes.map((node) => {
     if (node.label.toLocaleLowerCase() === target) {
+      const currentSortMode = isSubsectionView ? node.subsectionSortMode : node.sortMode;
+      const currentGroupMode = isSubsectionView ? node.subsectionGroupMode : node.groupMode;
+      const sortModeChanged = (
+        update.sortMode !== undefined && update.sortMode !== currentSortMode
+      );
+      const groupModeChanged = (
+        update.groupMode !== undefined && update.groupMode !== currentGroupMode
+      );
+
+      if (!sortModeChanged && !groupModeChanged) {
+        return node;
+      }
+
+      changed = true;
+
       if (isSubsectionView) {
         return {
           ...node,
@@ -681,8 +697,15 @@ export const updateListNodeDisplaySettings = (
     }
 
     const children = updateListNodeDisplaySettings(node.children, label, isSubsectionView, update);
-    return children === node.children ? node : { ...node, children };
+    if (children === node.children) {
+      return node;
+    }
+
+    changed = true;
+    return { ...node, children };
   });
+
+  return changed ? nextNodes : nodes;
 };
 
 export const clearListNodeDisplaySettings = (

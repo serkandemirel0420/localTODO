@@ -33,25 +33,35 @@ export type ReminderTimeModalHandle = {
 };
 
 type ReminderTimeModalProps = {
+  onClose?: (source: ReminderTimeModalSource) => void;
   onConfirm: (source: ReminderTimeModalSource, time: ReminderTime) => void;
 };
 
 function ReminderTimeModalHost({
+  onClose,
   onConfirm,
 }: ReminderTimeModalProps, ref: React.ForwardedRef<ReminderTimeModalHandle>) {
   const sourceRef = useRef<ReminderTimeModalSource>('create');
+  const visibleRef = useRef(false);
   const [visible, setVisible] = useState(false);
   const [draft, setDraft] = useState<ReminderTime>(DEFAULT_REMINDER_TIME);
 
   const close = useCallback(() => {
+    if (!visibleRef.current) {
+      return;
+    }
+
+    visibleRef.current = false;
     setVisible(false);
-  }, []);
+    onClose?.(sourceRef.current);
+  }, [onClose]);
 
   const open = useCallback((params: {
     source: ReminderTimeModalSource;
     value: ReminderTime | null;
   }) => {
     sourceRef.current = params.source;
+    visibleRef.current = true;
     setDraft(params.value ?? DEFAULT_REMINDER_TIME);
     setVisible(true);
   }, []);

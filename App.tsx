@@ -103,12 +103,15 @@ import {
   formatTagLabel,
   getTodoTextMaxLength,
   makeTodo,
+  formatTodoContentCheckboxShortcuts,
   normalizeTodoContent,
   normalizeTodoFilters,
   normalizeTodoTags,
   pruneTodoFilters,
   formatListLabel,
   normalizeTodoText,
+  TODO_CONTENT_CHECKBOX_CHECKED,
+  TODO_CONTENT_CHECKBOX_UNCHECKED,
   truncateTodoText,
   type DeletedTodo,
   type Todo,
@@ -1509,7 +1512,7 @@ const LIST_ICON_GROUPS: ListIconGroup[] = [
 const LIST_MENU_BOTTOM_OFFSET = 8;
 const LIST_MENU_OVERLAY_BOTTOM = BOTTOM_NAV_RESERVED_HEIGHT;
 const LIST_MENU_ONE_HANDED_SCROLL_RATIO = 0.35;
-const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.7;
+const TODO_LIST_ONE_HANDED_SCROLL_RATIO = 0.95;
 const QUICK_PRESET_HEADER_SWIPE_DISTANCE = 34;
 const QUICK_PRESET_HEADER_SWIPE_VELOCITY = 420;
 const QUICK_PRESET_HEADER_SWIPE_ACTIVE_OFFSET_X: [number, number] = [-12, 12];
@@ -1528,6 +1531,76 @@ const formatTodoDetailDraftContentForEditing = (content: string) => {
   const normalized = normalizeTodoContent(content);
 
   return `${normalized}${'\n'.repeat(TODO_DETAIL_CONTENT_EXTRA_LINES)}`;
+};
+
+type TextSelection = {
+  end: number;
+  start: number;
+};
+
+const formatContentCheckboxChange = (previousValue: string, nextValue: string) => {
+  const value = formatTodoContentCheckboxShortcuts(nextValue);
+
+  if (value === nextValue) {
+    return { selection: null, value };
+  }
+
+  let commonSuffixLength = 0;
+  const maxCommonSuffixLength = Math.min(previousValue.length, nextValue.length);
+  while (
+    commonSuffixLength < maxCommonSuffixLength &&
+    previousValue[previousValue.length - 1 - commonSuffixLength] ===
+      nextValue[nextValue.length - 1 - commonSuffixLength]
+  ) {
+    commonSuffixLength += 1;
+  }
+
+  const rawCursor = nextValue.length - commonSuffixLength;
+  const formattedCursor = formatTodoContentCheckboxShortcuts(
+    nextValue.slice(0, rawCursor),
+  ).length;
+
+  return {
+    selection: { end: formattedCursor, start: formattedCursor },
+    value,
+  };
+};
+
+const toggleContentCheckboxAtSelection = (
+  value: string,
+  selection: TextSelection,
+) => {
+  const cursor = Math.max(0, Math.min(value.length, selection.start));
+  const lineStart = cursor === 0 ? 0 : value.lastIndexOf('\n', cursor - 1) + 1;
+  const nextLineBreak = value.indexOf('\n', lineStart);
+  const lineEnd = nextLineBreak < 0 ? value.length : nextLineBreak;
+  const line = value.slice(lineStart, lineEnd);
+  const indentationLength = line.match(/^[\t ]*/)?.[0].length ?? 0;
+  const markerIndex = lineStart + indentationLength;
+  const marker = value[markerIndex];
+
+  if (
+    marker === TODO_CONTENT_CHECKBOX_UNCHECKED ||
+    marker === TODO_CONTENT_CHECKBOX_CHECKED
+  ) {
+    const nextMarker = marker === TODO_CONTENT_CHECKBOX_UNCHECKED
+      ? TODO_CONTENT_CHECKBOX_CHECKED
+      : TODO_CONTENT_CHECKBOX_UNCHECKED;
+
+    return {
+      selection,
+      value: `${value.slice(0, markerIndex)}${nextMarker}${value.slice(markerIndex + 1)}`,
+    };
+  }
+
+  const prefix = `${TODO_CONTENT_CHECKBOX_UNCHECKED} `;
+  return {
+    selection: {
+      end: selection.end >= markerIndex ? selection.end + prefix.length : selection.end,
+      start: selection.start >= markerIndex ? selection.start + prefix.length : selection.start,
+    },
+    value: `${value.slice(0, markerIndex)}${prefix}${value.slice(markerIndex)}`,
+  };
 };
 const MENU_DISMISS_VELOCITY = 680;
 const GOOGLE_IOS_LEGACY_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
@@ -3695,33 +3768,6 @@ const todoMatchesFilters = (
   );
 };
 
-const getFiltersAfterCreateReveal = (
-  todo: Todo,
-  filters: SelectedFilters,
-  listMenuTree: ListMenuNode[],
-  now = new Date(),
-): SelectedFilters => {
-  const dateGroupMatches = todoMatchesDateFilterGroup(todo, filters, now);
-  const priorityMatches =
-    filters.priority.length === 0 ||
-    filters.priority.some((value) => todo.filters.priority.includes(value));
-  const tagMatches =
-    filters.tag.length === 0 ||
-    filters.tag.some((value) => todoHasTagFilter(todo, value));
-
-  return {
-    date: dateGroupMatches ? [...filters.date] : [],
-    list: todoMatchesSelectedListFilters(filters.list, todo.filters.list, listMenuTree)
-      ? [...filters.list]
-      : [],
-    priority: priorityMatches ? [...filters.priority] : [],
-    reminder: !dateGroupMatches && hasRepeatStatusFilter(filters.reminder)
-      ? removeRepeatStatusFilters(filters.reminder)
-      : [...filters.reminder],
-    tag: tagMatches ? [...filters.tag] : [],
-  };
-};
-
 type MenuPresetSwipeRowProps = {
   actionLabel: 'Apply' | 'Edit';
   isSection?: boolean;
@@ -5107,6 +5153,7 @@ export default function App() {
   const createCommandReturnSelectionRef = useRef({ end: 0, start: 0 });
   const createCommandRestoreAfterPickerRef = useRef(false);
   const createContentInputRef = useRef<TextInput>(null);
+  const createDraftContentSelectionRef = useRef<TextSelection>({ end: 0, start: 0 });
   const createDrawerHostRef = useRef<View>(null);
   const createDrawerFocusPendingRef = useRef(false);
   const createDrawerPickerRef = useRef<CreateDrawerPicker | null>(null);
@@ -7344,6 +7391,7 @@ export default function App() {
     createDraftCopiesTodoSettingsRef.current = false;
     createCommandRestoreAfterPickerRef.current = false;
     createCommandReturnSelectionRef.current = { end: 0, start: 0 };
+    createDraftContentSelectionRef.current = { end: 0, start: 0 };
     createDraftSelectionRef.current = { end: 0, start: 0 };
     const normalizedFilters = normalizeTodoFilters(filters);
     const nextFilters = allowEmptyFilters
@@ -8099,27 +8147,9 @@ export default function App() {
       createDraftPinned,
       todoTags,
     );
-    const nextSelectedFilters = getFiltersAfterCreateReveal(
-      todo,
-      selectedFilters,
-      listMenuTree,
-      new Date(createdAt),
-    );
-    const nextRequiredFilters = pruneTodoFilters(requiredFilters, nextSelectedFilters);
-
     recordUndo('Create todo');
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
-    if (!filtersEqual(selectedFilters, nextSelectedFilters)) {
-      setSelectedFilters(nextSelectedFilters);
-    }
-    if (!filtersEqual(requiredFilters, nextRequiredFilters)) {
-      setRequiredFilters(nextRequiredFilters);
-    }
     clearNotificationTodoReveal();
-    if (query.trim()) {
-      setQuery('');
-      setItemSearchState(null);
-    }
     setTodos((current) => [todo, ...current]);
     highlightNewlyCreatedTodo(todo.id);
     localTodoStore.upsert(todo).catch(() => undefined);
@@ -8138,13 +8168,38 @@ export default function App() {
     clearNotificationTodoReveal,
     highlightNewlyCreatedTodo,
     listMenuTree,
-    query,
     recordUndo,
-    requiredFilters,
     resetCreateDrawerState,
     selectedFilters,
     todoTextMaxLength,
   ]);
+
+  const handleCreateDraftContentChange = useCallback((nextValue: string) => {
+    const next = formatContentCheckboxChange(createDraftContent, nextValue);
+    setCreateDraftContent(next.value);
+
+    if (next.selection) {
+      createDraftContentSelectionRef.current = next.selection;
+      requestAnimationFrame(() => {
+        createContentInputRef.current?.setNativeProps({ selection: next.selection });
+      });
+    }
+  }, [createDraftContent]);
+
+  const toggleCreateDraftContentCheckbox = useCallback(() => {
+    const next = toggleContentCheckboxAtSelection(
+      createDraftContent,
+      createDraftContentSelectionRef.current,
+    );
+
+    createDraftContentSelectionRef.current = next.selection;
+    setCreateDraftContent(next.value);
+    requestAnimationFrame(() => {
+      createContentInputRef.current?.focus();
+      createContentInputRef.current?.setNativeProps({ selection: next.selection });
+    });
+    triggerSubtleHaptic();
+  }, [createDraftContent]);
 
   const createDrawerCanSubmit = useMemo(
     () => createDraftText.trim().replace(/\s+/g, ' ').length > 0,
@@ -9400,6 +9455,12 @@ export default function App() {
         Keyboard.dismiss();
         setActiveTodoMenuId(null);
 
+        if (quickPresetScreenSwipeArmedRef.current) {
+          setQuickPresetScreenSwipeArmed(false);
+          triggerSubtleHaptic();
+          return true;
+        }
+
         if (navTab === 'search') {
           const todoRowTouchStart = todoRowTouchStartRef.current;
           const startedOnTodoRow =
@@ -9427,7 +9488,7 @@ export default function App() {
       lastListTapRef.current = { pageX, pageY, timestamp };
       return false;
     },
-    [listMenuOpen, navTab, openTodoDetailModal],
+    [listMenuOpen, navTab, openTodoDetailModal, setQuickPresetScreenSwipeArmed],
   );
 
   const handleListTap = useCallback(
@@ -9765,6 +9826,59 @@ export default function App() {
     ? quickPresetNavItems.find((item) => item.slotNumber === openQuickPresetNavSlotNumber) ?? null
     : null;
   const openQuickPresetNavIndex = openQuickPresetNavItem?.navIndex ?? null;
+  const focusedQuickPresetNavItem = useMemo(() => {
+    if (openMenuPresetId && menuPresetById.has(openMenuPresetId)) {
+      if (openQuickPresetNavItem?.preset?.id === openMenuPresetId) {
+        return openQuickPresetNavItem;
+      }
+
+      return quickPresetNavItems.find(
+        (item) => item.preset?.id === openMenuPresetId,
+      ) ?? null;
+    }
+
+    if (
+      openQuickPresetNavItem?.preset &&
+      menuPresetMatchesState(
+        openQuickPresetNavItem.preset,
+        selectedFilters,
+        requiredFilters,
+        avoidedFilters,
+        effectiveSortMode,
+        effectiveGroupMode,
+        listOrderMode,
+        metaTagVisibility,
+      )
+    ) {
+      return openQuickPresetNavItem;
+    }
+
+    return quickPresetNavItems.find((item) => (
+      item.preset &&
+      menuPresetMatchesState(
+        item.preset,
+        selectedFilters,
+        requiredFilters,
+        avoidedFilters,
+        effectiveSortMode,
+        effectiveGroupMode,
+        listOrderMode,
+        metaTagVisibility,
+      )
+    )) ?? null;
+  }, [
+    avoidedFilters,
+    effectiveGroupMode,
+    effectiveSortMode,
+    listOrderMode,
+    menuPresetById,
+    metaTagVisibility,
+    openMenuPresetId,
+    openQuickPresetNavItem,
+    quickPresetNavItems,
+    requiredFilters,
+    selectedFilters,
+  ]);
   const openListPreset = openMenuPresetId
     ? menuPresetById.get(openMenuPresetId) ?? null
     : null;
@@ -10039,6 +10153,36 @@ export default function App() {
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
   }, [activeTodoDetail, activeTodoDetailId]);
+  const handleActiveTodoDetailContentChange = useCallback((nextValue: string) => {
+    const next = formatContentCheckboxChange(activeTodoDetailDraftContent, nextValue);
+    setActiveTodoDetailDraftContent(next.value);
+
+    if (next.selection) {
+      setActiveTodoDetailContentSelection(next.selection);
+      requestAnimationFrame(() => {
+        todoDetailContentInputRef.current?.setNativeProps({ selection: next.selection });
+      });
+    }
+  }, [activeTodoDetailDraftContent]);
+  const toggleActiveTodoDetailContentCheckbox = useCallback(() => {
+    if (!activeTodoDetailCanEdit) {
+      return;
+    }
+
+    const next = toggleContentCheckboxAtSelection(
+      activeTodoDetailDraftContent,
+      activeTodoDetailContentSelection,
+    );
+
+    setActiveTodoDetailDraftContent(next.value);
+    setActiveTodoDetailContentSelection(next.selection);
+    requestAnimationFrame(() => todoDetailContentInputRef.current?.focus());
+    triggerSubtleHaptic();
+  }, [
+    activeTodoDetailCanEdit,
+    activeTodoDetailContentSelection,
+    activeTodoDetailDraftContent,
+  ]);
   const activeTodoDetailDraftTextForSave = useMemo(
     () => truncateTodoText(
       activeTodoDetailDraftText.trim().replace(/\s+/g, ' '),
@@ -10356,20 +10500,15 @@ export default function App() {
     visibleTodoListRows,
   ]);
   const currentQuickPresetSwipeItemIndex = useMemo(() => {
-    if (openQuickPresetNavIndex !== null) {
-      return quickPresetNavItems.findIndex((item) => item.navIndex === openQuickPresetNavIndex);
-    }
-
-    const activeQuickPresetId = openMenuPresetId ?? activeMenuPreset?.id ?? null;
-    if (!activeQuickPresetId) {
+    if (!focusedQuickPresetNavItem) {
       return -1;
     }
 
-    return quickPresetNavItems.findIndex((item) => item.preset?.id === activeQuickPresetId);
+    return quickPresetNavItems.findIndex(
+      (item) => item.slotNumber === focusedQuickPresetNavItem.slotNumber,
+    );
   }, [
-    activeMenuPreset?.id,
-    openMenuPresetId,
-    openQuickPresetNavIndex,
+    focusedQuickPresetNavItem,
     quickPresetNavItems,
   ]);
   const quickPresetSwipeContextAvailable =
@@ -13221,10 +13360,12 @@ export default function App() {
       haptic: false,
     });
     setOpenQuickPresetNavSlotNumber(slotNumber);
-    scrollTodoListToHeaderTop({
-      ensureAfterDataUpdate: true,
-      target: options.scrollTarget ?? 'top',
-    });
+    if (options.scrollTarget) {
+      scrollTodoListToHeaderTop({
+        ensureAfterDataUpdate: true,
+        target: options.scrollTarget,
+      });
+    }
 
     requestAnimationFrame(() => {
       searchInputRef.current?.blur();
@@ -13251,7 +13392,10 @@ export default function App() {
     if (phase === 'pressIn') {
       quickPresetNavPressStartedSwipeArmedRef.current = quickPresetScreenSwipeArmed;
       quickPresetNavPressInRef.current = preset.id;
-      if (quickPresetScreenSwipeArmed && openQuickPresetNavSlotNumber === slotNumber) {
+      if (
+        quickPresetScreenSwipeArmed &&
+        focusedQuickPresetNavItem?.slotNumber === slotNumber
+      ) {
         const lastTap = lastQuickPresetNavTapRef.current;
         const elapsed = timestamp - lastTap.timestamp;
         const isQuickSecondTap =
@@ -13260,9 +13404,7 @@ export default function App() {
           elapsed < QUICK_PRESET_NAV_DOUBLE_TAP_MS;
 
         if (isQuickSecondTap) {
-          applyQuickPresetNavPreset(preset, slotNumber, timestamp, {
-            scrollTarget: 'search',
-          });
+          applyQuickPresetNavPreset(preset, slotNumber, timestamp);
           return;
         }
 
@@ -13278,12 +13420,10 @@ export default function App() {
       return;
     }
 
-    applyQuickPresetNavPreset(preset, slotNumber, timestamp, {
-      scrollTarget: phase === 'pressIn' || quickPresetScreenSwipeArmed ? 'search' : 'top',
-    });
+    applyQuickPresetNavPreset(preset, slotNumber, timestamp);
   }, [
     applyQuickPresetNavPreset,
-    openQuickPresetNavSlotNumber,
+    focusedQuickPresetNavItem?.slotNumber,
     quickPresetScreenSwipeArmed,
   ]);
 
@@ -14217,14 +14357,20 @@ export default function App() {
     });
   }, []);
 
-  const openHeaderSearch = useCallback((options?: { focusInput?: boolean }) => {
+  const openHeaderSearch = useCallback((options?: {
+    focusInput?: boolean;
+    mode?: SearchMode;
+  }) => {
     clearNotificationTodoReveal();
-    setSearchMode('item');
+    setSearchMode(options?.mode ?? 'item');
     setNavTab('search');
     closeListMenuState();
     restoreSearchScroll();
     if (options?.focusInput !== false) {
       focusHeaderSearchInput();
+    } else {
+      searchInputRef.current?.blur();
+      Keyboard.dismiss();
     }
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, closeListMenuState, focusHeaderSearchInput, restoreSearchScroll]);
@@ -14309,8 +14455,9 @@ export default function App() {
     }
 
     if (tab === 'search' && navTab === 'search') {
-      setSearchMode('item');
-      focusHeaderSearchInput();
+      setSearchMode('preset');
+      searchInputRef.current?.blur();
+      Keyboard.dismiss();
       triggerSubtleHaptic();
       return;
     }
@@ -14370,7 +14517,7 @@ export default function App() {
         setActiveTodoDetailId(null);
         break;
       case 'search':
-        openHeaderSearch();
+        openHeaderSearch({ focusInput: false, mode: 'preset' });
         return;
       default:
         break;
@@ -14431,7 +14578,7 @@ export default function App() {
     lastSearchNavTapRef.current = 0;
 
     if (navTab !== 'search') {
-      openHeaderSearch({ focusInput: false });
+      openHeaderSearch({ focusInput: false, mode: 'preset' });
     }
 
     const hasSearchSections =
@@ -15390,44 +15537,6 @@ export default function App() {
     todoListRestingOffset,
     visibleTodoListRows,
   ]);
-
-  useEffect(() => {
-    if (!newlyCreatedTodoHighlightId) {
-      return;
-    }
-
-    const highlightedId = newlyCreatedTodoHighlightId;
-    const isVisible = visibleTodoListRows.some((row) => (
-      (row.type === 'todo' && row.todo.id === highlightedId) ||
-      (
-        row.type === 'groupedTodoBatch' &&
-        row.todos.some((todo) => todo.id === highlightedId)
-      )
-    ));
-
-    if (!isVisible) {
-      return;
-    }
-
-    let cancelled = false;
-    const scrollHighlightedTodoIntoView = () => {
-      if (!cancelled) {
-        scrollTodoAboveMenu(highlightedId);
-      }
-    };
-
-    const frame = requestAnimationFrame(scrollHighlightedTodoIntoView);
-    const retryTimers = [
-      setTimeout(scrollHighlightedTodoIntoView, 120),
-      setTimeout(scrollHighlightedTodoIntoView, 320),
-    ];
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(frame);
-      retryTimers.forEach(clearTimeout);
-    };
-  }, [newlyCreatedTodoHighlightId, scrollTodoAboveMenu, visibleTodoListRows]);
 
   const requestTodoMenuTargetScroll = useCallback((
     id: string,
@@ -16743,8 +16852,8 @@ export default function App() {
 
                             const enteringSearch = navTab !== 'search';
                             clearNotificationTodoReveal();
-                            if (enteringSearch) {
-                              setSearchMode('item');
+                            if (searchMode !== 'item') {
+                              handleSearchModeChange('item');
                             }
                             setNavTab('search');
                             if (enteringSearch) {
@@ -16857,10 +16966,10 @@ export default function App() {
         ]}>
           <QuickPresetNav
             accentColor={NAV_ACCENT}
-            activePresetId={activeMenuPreset?.id ?? null}
             bottomOffset={BOTTOM_NAV_RESERVED_HEIGHT}
             detail={heldQuickPresetNavDetail}
             emptyColor={THEME_TEXT_TERTIARY}
+            focusedSlotNumber={focusedQuickPresetNavItem?.slotNumber ?? null}
             inactiveColor={NAV_ICON_INACTIVE}
             isSearchTab={navTab === 'search' || navTab === 'notifications'}
             items={quickPresetNavItems}
@@ -16873,8 +16982,6 @@ export default function App() {
                 current === slotNumber ? null : current
               ));
             }}
-            openPresetId={openMenuPreset?.id ?? null}
-            openSlotNumber={openQuickPresetNavSlotNumber}
             pressDelayMs={QUICK_PRESET_NAV_PRESS_DELAY_MS}
             selectedBackgroundColor={THEME_ACCENT_SOFT}
           />
@@ -16934,7 +17041,7 @@ export default function App() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Opens search; second tap focuses search field; quick double tap clears search text; press and hold expands or collapses all search sections"
+              accessibilityHint="Opens preset and list search; tap the search field for item search; quick double tap clears search text; press and hold expands or collapses all search sections"
               accessibilityLabel="Search"
               accessibilityState={{ selected: navTab === 'search' }}
               onLongPress={handleSearchNavLongPress}
@@ -17964,7 +18071,7 @@ export default function App() {
                     autoCapitalize="sentences"
                     autoCorrect
                     multiline
-                    onChangeText={setActiveTodoDetailDraftContent}
+                    onChangeText={handleActiveTodoDetailContentChange}
                     onSelectionChange={(event) => {
                       setActiveTodoDetailContentSelection(event.nativeEvent.selection);
                     }}
@@ -17986,6 +18093,26 @@ export default function App() {
                   />
                 </View>
                 <View style={styles.todoDetailFooterActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Add or toggle content checkbox"
+                    accessibilityState={{ disabled: !activeTodoDetailCanEdit }}
+                    disabled={!activeTodoDetailCanEdit}
+                    hitSlop={8}
+                    onPress={toggleActiveTodoDetailContentCheckbox}
+                    style={({ pressed }) => [
+                      styles.todoDetailCloseButton,
+                      styles.todoDetailCheckboxButton,
+                      !activeTodoDetailCanEdit && styles.todoDetailSaveButtonDisabled,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons
+                      color={activeTodoDetailCanEdit ? THEME_ACCENT : '#AFA8A0'}
+                      name="checkbox-outline"
+                      size={19}
+                    />
+                  </Pressable>
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={
@@ -18470,7 +18597,10 @@ export default function App() {
                         autoCapitalize="sentences"
                         autoCorrect
                         multiline
-                        onChangeText={setCreateDraftContent}
+                        onChangeText={handleCreateDraftContentChange}
+                        onSelectionChange={(event) => {
+                          createDraftContentSelectionRef.current = event.nativeEvent.selection;
+                        }}
                         placeholder="Content"
                         placeholderTextColor="#B5ADA5"
                         selectionColor="#2F6F62"
@@ -18505,6 +18635,21 @@ export default function App() {
                     showsHorizontalScrollIndicator={false}
                     style={styles.createDrawerToolbarScroll}
                   >
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Add or toggle content checkbox"
+                      onPress={toggleCreateDraftContentCheckbox}
+                      style={({ pressed }) => [
+                        styles.createDrawerToolbarButton,
+                        pressed && styles.createDrawerToolbarButtonPressed,
+                      ]}
+                    >
+                      <Ionicons
+                        color={THEME_ACCENT}
+                        name="checkbox-outline"
+                        size={22}
+                      />
+                    </Pressable>
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Date: ${createDrawerDateLabel}`}
@@ -20441,6 +20586,9 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     paddingHorizontal: 18,
     paddingTop: 12,
+  },
+  todoDetailCheckboxButton: {
+    marginRight: 'auto',
   },
   todoDetailTitleInput: {
     color: THEME_TEXT,

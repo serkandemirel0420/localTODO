@@ -186,10 +186,19 @@ export const normalizeTodoText = (value: string) =>
     .toLocaleLowerCase()
     .trim();
 
+export const TODO_CONTENT_CHECKBOX_UNCHECKED = '☐';
+export const TODO_CONTENT_CHECKBOX_CHECKED = '☑';
+
+export const formatTodoContentCheckboxShortcuts = (value: string) =>
+  value.replace(
+    /(^|\n)([\t ]*)-[\t ]*([^\s\n][^\n]*)/g,
+    (_match, lineStart: string, indentation: string, content: string) => (
+      `${lineStart}${indentation}${TODO_CONTENT_CHECKBOX_UNCHECKED} ${content}`
+    ),
+  );
+
 export const normalizeTodoContent = (value: string) =>
-  value
-    .replace(/\r\n?/g, '\n')
-    .trim();
+  formatTodoContentCheckboxShortcuts(value.replace(/\r\n?/g, '\n')).trim();
 
 export const formatTagLabel = (value: string) => {
   const trimmed = value.trim();

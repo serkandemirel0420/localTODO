@@ -21,10 +21,10 @@ export type QuickPresetNavDetail = {
 
 type QuickPresetNavProps = {
   accentColor: string;
-  activePresetId: string | null;
   bottomOffset: number;
   detail: QuickPresetNavDetail | null;
   emptyColor: string;
+  focusedSlotNumber: number | null;
   inactiveColor: string;
   isSearchTab: boolean;
   items: QuickPresetNavItem[];
@@ -35,8 +35,6 @@ type QuickPresetNavProps = {
     phase: 'press' | 'pressIn',
   ) => void;
   onReleaseSlot: (slotNumber: number) => void;
-  openPresetId: string | null;
-  openSlotNumber: number | null;
   pressDelayMs: number;
   selectedBackgroundColor: string;
 };
@@ -52,37 +50,28 @@ const QUICK_PRESET_NAV_HORIZONTAL_PADDING = 16;
 // The quick nav renders saved preset slots. Lists have their own Settings surface.
 export function QuickPresetNav({
   accentColor,
-  activePresetId,
   bottomOffset,
   detail,
   emptyColor,
+  focusedSlotNumber,
   inactiveColor,
   isSearchTab,
   items,
   onLongPressSlot,
   onPressItem,
   onReleaseSlot,
-  openPresetId,
-  openSlotNumber,
   pressDelayMs,
   selectedBackgroundColor,
 }: QuickPresetNavProps) {
   const scrollRef = React.useRef<ScrollView | null>(null);
   const scrollOffsetRef = React.useRef(0);
   const [scrollViewportWidth, setScrollViewportWidth] = React.useState(0);
-  const isItemSelected = React.useCallback((item: QuickPresetNavItem) => {
-    const openedFromThisSlot = Boolean(
-      item.preset && openSlotNumber === item.slotNumber && openPresetId,
-    );
-
-    return !isSearchTab && Boolean(
-      item.preset &&
-        (
-          openedFromThisSlot ||
-          (!openSlotNumber && (openPresetId ?? activePresetId) === item.preset.id)
-        ),
-    );
-  }, [activePresetId, isSearchTab, openPresetId, openSlotNumber]);
+  const isItemSelected = React.useCallback(
+    (item: QuickPresetNavItem) => (
+      !isSearchTab && focusedSlotNumber === item.slotNumber
+    ),
+    [focusedSlotNumber, isSearchTab],
+  );
   const selectedItemIndex = React.useMemo(
     () => items.findIndex((item) => isItemSelected(item)),
     [isItemSelected, items],

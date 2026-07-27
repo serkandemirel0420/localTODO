@@ -1,14 +1,14 @@
 import {
   collection,
-  deleteDoc,
+  deleteField,
   doc,
+  FieldPath,
   getDoc,
   getDocs,
   setDoc,
-  writeBatch,
+  updateDoc,
   type DocumentData,
   type Firestore,
-  type WriteBatch,
 } from 'firebase/firestore';
 
 import {
@@ -44,8 +44,7 @@ import {
   markRemoteFirebaseWrite,
 } from './firebaseSyncMetaStore';
 
-const FIREBASE_SCHEMA_VERSION = 1;
-const FIRESTORE_BATCH_LIMIT = 450;
+const FIREBASE_SCHEMA_VERSION = 2;
 const FIREBASE_WRITE_RETRY_BASE_DELAY_MS = 1000;
 const FIREBASE_WRITE_RETRY_MAX_DELAY_MS = 30000;
 
@@ -167,9 +166,6 @@ const userDocRef = (database: Firestore, userId: string) =>
 const todosCollectionRef = (database: Firestore, userId: string) =>
   collection(userDocRef(database, userId), 'todos');
 
-const todoDocRef = (database: Firestore, userId: string, id: string) =>
-  doc(todosCollectionRef(database, userId), todoDocumentId(id));
-
 const metaDocRef = (database: Firestore, userId: string, id: string) =>
   doc(userDocRef(database, userId), 'meta', id);
 
@@ -181,6 +177,9 @@ const settingsDocRef = (database: Firestore, userId: string) =>
 
 const notificationLogDocRef = (database: Firestore, userId: string) =>
   metaDocRef(database, userId, 'notificationLog');
+
+const todosSnapshotDocRef = (database: Firestore, userId: string) =>
+  metaDocRef(database, userId, 'todosSnapshot');
 
 const touchRemoteMeta = async (
   database: Firestore,
@@ -229,26 +228,19 @@ const enqueueFirebaseWrite = (write: (localChangeAt: number) => Promise<void>) =
   return firebaseWriteQueue;
 };
 
-const commitBatchIfNeeded = async (
-  batchState: {
-    batch: WriteBatch;
-    count: number;
-  },
-  database: Firestore,
-) => {
-  if (batchState.count < FIRESTORE_BATCH_LIMIT) {
-    return;
+const toTodoSnapshotMap = (todos: Todo[]) => Object.fromEntries(
+  todos.map((todo) => [todoDocumentId(todo.id), toFirestoreJson(cloneTodo(todo))]),
+);
+
+const normalizeTodosSnapshot = (data: DocumentData | undefined) => {
+  if (!data || typeof data.todos !== 'object' || data.todos === null) {
+    return null;
   }
 
-  await batchState.batch.commit();
-  batchState.batch = writeBatch(database);
-  batchState.count = 0;
-};
-
-const commitBatch = async (batchState: { batch: WriteBatch; count: number }) => {
-  if (batchState.count > 0) {
-    await batchState.batch.commit();
-  }
+  return Object.values(data.todos as Record<string, unknown>)
+    .map(normalizeTodo)
+    .filter((todo): todo is Todo => Boolean(todo))
+    .filter((todo) => !isDevTestTodo(todo));
 };
 
 const writeTodosSnapshotForUser = async (
@@ -256,31 +248,14 @@ const writeTodosSnapshotForUser = async (
   userId: string,
   todos: Todo[],
 ) => {
-  const existingTodos = await getDocs(todosCollectionRef(database, userId));
-  const batchState = {
-    batch: writeBatch(database),
-    count: 0,
-  };
-
-  existingTodos.forEach((todoSnapshot) => {
-    batchState.batch.delete(todoSnapshot.ref);
-    batchState.count += 1;
-  });
-
-  for (const todo of todos.map(cloneTodo)) {
-    await commitBatchIfNeeded(batchState, database);
-    batchState.batch.set(
-      todoDocRef(database, userId, todo.id),
-      {
-        ...toFirestoreJson(todo),
-        schemaVersion: FIREBASE_SCHEMA_VERSION,
-      },
-      { merge: false },
-    );
-    batchState.count += 1;
-  }
-
-  await commitBatch(batchState);
+  await setDoc(
+    todosSnapshotDocRef(database, userId),
+    {
+      schemaVersion: FIREBASE_SCHEMA_VERSION,
+      todos: toTodoSnapshotMap(todos),
+    },
+    { merge: false },
+  );
 };
 
 const writeFirebaseAppDataSnapshotForUser = async (
@@ -340,33 +315,38 @@ const loadFirebaseRemoteMetaForUser = async (userId: string) => {
 
 const loadFirebaseAppDataForUser = async (
   userId: string,
+  knownMeta?: FirebaseRemoteMeta | null,
 ): Promise<{
   meta: FirebaseRemoteMeta | null;
   snapshot: FirebaseAppDataSnapshot;
 }> => {
   const database = getLocalTodoFirestore();
   const [
-    todosSnapshot,
+    compactTodosSnapshot,
     settingsSnapshot,
     notificationLogSnapshot,
-    syncMetaSnapshot,
   ] = await Promise.all([
-    getDocs(todosCollectionRef(database, userId)),
+    getDoc(todosSnapshotDocRef(database, userId)),
     getDoc(settingsDocRef(database, userId)),
     getDoc(notificationLogDocRef(database, userId)),
-    getDoc(syncMetaDocRef(database, userId)),
   ]);
-  const todos = todosSnapshot.docs
+  const compactTodos = compactTodosSnapshot.exists()
+    ? normalizeTodosSnapshot(compactTodosSnapshot.data())
+    : null;
+  const legacyTodosSnapshot = compactTodos === null
+    ? await getDocs(todosCollectionRef(database, userId))
+    : null;
+  const todos = (compactTodos ?? legacyTodosSnapshot?.docs
     .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
     .filter((todo): todo is Todo => Boolean(todo))
-    .filter((todo) => !isDevTestTodo(todo))
+    .filter((todo) => !isDevTestTodo(todo)) ?? [])
     .sort((first, second) =>
       Number(second.pinned) - Number(first.pinned) || second.createdAt - first.createdAt
     );
   const notificationLogData = notificationLogSnapshot.data();
 
   return {
-    meta: normalizeRemoteMeta(syncMetaSnapshot.data()),
+    meta: knownMeta ?? await loadFirebaseRemoteMetaForUser(userId),
     snapshot: {
       notificationLogEntries: normalizeNotificationLogEntries(notificationLogData?.entries),
       settings: sanitizeFirebaseSettings(normalizeAppSettings(settingsSnapshot.data())),
@@ -383,16 +363,22 @@ const loadFirebaseTodosForUser = async (
 }> => {
   const database = getLocalTodoFirestore();
   const [
-    todosSnapshot,
+    compactTodosSnapshot,
     syncMetaSnapshot,
   ] = await Promise.all([
-    getDocs(todosCollectionRef(database, userId)),
+    getDoc(todosSnapshotDocRef(database, userId)),
     getDoc(syncMetaDocRef(database, userId)),
   ]);
-  const todos = todosSnapshot.docs
+  const compactTodos = compactTodosSnapshot.exists()
+    ? normalizeTodosSnapshot(compactTodosSnapshot.data())
+    : null;
+  const legacyTodosSnapshot = compactTodos === null
+    ? await getDocs(todosCollectionRef(database, userId))
+    : null;
+  const todos = compactTodos ?? legacyTodosSnapshot?.docs
     .map((todoSnapshot) => normalizeTodo(todoSnapshot.data()))
     .filter((todo): todo is Todo => Boolean(todo))
-    .filter((todo) => !isDevTestTodo(todo));
+    .filter((todo) => !isDevTestTodo(todo)) ?? [];
 
   return {
     meta: normalizeRemoteMeta(syncMetaSnapshot.data()),
@@ -464,6 +450,27 @@ const mergeAppDataSnapshots = (
   };
 };
 
+const mergeTodosSnapshotFields = async (
+  database: Firestore,
+  userId: string,
+  todos: Record<string, unknown>,
+  todoFieldPaths: FieldPath[],
+) => {
+  await setDoc(
+    todosSnapshotDocRef(database, userId),
+    {
+      schemaVersion: FIREBASE_SCHEMA_VERSION,
+      todos,
+    },
+    {
+      mergeFields: [
+        'schemaVersion',
+        ...todoFieldPaths,
+      ],
+    },
+  );
+};
+
 export const queueFirebaseTodoUpsert = (todo: Todo) => {
   if (isDevTestTodo(todo)) {
     return Promise.resolve();
@@ -472,14 +479,14 @@ export const queueFirebaseTodoUpsert = (todo: Todo) => {
   return enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
+    const todoKey = todoDocumentId(todo.id);
 
-    await setDoc(
-      todoDocRef(database, userId, todo.id),
-      {
-        ...toFirestoreJson(cloneTodo(todo)),
-        schemaVersion: FIREBASE_SCHEMA_VERSION,
-      },
-      { merge: false },
+    await updateDoc(
+      todosSnapshotDocRef(database, userId),
+      new FieldPath('todos', todoKey),
+      toFirestoreJson(cloneTodo(todo)),
+      'schemaVersion',
+      FIREBASE_SCHEMA_VERSION,
     );
     await touchRemoteMeta(database, userId, 'todo-upsert', localChangeAt);
   });
@@ -489,8 +496,15 @@ export const queueFirebaseTodoDelete = (id: string) => (
   enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
+    const todoKey = todoDocumentId(id);
 
-    await deleteDoc(todoDocRef(database, userId, id));
+    await updateDoc(
+      todosSnapshotDocRef(database, userId),
+      new FieldPath('todos', todoKey),
+      deleteField(),
+      'schemaVersion',
+      FIREBASE_SCHEMA_VERSION,
+    );
     await touchRemoteMeta(database, userId, 'todo-delete', localChangeAt);
   })
 );
@@ -503,11 +517,14 @@ export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => {
   return enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
+    const todoKey = todoDocumentId(id);
 
-    await setDoc(
-      todoDocRef(database, userId, id),
-      { done, schemaVersion: FIREBASE_SCHEMA_VERSION },
-      { merge: true },
+    await updateDoc(
+      todosSnapshotDocRef(database, userId),
+      new FieldPath('todos', todoKey, 'done'),
+      done,
+      'schemaVersion',
+      FIREBASE_SCHEMA_VERSION,
     );
     await touchRemoteMeta(database, userId, 'todo-done', localChangeAt);
   });
@@ -521,14 +538,14 @@ export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filter
   return enqueueFirebaseWrite(async (localChangeAt) => {
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
+    const todoKey = todoDocumentId(id);
 
-    await setDoc(
-      todoDocRef(database, userId, id),
-      {
-        filters: toFirestoreJson(filters),
-        schemaVersion: FIREBASE_SCHEMA_VERSION,
-      },
-      { merge: true },
+    await updateDoc(
+      todosSnapshotDocRef(database, userId),
+      new FieldPath('todos', todoKey, 'filters'),
+      toFirestoreJson(filters),
+      'schemaVersion',
+      FIREBASE_SCHEMA_VERSION,
     );
     await touchRemoteMeta(database, userId, 'todo-filters', localChangeAt);
   });
@@ -542,28 +559,16 @@ export const queueFirebaseTodosUpsertMany = (todos: Todo[]) => {
   }
 
   return enqueueFirebaseWrite(async (localChangeAt) => {
-
     const userId = await getLocalTodoFirebaseDataUserId();
     const database = getLocalTodoFirestore();
-    const batchState = {
-      batch: writeBatch(database),
-      count: 0,
-    };
+    const todos = toTodoSnapshotMap(sanitizedTodos);
 
-    for (const todo of sanitizedTodos.map(cloneTodo)) {
-      await commitBatchIfNeeded(batchState, database);
-      batchState.batch.set(
-        todoDocRef(database, userId, todo.id),
-        {
-          ...toFirestoreJson(todo),
-          schemaVersion: FIREBASE_SCHEMA_VERSION,
-        },
-        { merge: false },
-      );
-      batchState.count += 1;
-    }
-
-    await commitBatch(batchState);
+    await mergeTodosSnapshotFields(
+      database,
+      userId,
+      todos,
+      Object.keys(todos).map((todoKey) => new FieldPath('todos', todoKey)),
+    );
     await touchRemoteMeta(database, userId, 'todos-upsert-many', localChangeAt);
   });
 };
@@ -651,6 +656,7 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
   );
   const remoteUnchanged = (
     remoteMeta !== null &&
+    remoteMeta.schemaVersion >= FIREBASE_SCHEMA_VERSION &&
     remoteUpdatedAt > 0 &&
     syncMeta.firebaseUserId === userId &&
     remoteUpdatedAt <= lastKnownRemoteAt &&
@@ -682,7 +688,7 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
     };
   }
 
-  const remote = await loadFirebaseAppDataForUser(userId);
+  const remote = await loadFirebaseAppDataForUser(userId, remoteMeta);
   const loadedRemoteUpdatedAt = remote.meta?.updatedAt ?? remoteUpdatedAt;
   const remoteHasData = (
     remote.snapshot.todos.length > 0 ||
@@ -742,6 +748,25 @@ export const syncFirebaseAppDataFromLocalSnapshot = async (
     };
   }
 
+  if (
+    remoteMeta !== null &&
+    remoteMeta.schemaVersion < FIREBASE_SCHEMA_VERSION &&
+    remoteHasData
+  ) {
+    const migratedAt = await writeFirebaseAppDataSnapshotForUser(
+      userId,
+      remote.snapshot,
+      'migrate-compact-todo-snapshot',
+      syncMeta.lastLocalChangeAt,
+    );
+    return {
+      firebaseUserId: userId,
+      remoteUpdatedAt: migratedAt,
+      snapshot: remote.snapshot,
+      status: 'uploaded-local',
+    };
+  }
+
   await markRemoteFirebaseRead(userId, loadedRemoteUpdatedAt);
 
   return {
@@ -776,6 +801,7 @@ export const loadFirebaseAppDataFromBackend = async (): Promise<FirebaseAppDataP
 
   if (
     remoteMeta !== null &&
+    remoteMeta.schemaVersion >= FIREBASE_SCHEMA_VERSION &&
     remoteUpdatedAt > 0 &&
     syncMeta.firebaseUserId === userId &&
     remoteUpdatedAt <= lastKnownRemoteAt
@@ -784,11 +810,30 @@ export const loadFirebaseAppDataFromBackend = async (): Promise<FirebaseAppDataP
     return { reason: 'remote-unchanged', status: 'skipped' };
   }
 
-  const remote = await loadFirebaseAppDataForUser(userId);
+  const remote = await loadFirebaseAppDataForUser(userId, remoteMeta);
   const loadedRemoteUpdatedAt = remote.meta?.updatedAt ?? remoteUpdatedAt;
 
   if (!remote.meta && !localSnapshotHasUserData(remote.snapshot)) {
     return { reason: 'no-remote-data', status: 'skipped' };
+  }
+
+  if (
+    remoteMeta !== null &&
+    remoteMeta.schemaVersion < FIREBASE_SCHEMA_VERSION
+  ) {
+    const migratedAt = await writeFirebaseAppDataSnapshotForUser(
+      userId,
+      remote.snapshot,
+      'migrate-compact-todo-snapshot',
+    );
+    await markRemoteFirebaseRead(userId, migratedAt);
+
+    return {
+      firebaseUserId: userId,
+      remoteUpdatedAt: migratedAt,
+      snapshot: remote.snapshot,
+      status: 'loaded-remote',
+    };
   }
 
   await markRemoteFirebaseRead(userId, loadedRemoteUpdatedAt);

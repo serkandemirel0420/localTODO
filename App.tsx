@@ -5915,14 +5915,15 @@ export default function App() {
       return;
     }
 
-    // Loading the local settings snapshot is hydration, not a user mutation.
-    // Do not let the initial autosave masquerade as a pending local Firebase edit.
-    if (!settingsAutoSaveInitializedRef.current) {
-      settingsAutoSaveInitializedRef.current = true;
-      return;
-    }
-
     const saveTimer = setTimeout(() => {
+      // Settings hydration spans multiple renders. Wait until the state has
+      // settled before arming autosave so none of those renders masquerades as
+      // a user mutation and triggers a large startup Firebase write.
+      if (!settingsAutoSaveInitializedRef.current) {
+        settingsAutoSaveInitializedRef.current = true;
+        return;
+      }
+
       persistAppSettings();
     }, SETTINGS_SAVE_DEBOUNCE_MS);
 

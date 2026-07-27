@@ -128,6 +128,7 @@ export const getLocalTodoFirestore = () => {
     const settings: FirestoreSettings = {
       ignoreUndefinedProperties: true,
       localCache: Platform.OS === 'web' ? persistentLocalCache() : memoryLocalCache(),
+      ...(Platform.OS === 'web' ? {} : { experimentalForceLongPolling: true }),
     };
 
     try {

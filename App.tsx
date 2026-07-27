@@ -18393,18 +18393,20 @@ export default function App() {
                         </Pressable>
                       );
                     })}
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Close new todo"
-                        hitSlop={8}
-                        onPress={closeCreateDrawer}
-                        style={({ pressed }) => [
-                          styles.createDrawerPickerCloseButton,
-                          pressed && styles.createDrawerToolbarButtonPressed,
-                        ]}
-                      >
-                        <Ionicons color="#5F6368" name="close" size={24} />
-                      </Pressable>
+                      {createDrawerPicker !== 'priority' ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Close new todo"
+                          hitSlop={8}
+                          onPress={closeCreateDrawer}
+                          style={({ pressed }) => [
+                            styles.createDrawerPickerCloseButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color="#5F6368" name="close" size={24} />
+                        </Pressable>
+                      ) : null}
                     </ScrollView>
                   </>
                 ) : (

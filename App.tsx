@@ -50,10 +50,7 @@ import {
   type PanGestureHandlerGestureEvent,
   type PanGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
-import {
-  KeyboardStickyView,
-  useKeyboardAnimation,
-} from 'react-native-keyboard-controller';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import {
   ReminderTimeModal,
@@ -1524,7 +1521,8 @@ const QUICK_PRESET_SCREEN_SWIPE_FAIL_OFFSET_Y: [number, number] = [-28, 28];
 const QUICK_PRESET_EMPTY_AREA_FLASH_MS = 140;
 const QUICK_PRESET_EMPTY_AREA_FLASH_COLOR = '#EEF1F4';
 const MENU_DISMISS_RELEASE = 52;
-const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 116;
+// Drag handle + picker margin + toolbar margin/height + drawer bottom padding.
+const CREATE_DRAWER_LIST_PICKER_CHROME_HEIGHT = 58 + 4 + 10 + 48 + 24;
 
 const formatTodoDetailDraftContentForEditing = (content: string) => {
   const normalized = normalizeTodoContent(content);
@@ -4503,7 +4501,7 @@ type CreateCommandPaletteProps = {
   inputRef: React.RefObject<TextInput | null>;
   onClose: () => void;
   onQueryChange: (value: string) => void;
-  onSelect: (command: CreateCommandItem) => void;
+  onSelect: (command: CreateCommandItem) => boolean;
   query: string;
 };
 
@@ -4576,6 +4574,18 @@ function CreateCommandPalette({
     resultsScrollRef.current?.scrollTo({ animated: false, y: 0 });
   }, [activeShortcut, commands, query]);
 
+  const selectCommand = (command: CreateCommandItem) => {
+    ignoreNextShortcutSpaceChangeRef.current = false;
+    focusFirstAfterShortcutRef.current = false;
+    setFocusedCommandIndex(-1);
+    resultsScrollRef.current?.scrollTo({ animated: false, y: 0 });
+    onQueryChange('');
+
+    if (onSelect(command)) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  };
+
   return (
     <View
       accessibilityLabel="Quick details menu"
@@ -4617,15 +4627,8 @@ function CreateCommandPalette({
               return;
             }
 
-            if (
-              event.nativeEvent.key === 'Backspace'
-              && !normalizedQuery
-              && activeShortcut
-            ) {
-              focusFirstAfterShortcutRef.current = false;
-              setActiveShortcut(null);
-              setFocusedCommandIndex(-1);
-              resultsScrollRef.current?.scrollTo({ animated: false, y: 0 });
+            if (event.nativeEvent.key === 'Backspace' && !normalizedQuery) {
+              onClose();
               return;
             }
 
@@ -4641,7 +4644,7 @@ function CreateCommandPalette({
           }}
           onSubmitEditing={() => {
             if (focusedCommand) {
-              onSelect(focusedCommand);
+              selectCommand(focusedCommand);
             }
           }}
           placeholder="Search details…"
@@ -4649,6 +4652,7 @@ function CreateCommandPalette({
           returnKeyType="done"
           selectionColor={THEME_ACCENT}
           style={styles.createCommandPaletteSearchInput}
+          submitBehavior="submit"
           value={query}
         />
         <View style={styles.createCommandPaletteSpaceKey}>
@@ -4725,7 +4729,7 @@ function CreateCommandPalette({
               accessibilityRole="button"
               accessibilityState={{ selected: focused }}
               key={command.id}
-              onPress={() => onSelect(command)}
+              onPress={() => selectCommand(command)}
               style={({ pressed }) => [
                 styles.createCommandPaletteRow,
                 focused && styles.createCommandPaletteRowFocused,
@@ -4829,7 +4833,6 @@ function CreateDrawerHost({
 
 export default function App() {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const { progress: keyboardAnimationProgress } = useKeyboardAnimation();
   const todoTextMaxLength = useMemo(
     () => getTodoTextMaxLength(windowWidth),
     [windowWidth],
@@ -4883,6 +4886,8 @@ export default function App() {
   const [startupDataReady, setStartupDataReady] = useState(false);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
+  const createDrawerVisibleRef = useRef(createDrawerVisible);
+  createDrawerVisibleRef.current = createDrawerVisible;
   const [createDrawerExpanded, setCreateDrawerExpanded] = useState(false);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
@@ -5103,8 +5108,8 @@ export default function App() {
   const createCommandRestoreAfterPickerRef = useRef(false);
   const createContentInputRef = useRef<TextInput>(null);
   const createDrawerHostRef = useRef<View>(null);
-  const createDrawerKeepOpenOnKeyboardHideRef = useRef(false);
-  const createDrawerOpeningRef = useRef(false);
+  const createDrawerFocusPendingRef = useRef(false);
+  const createDrawerPickerRef = useRef<CreateDrawerPicker | null>(null);
   const createInputRef = useRef<TextInput>(null);
   const createDraftSelectionRef = useRef({ end: 0, start: 0 });
   const createDraftTextValueRef = useRef(createDraftText);
@@ -5205,6 +5210,7 @@ export default function App() {
   const quickPresetNavPressInRef = useRef<string | null>(null);
   const quickPresetScreenSwipeHandledRef = useRef(false);
   const quickPresetEmptyAreaFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quickPresetEmptyAreaFlashSuppressedUntilRef = useRef(0);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
   const savedSearchScrollOffsetRef = useRef<number | null>(null);
   const searchScrollOffsetsByModeRef = useRef<Record<SearchMode, number | null>>({
@@ -7302,40 +7308,14 @@ export default function App() {
     }, 0);
   }, []);
 
-  const revealMountedCreateDrawer = useCallback(() => {
-    if (Platform.OS !== 'android') {
-      return;
+  useLayoutEffect(() => {
+    if (!createDrawerVisible || createDrawerPicker) {
+      return undefined;
     }
 
-    createDrawerHostRef.current?.setNativeProps({
-      pointerEvents: 'box-none',
-      style: { opacity: 1 },
-    });
-  }, []);
-
-  const hideMountedCreateDrawer = useCallback(() => {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-
-    createDrawerHostRef.current?.setNativeProps({
-      pointerEvents: 'none',
-      style: { opacity: 0 },
-    });
-  }, []);
-
-  const focusMountedCreateDrawerInput = useCallback(() => {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-
-    if (createInputFocusTimerRef.current) {
-      clearTimeout(createInputFocusTimerRef.current);
-      createInputFocusTimerRef.current = null;
-    }
-
-    createInputRef.current?.focus();
-  }, []);
+    const frame = requestAnimationFrame(() => createInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [createDrawerPicker, createDrawerVisible]);
 
   useEffect(() => () => {
     if (createInputFocusTimerRef.current) {
@@ -7344,17 +7324,19 @@ export default function App() {
   }, []);
 
   const backToCreateDrawerInput = useCallback(() => {
-    createDrawerKeepOpenOnKeyboardHideRef.current = true;
-    Keyboard.dismiss();
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
     setHabitReminderModalVisible(false);
     setRepeatReminderModalVisible(false);
+    createDrawerFocusPendingRef.current = true;
+    createDrawerPickerRef.current = null;
     setCreateDrawerPicker(null);
-    scheduleCreateDrawerInputFocus();
-  }, [scheduleCreateDrawerInputFocus]);
+  }, []);
 
-  const resetCreateDrawerState = useCallback((filters = lastCreateTodoFilters) => {
+  const resetCreateDrawerState = useCallback((
+    filters = lastCreateTodoFilters,
+    allowEmptyFilters = false,
+  ) => {
     if (createInputFocusTimerRef.current) {
       clearTimeout(createInputFocusTimerRef.current);
       createInputFocusTimerRef.current = null;
@@ -7363,8 +7345,11 @@ export default function App() {
     createCommandRestoreAfterPickerRef.current = false;
     createCommandReturnSelectionRef.current = { end: 0, start: 0 };
     createDraftSelectionRef.current = { end: 0, start: 0 };
-    const nextFilters = getRememberedCreateDraftFilters(listMenuTree, filters);
-    const nextTags = normalizeTodoFilters(filters).tag;
+    const normalizedFilters = normalizeTodoFilters(filters);
+    const nextFilters = allowEmptyFilters
+      ? normalizedFilters
+      : getRememberedCreateDraftFilters(listMenuTree, filters);
+    const nextTags = normalizedFilters.tag;
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
@@ -7381,29 +7366,9 @@ export default function App() {
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
 
-  useEffect(() => {
-    if (
-      Platform.OS !== 'android' ||
-      createDrawerVisible ||
-      createDrawerOpeningRef.current
-    ) {
-      return;
-    }
-
-    const seedFilters = hasRememberedCreateDraftFilters(listMenuTree, selectedFilters)
-      ? selectedFilters
-      : lastCreateTodoFilters;
-    resetCreateDrawerState(seedFilters);
-  }, [
-    createDrawerVisible,
-    lastCreateTodoFilters,
-    listMenuTree,
-    resetCreateDrawerState,
-    selectedFilters,
-  ]);
-
   const focusCreateTitleAtCommandCursor = useCallback(() => {
     const selection = createCommandReturnSelectionRef.current;
+    createDrawerFocusPendingRef.current = true;
     if (createInputFocusTimerRef.current) {
       clearTimeout(createInputFocusTimerRef.current);
     }
@@ -7433,8 +7398,8 @@ export default function App() {
     }
 
     createCommandRestoreAfterPickerRef.current = false;
-    focusCreateTitleAtCommandCursor();
-  }, [focusCreateTitleAtCommandCursor]);
+    requestAnimationFrame(() => createCommandInputRef.current?.focus());
+  }, []);
 
   const closeCreateCommandPalette = useCallback((restoreFocus = true) => {
     setCreateCommandPaletteVisible(false);
@@ -7626,6 +7591,24 @@ export default function App() {
     };
   }, [mergeNotificationLog]);
 
+  const closeCreateDrawer = useCallback(() => {
+    createDrawerVisibleRef.current = false;
+    createDrawerFocusPendingRef.current = false;
+    createDrawerPickerRef.current = null;
+    if (Platform.OS === 'android') {
+      // Release hit testing before React commits the hidden state so the first
+      // tap after closing can reach the preset's empty canvas.
+      createDrawerHostRef.current?.setNativeProps({ pointerEvents: 'none' });
+    }
+    createInputRef.current?.blur();
+    createContentInputRef.current?.blur();
+    createCommandInputRef.current?.blur();
+    Keyboard.dismiss();
+    setCreateDrawerVisible(false);
+    setCreateDrawerPicker(null);
+    resetCreateDrawerState();
+  }, [resetCreateDrawerState]);
+
   const goBackInMenu = useCallback(() => {
     if (activeTodoDetailId) {
       closeTodoDetailModal();
@@ -7666,9 +7649,7 @@ export default function App() {
         return true;
       }
 
-      setCreateDrawerVisible(false);
-      resetCreateDrawerState();
-      Keyboard.dismiss();
+      closeCreateDrawer();
       return true;
     }
 
@@ -7724,6 +7705,7 @@ export default function App() {
   }, [
     activeTodoDetailId,
     backToCreateDrawerInput,
+    closeCreateDrawer,
     closeListMenu,
     closeGoogleDriveBackupPicker,
     closeSearchKeywordModal,
@@ -7744,7 +7726,6 @@ export default function App() {
     searchKeywordModalVisible,
     repeatReminderModalVisible,
     presetSaveModalVisible,
-    resetCreateDrawerState,
     restoreCreateCommandFocusAfterPicker,
     closeFilterConfigModal,
     filterConfigModalVisible,
@@ -7882,52 +7863,31 @@ export default function App() {
     todosById,
   ]);
 
-  const closeCreateDrawer = useCallback(() => {
-    createDrawerKeepOpenOnKeyboardHideRef.current = false;
-    createDrawerOpeningRef.current = false;
-    hideMountedCreateDrawer();
-    createInputRef.current?.blur();
-    Keyboard.dismiss();
-    setCreateDrawerVisible(false);
-    setCreateDrawerPicker(null);
-    resetCreateDrawerState();
-  }, [hideMountedCreateDrawer, resetCreateDrawerState]);
-
   const openCreateDrawer = useCallback((initialText = '') => {
     if (listMenuOpen) {
       closeListMenu();
     }
 
-    const seedFilters = hasRememberedCreateDraftFilters(listMenuTree, selectedFilters)
-      ? selectedFilters
-      : lastCreateTodoFilters;
-
     exitTodoSelectMode();
     searchInputRef.current?.blur();
-    focusMountedCreateDrawerInput();
-
-    if (Platform.OS === 'android' && !initialText.trim()) {
-      return;
-    }
-
+    createDrawerPickerRef.current = null;
     setCreateDrawerPicker(null);
-    resetCreateDrawerState(seedFilters);
+    resetCreateDrawerState(EMPTY_SELECTED_FILTERS, true);
     setCreateDraftText(
       truncateTodoText(
         initialText.trim().replace(/\s+/g, ' '),
         todoTextMaxLength,
       ),
     );
+
+    createDrawerVisibleRef.current = true;
+    createDrawerFocusPendingRef.current = true;
     setCreateDrawerVisible(true);
   }, [
     closeListMenu,
     exitTodoSelectMode,
-    focusMountedCreateDrawerInput,
-    lastCreateTodoFilters,
     listMenuOpen,
-    listMenuTree,
     resetCreateDrawerState,
-    selectedFilters,
     todoTextMaxLength,
   ]);
 
@@ -7952,7 +7912,6 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
-    focusMountedCreateDrawerInput();
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -7974,11 +7933,13 @@ export default function App() {
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     hideCreateFromSettingsCue();
+    createDrawerPickerRef.current = null;
+    createDrawerVisibleRef.current = true;
+    createDrawerFocusPendingRef.current = true;
     setCreateDrawerVisible(true);
   }, [
     closeListMenu,
     exitTodoSelectMode,
-    focusMountedCreateDrawerInput,
     hideCreateFromSettingsCue,
     listMenuOpen,
     listMenuTree,
@@ -7995,7 +7956,6 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
-    focusMountedCreateDrawerInput();
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -8012,51 +7972,29 @@ export default function App() {
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     hideCreateFromSettingsCue();
+    createDrawerPickerRef.current = null;
+    createDrawerVisibleRef.current = true;
+    createDrawerFocusPendingRef.current = true;
     setCreateDrawerVisible(true);
   }, [
     closeListMenu,
     exitTodoSelectMode,
-    focusMountedCreateDrawerInput,
     hideCreateFromSettingsCue,
     listMenuOpen,
     listMenuTree,
   ]);
 
   const handleAddTodoPress = useCallback(() => {
-    if (Platform.OS === 'android') {
-      createDrawerKeepOpenOnKeyboardHideRef.current = false;
-      createDrawerOpeningRef.current = true;
-      revealMountedCreateDrawer();
-      focusMountedCreateDrawerInput();
-
-      if (keyboardOverlayInset > 0) {
-        createDrawerOpeningRef.current = false;
-        setCreateDrawerVisible(true);
-        triggerVerySubtleHaptic();
-      }
+    quickPresetEmptyAreaFlashSuppressedUntilRef.current = Date.now() + 400;
+    if (quickPresetEmptyAreaFlashTimerRef.current) {
+      clearTimeout(quickPresetEmptyAreaFlashTimerRef.current);
+      quickPresetEmptyAreaFlashTimerRef.current = null;
     }
-
-    if (selectedTodoIds.size === 1) {
-      const [selectedTodoId] = selectedTodoIds;
-      const selectedTodo = todosById.get(selectedTodoId);
-
-      if (selectedTodo && !pendingDeleteIds.has(selectedTodoId)) {
-        openCreateDrawerFromTodoSettings(selectedTodo);
-        return;
-      }
-    }
+    setQuickPresetEmptyAreaFlashVisible(false);
+    triggerVerySubtleHaptic();
 
     openCreateDrawer();
-  }, [
-    focusMountedCreateDrawerInput,
-    keyboardOverlayInset,
-    openCreateDrawer,
-    openCreateDrawerFromTodoSettings,
-    pendingDeleteIds,
-    revealMountedCreateDrawer,
-    selectedTodoIds,
-    todosById,
-  ]);
+  }, [openCreateDrawer]);
 
   useEffect(() => {
     if (!createDrawerVisible) {
@@ -8079,12 +8017,8 @@ export default function App() {
         Keyboard.scheduleLayoutAnimation(event);
       }
       setKeyboardOverlayInset(keyboardInset);
-
-      if (Platform.OS === 'android' && createDrawerOpeningRef.current) {
-        createDrawerKeepOpenOnKeyboardHideRef.current = false;
-        createDrawerOpeningRef.current = false;
-        setCreateDrawerVisible(true);
-        triggerVerySubtleHaptic();
+      if (Platform.OS === 'android' && createDrawerVisibleRef.current) {
+        createDrawerFocusPendingRef.current = false;
       }
     });
     const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
@@ -8092,29 +8026,13 @@ export default function App() {
         Keyboard.scheduleLayoutAnimation(event);
       }
       setKeyboardOverlayInset(0);
-
-      const keepCreateDrawerOpen = createDrawerKeepOpenOnKeyboardHideRef.current;
-      const createDrawerInputStillFocused = Boolean(
-        createInputRef.current?.isFocused() ||
-        createContentInputRef.current?.isFocused() ||
-        createCommandInputRef.current?.isFocused()
-      );
-
-      if (
-        Platform.OS === 'android' &&
-        !keepCreateDrawerOpen &&
-        createDrawerInputStillFocused &&
-        (createDrawerVisible || createDrawerOpeningRef.current)
-      ) {
-        closeCreateDrawer();
-      }
     });
 
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
     };
-  }, [closeCreateDrawer, createDrawerVisible]);
+  }, []);
 
   useEffect(() => {
     if (
@@ -8267,7 +8185,11 @@ export default function App() {
   }, [backToCreateDrawerInput]);
 
   const openCreateDrawerPicker = useCallback((picker: CreateDrawerPicker) => {
-    createDrawerKeepOpenOnKeyboardHideRef.current = true;
+    createDrawerFocusPendingRef.current = false;
+    createDrawerPickerRef.current = picker;
+    createInputRef.current?.blur();
+    createContentInputRef.current?.blur();
+    createCommandInputRef.current?.blur();
     Keyboard.dismiss();
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
@@ -12032,10 +11954,7 @@ export default function App() {
 
     if (opensSecondaryPicker) {
       createCommandRestoreAfterPickerRef.current = true;
-      closeCreateCommandPalette(false);
       Keyboard.dismiss();
-    } else {
-      closeCreateCommandPalette();
     }
 
     switch (command.action.kind) {
@@ -12075,10 +11994,11 @@ export default function App() {
       default:
         break;
     }
+
+    return !opensSecondaryPicker;
   }, [
     clearCreateDraftDate,
     clearCreateDraftList,
-    closeCreateCommandPalette,
     confirmCreateHabit,
     confirmCreateRepeat,
     handleCreateDrawerDatePress,
@@ -15597,7 +15517,10 @@ export default function App() {
   }, []);
 
   const focusNavbarPresetsFromSectionGap = useCallback(() => {
-    if (!canFocusNavbarPresetsFromSectionGap) {
+    if (
+      !canFocusNavbarPresetsFromSectionGap ||
+      quickPresetEmptyAreaFlashSuppressedUntilRef.current > Date.now()
+    ) {
       return;
     }
 
@@ -16465,9 +16388,6 @@ export default function App() {
       >
         <StatusBar barStyle="dark-content" />
         <View style={styles.screen}>
-        {!firebaseInitialSyncReady ? (
-          <View pointerEvents="none" style={styles.startupSyncBar} />
-        ) : null}
         <View style={styles.appHeader}>
           {todoSelectMode ? (
             <Pressable
@@ -16727,10 +16647,23 @@ export default function App() {
                 }
                 ListFooterComponent={
                   todoListOneHandedOffset > 0 ? (
-                    <View
-                      pointerEvents="none"
-                      style={{ height: todoListOneHandedOffset }}
-                    />
+                    canFocusNavbarPresetsFromSectionGap ? (
+                      <Pressable
+                        accessibilityHint="Toggles swipe navigation between navbar presets"
+                        accessibilityLabel="Toggle navbar preset focus"
+                        accessibilityRole="button"
+                        onPress={focusNavbarPresetsFromSectionGap}
+                        onPressIn={() => {
+                          todoSectionGapTouchRef.current = true;
+                        }}
+                        style={{ height: todoListOneHandedOffset }}
+                      />
+                    ) : (
+                      <View
+                        pointerEvents="none"
+                        style={{ height: todoListOneHandedOffset }}
+                      />
+                    )
                   ) : null
                 }
                 ListHeaderComponent={
@@ -16742,14 +16675,32 @@ export default function App() {
                           failOffsetY={QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y}
                           onHandlerStateChange={handleQuickPresetHeaderSwipeStateChange}
                         >
-                          <View
+                          <Pressable
+                            accessibilityHint="Toggles swipe navigation between navbar presets"
+                            accessibilityLabel="Toggle navbar preset focus"
+                            accessibilityRole="button"
                             collapsable={false}
+                            onPress={focusNavbarPresetsFromSectionGap}
+                            onPressIn={() => {
+                              todoSectionGapTouchRef.current = true;
+                            }}
                             style={[
                               styles.quickPresetHeaderSwipeZone,
                               { height: todoListOneHandedOffset },
                             ]}
                           />
                         </PanGestureHandler>
+                      ) : canFocusNavbarPresetsFromSectionGap ? (
+                        <Pressable
+                          accessibilityHint="Toggles swipe navigation between navbar presets"
+                          accessibilityLabel="Toggle navbar preset focus"
+                          accessibilityRole="button"
+                          onPress={focusNavbarPresetsFromSectionGap}
+                          onPressIn={() => {
+                            todoSectionGapTouchRef.current = true;
+                          }}
+                          style={{ height: todoListOneHandedOffset }}
+                        />
                       ) : (
                         <View
                           pointerEvents="none"
@@ -17003,11 +16954,7 @@ export default function App() {
               accessibilityRole="button"
               accessibilityHint="Opens the new todo drawer"
               accessibilityLabel="Add todo"
-              onAccessibilityTap={
-                Platform.OS === 'android' ? handleAddTodoPress : undefined
-              }
-              onPress={Platform.OS === 'android' ? undefined : handleAddTodoPress}
-              onPressIn={Platform.OS === 'android' ? handleAddTodoPress : undefined}
+              onPress={handleAddTodoPress}
               style={({ pressed }) => [
                 styles.bottomNavItem,
                 pressed && styles.bottomNavItemPressed,
@@ -17970,37 +17917,75 @@ export default function App() {
                 activeTodoDetailExpanded && styles.todoDetailLayerExpanded,
               ]}
             >
-            <View
-              style={[
-                styles.todoDetailCard,
-                activeTodoDetailExpanded
-                  ? styles.todoDetailCardExpanded
-                  : { maxHeight: todoDetailCardMaxHeight },
-              ]}
-            >
               <View
                 style={[
-                  styles.todoDetailHeader,
-                  activeTodoDetailExpanded && styles.todoDetailHeaderExpanded,
+                  styles.todoDetailCard,
+                  activeTodoDetailExpanded
+                    ? styles.todoDetailCardExpanded
+                    : { maxHeight: todoDetailCardMaxHeight },
                 ]}
               >
-                <TextInput
-                  autoCapitalize="sentences"
-                  autoCorrect
-                  editable={activeTodoDetailCanEdit}
-                  multiline
-                  onChangeText={setActiveTodoDetailDraftText}
-                  onSubmitEditing={() => todoDetailContentInputRef.current?.focus()}
-                  placeholder="Task title"
-                  placeholderTextColor="#B5ADA5"
-                  returnKeyType="next"
-                  selectionColor={TODO_DETAIL_SELECTION_COLOR}
-                  scrollEnabled={false}
-                  style={styles.todoDetailTitleInput}
-                  textAlignVertical="top"
-                  value={activeTodoDetailDraftText}
-                />
-                <View style={styles.todoDetailHeaderActions}>
+                <View
+                  style={[
+                    styles.todoDetailHeader,
+                    activeTodoDetailExpanded && styles.todoDetailHeaderExpanded,
+                  ]}
+                >
+                  <TextInput
+                    autoCapitalize="sentences"
+                    autoCorrect
+                    editable={activeTodoDetailCanEdit}
+                    multiline
+                    onChangeText={setActiveTodoDetailDraftText}
+                    onSubmitEditing={() => todoDetailContentInputRef.current?.focus()}
+                    placeholder="Task title"
+                    placeholderTextColor="#B5ADA5"
+                    returnKeyType="next"
+                    selectionColor={TODO_DETAIL_SELECTION_COLOR}
+                    scrollEnabled={false}
+                    style={styles.todoDetailTitleInput}
+                    textAlignVertical="top"
+                    value={activeTodoDetailDraftText}
+                  />
+                </View>
+                <View
+                  style={[
+                    styles.todoDetailContentContainer,
+                    activeTodoDetailExpanded && styles.todoDetailContentContainerExpanded,
+                  ]}
+                >
+                  {activeTodoDetailDraftContentForSave.length === 0 ? (
+                    <View pointerEvents="none" style={styles.todoDetailContentPlaceholderLayer}>
+                      <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
+                    </View>
+                  ) : null}
+                  <TextInput
+                    ref={todoDetailContentInputRef}
+                    autoCapitalize="sentences"
+                    autoCorrect
+                    multiline
+                    onChangeText={setActiveTodoDetailDraftContent}
+                    onSelectionChange={(event) => {
+                      setActiveTodoDetailContentSelection(event.nativeEvent.selection);
+                    }}
+                    editable={activeTodoDetailCanEdit}
+                    placeholder="Content"
+                    placeholderTextColor="#B5ADA5"
+                    numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
+                    selection={activeTodoDetailContentSelection}
+                    selectionColor={TODO_DETAIL_SELECTION_COLOR}
+                    scrollEnabled
+                    style={[
+                      styles.todoDetailContentInput,
+                      activeTodoDetailExpanded
+                        ? styles.todoDetailContentInputExpanded
+                        : { maxHeight: todoDetailContentInputMaxHeight },
+                    ]}
+                    textAlignVertical="top"
+                    value={activeTodoDetailDraftContent}
+                  />
+                </View>
+                <View style={styles.todoDetailFooterActions}>
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={
@@ -18059,45 +18044,7 @@ export default function App() {
                   </Pressable>
                 </View>
               </View>
-              <View
-                style={[
-                  styles.todoDetailContentContainer,
-                  activeTodoDetailExpanded && styles.todoDetailContentContainerExpanded,
-                ]}
-              >
-                {activeTodoDetailDraftContentForSave.length === 0 ? (
-                  <View pointerEvents="none" style={styles.todoDetailContentPlaceholderLayer}>
-                    <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
-                  </View>
-                ) : null}
-                <TextInput
-                  ref={todoDetailContentInputRef}
-                  autoCapitalize="sentences"
-                  autoCorrect
-                  multiline
-                  onChangeText={setActiveTodoDetailDraftContent}
-                  onSelectionChange={(event) => {
-                    setActiveTodoDetailContentSelection(event.nativeEvent.selection);
-                  }}
-                  editable={activeTodoDetailCanEdit}
-                  placeholder="Content"
-                  placeholderTextColor="#B5ADA5"
-                  numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
-                  selection={activeTodoDetailContentSelection}
-                  selectionColor={TODO_DETAIL_SELECTION_COLOR}
-                  scrollEnabled
-                    style={[
-                      styles.todoDetailContentInput,
-                      activeTodoDetailExpanded
-                        ? styles.todoDetailContentInputExpanded
-                        : { maxHeight: todoDetailContentInputMaxHeight },
-                    ]}
-                    textAlignVertical="top"
-                    value={activeTodoDetailDraftContent}
-                  />
-                </View>
-              </View>
-              </View>
+            </View>
           </View>
         ) : null}
 
@@ -18203,18 +18150,7 @@ export default function App() {
           <View style={styles.createDrawerModalRoot}>
             <Animated.View
               pointerEvents="box-none"
-              style={[
-                styles.createDrawerBackdrop,
-                Platform.OS === 'android' && !createDrawerPicker
-                  ? {
-                    opacity: keyboardAnimationProgress.interpolate({
-                      extrapolate: 'clamp',
-                      inputRange: [0, 0.8, 1],
-                      outputRange: [0, 0, 1],
-                    }),
-                  }
-                  : null,
-              ]}
+              style={styles.createDrawerBackdrop}
             >
               <Pressable
                 accessibilityRole="button"
@@ -18240,15 +18176,6 @@ export default function App() {
                 pointerEvents={createDrawerVisible ? 'auto' : 'none'}
                 style={[
                   styles.createDrawer,
-                  Platform.OS === 'android' && !createDrawerPicker
-                    ? {
-                      opacity: keyboardAnimationProgress.interpolate({
-                        extrapolate: 'clamp',
-                        inputRange: [0, 0.8, 1],
-                        outputRange: [0, 0, 1],
-                      }),
-                    }
-                    : null,
                   !createDrawerPicker &&
                     !createDrawerUsesFullScreen &&
                     styles.createDrawerPrompt,
@@ -18524,30 +18451,6 @@ export default function App() {
                         textAlignVertical="top"
                         value={createDraftText}
                       />
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={
-                          createDrawerExpanded
-                            ? 'Collapse new todo editor'
-                            : 'Expand new todo editor to full screen'
-                        }
-                        accessibilityState={{ expanded: createDrawerExpanded }}
-                        hitSlop={8}
-                        onPress={() => {
-                          setCreateDrawerExpanded((current) => !current);
-                          triggerSubtleHaptic();
-                        }}
-                        style={({ pressed }) => [
-                          styles.todoDetailCloseButton,
-                          pressed && styles.todoDetailCloseButtonPressed,
-                        ]}
-                      >
-                        <Ionicons
-                          color="#2A2520"
-                          name={createDrawerExpanded ? 'contract-outline' : 'expand-outline'}
-                          size={19}
-                        />
-                      </Pressable>
                     </View>
                     {createCommandPaletteVisible ? (
                       <CreateCommandPalette
@@ -18672,18 +18575,44 @@ export default function App() {
                     </Pressable>
                   </ScrollView>
                   {!createDrawerPicker ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Close new todo"
-                      hitSlop={8}
-                      onPress={closeCreateDrawer}
-                      style={({ pressed }) => [
-                        styles.createDrawerToolbarButton,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                      ]}
-                    >
-                      <Ionicons color="#5F6368" name="close" size={24} />
-                    </Pressable>
+                    <>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          createDrawerExpanded
+                            ? 'Collapse new todo editor'
+                            : 'Expand new todo editor to full screen'
+                        }
+                        accessibilityState={{ expanded: createDrawerExpanded }}
+                        hitSlop={8}
+                        onPress={() => {
+                          setCreateDrawerExpanded((current) => !current);
+                          triggerSubtleHaptic();
+                        }}
+                        style={({ pressed }) => [
+                          styles.createDrawerToolbarButton,
+                          pressed && styles.createDrawerToolbarButtonPressed,
+                        ]}
+                      >
+                        <Ionicons
+                          color="#5F6368"
+                          name={createDrawerExpanded ? 'contract-outline' : 'expand-outline'}
+                          size={21}
+                        />
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Close new todo"
+                        hitSlop={8}
+                        onPress={closeCreateDrawer}
+                        style={({ pressed }) => [
+                          styles.createDrawerToolbarButton,
+                          pressed && styles.createDrawerToolbarButtonPressed,
+                        ]}
+                      >
+                        <Ionicons color="#5F6368" name="close" size={24} />
+                      </Pressable>
+                    </>
                   ) : null}
                   <Pressable
                     accessibilityRole="button"
@@ -20389,16 +20318,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     position: 'relative',
   },
-  startupSyncBar: {
-    backgroundColor: THEME_ACCENT,
-    height: 3,
-    left: 0,
-    opacity: 0.72,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 30,
-  },
   listMenuOverlay: {
     position: 'absolute',
     left: 0,
@@ -20510,9 +20429,16 @@ const styles = StyleSheet.create({
   todoDetailHeaderExpanded: {
     paddingTop: 18 + ANDROID_STATUS_BAR_INSET + ANDROID_FULLSCREEN_TOP_MARGIN,
   },
-  todoDetailHeaderActions: {
+  todoDetailFooterActions: {
+    alignItems: 'center',
+    borderTopColor: '#F0E9E1',
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 8,
+    justifyContent: 'flex-end',
+    paddingBottom: 16,
+    paddingHorizontal: 18,
+    paddingTop: 12,
   },
   todoDetailTitleInput: {
     color: THEME_TEXT,
@@ -20535,7 +20461,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     height: 34,
     justifyContent: 'center',
-    marginTop: -2,
     width: 34,
   },
   todoDetailCloseButtonPressed: {
@@ -22782,7 +22707,7 @@ const styles = StyleSheet.create({
   },
   createDrawerBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(34, 28, 24, 0.36)',
+    backgroundColor: 'transparent',
   },
   createDrawerLayer: {
     position: 'absolute',

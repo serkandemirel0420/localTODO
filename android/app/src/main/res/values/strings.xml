@@ -2,4 +2,16 @@
   <string name="app_name">Local Todo</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
+  <string name="widget_new_item_name">New item</string>
+  <string name="widget_new_item_title">New item</string>
+  <string name="widget_new_item_description">Open Local Todo and create a new item</string>
+  <string name="widget_today_name">Today items</string>
+  <string name="widget_today_title">Today</string>
+  <string name="widget_today_description">See today’s open Local Todo items</string>
+  <string name="widget_today_empty">Nothing scheduled for today</string>
+  <string name="widget_today_zero_items">0 items</string>
+  <plurals name="widget_today_item_count">
+    <item quantity="one">%d item</item>
+    <item quantity="other">%d items</item>
+  </plurals>
 </resources>

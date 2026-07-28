@@ -21,6 +21,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   type LayoutChangeEvent,
   Modal,
   type GestureResponderEvent,
@@ -180,6 +181,11 @@ import {
 import { resolveMaterialCommunityIconName } from './src/materialCommunityIconNames';
 import { triggerSubtleHaptic, triggerVerySubtleHaptic } from './src/haptics';
 import {
+  buildAndroidWidgetItems,
+  parseAndroidWidgetRoute,
+  syncAndroidWidgets,
+} from './src/androidWidgets';
+import {
   appSettingsStore,
   APP_HISTORY_LIMIT,
   cloneAppHistoryState,
@@ -190,6 +196,7 @@ import {
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
+  DEFAULT_WIDGET_NEW_ITEM_LIST,
   DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
   DEFAULT_FILTER_CONFIG_UI_STATE,
   DEFAULT_LIST_MENU_TREE,
@@ -1538,7 +1545,50 @@ type TextSelection = {
   start: number;
 };
 
-const formatContentCheckboxChange = (previousValue: string, nextValue: string) => {
+type ContentMarkerKind = 'bullet' | 'checkbox' | 'numbered';
+
+const formatContentMarkerChange = (previousValue: string, nextValue: string) => {
+  if (nextValue.length === previousValue.length + 1) {
+    let insertionIndex = 0;
+    while (
+      insertionIndex < previousValue.length &&
+      previousValue[insertionIndex] === nextValue[insertionIndex]
+    ) {
+      insertionIndex += 1;
+    }
+
+    const insertedNewline =
+      nextValue[insertionIndex] === '\n' &&
+      nextValue.slice(insertionIndex + 1) === previousValue.slice(insertionIndex);
+
+    if (insertedNewline) {
+      const lineStart = insertionIndex === 0
+        ? 0
+        : previousValue.lastIndexOf('\n', insertionIndex - 1) + 1;
+      const lineBeforeNewline = previousValue.slice(lineStart, insertionIndex);
+      const checkboxMatch = lineBeforeNewline.match(/^(\s*)[☐☑]\s+/);
+      const bulletMatch = lineBeforeNewline.match(/^(\s*)([•*-])\s+/);
+      const numberedMatch = lineBeforeNewline.match(/^(\s*)(\d+)\.\s+/);
+      let nextMarker = '';
+
+      if (checkboxMatch) {
+        nextMarker = `${checkboxMatch[1]}${TODO_CONTENT_CHECKBOX_UNCHECKED} `;
+      } else if (bulletMatch) {
+        nextMarker = `${bulletMatch[1]}${bulletMatch[2]} `;
+      } else if (numberedMatch) {
+        nextMarker = `${numberedMatch[1]}${Number(numberedMatch[2]) + 1}. `;
+      }
+
+      if (nextMarker) {
+        const nextCursor = insertionIndex + 1 + nextMarker.length;
+        return {
+          selection: { end: nextCursor, start: nextCursor },
+          value: `${nextValue.slice(0, insertionIndex + 1)}${nextMarker}${nextValue.slice(insertionIndex + 1)}`,
+        };
+      }
+    }
+  }
+
   const value = formatTodoContentCheckboxShortcuts(nextValue);
 
   if (value === nextValue) {
@@ -1566,42 +1616,90 @@ const formatContentCheckboxChange = (previousValue: string, nextValue: string) =
   };
 };
 
-const toggleContentCheckboxAtSelection = (
+const toggleContentMarkerAtSelection = (
   value: string,
   selection: TextSelection,
+  kind: ContentMarkerKind,
 ) => {
   const cursor = Math.max(0, Math.min(value.length, selection.start));
   const lineStart = cursor === 0 ? 0 : value.lastIndexOf('\n', cursor - 1) + 1;
   const nextLineBreak = value.indexOf('\n', lineStart);
   const lineEnd = nextLineBreak < 0 ? value.length : nextLineBreak;
   const line = value.slice(lineStart, lineEnd);
-  const indentationLength = line.match(/^[\t ]*/)?.[0].length ?? 0;
+  const indentation = line.match(/^[\t ]*/)?.[0] ?? '';
+  const indentationLength = indentation.length;
   const markerIndex = lineStart + indentationLength;
-  const marker = value[markerIndex];
+  const lineAfterIndentation = line.slice(indentationLength);
+  const markerMatch = lineAfterIndentation.match(
+    /^(?:[☐☑]\s+|[•*-]\s+|\d+\.\s+)/,
+  );
+  const currentMarker = markerMatch?.[0] ?? '';
+  const currentMarkerKind: ContentMarkerKind | null = currentMarker
+    ? currentMarker[0] === TODO_CONTENT_CHECKBOX_UNCHECKED
+      || currentMarker[0] === TODO_CONTENT_CHECKBOX_CHECKED
+      ? 'checkbox'
+      : /^\d/.test(currentMarker)
+        ? 'numbered'
+        : 'bullet'
+    : null;
 
-  if (
-    marker === TODO_CONTENT_CHECKBOX_UNCHECKED ||
-    marker === TODO_CONTENT_CHECKBOX_CHECKED
-  ) {
-    const nextMarker = marker === TODO_CONTENT_CHECKBOX_UNCHECKED
+  if (kind === 'checkbox' && currentMarkerKind === 'checkbox') {
+    const currentCheckbox = currentMarker[0];
+    const nextCheckbox = currentCheckbox === TODO_CONTENT_CHECKBOX_UNCHECKED
       ? TODO_CONTENT_CHECKBOX_CHECKED
       : TODO_CONTENT_CHECKBOX_UNCHECKED;
 
     return {
       selection,
-      value: `${value.slice(0, markerIndex)}${nextMarker}${value.slice(markerIndex + 1)}`,
+      value: `${value.slice(0, markerIndex)}${nextCheckbox}${value.slice(markerIndex + 1)}`,
     };
   }
 
-  const prefix = `${TODO_CONTENT_CHECKBOX_UNCHECKED} `;
+  let nextMarker = '';
+  if (currentMarkerKind !== kind) {
+    if (kind === 'checkbox') {
+      nextMarker = `${TODO_CONTENT_CHECKBOX_UNCHECKED} `;
+    } else if (kind === 'bullet') {
+      nextMarker = '• ';
+    } else {
+      const previousLineEnd = Math.max(0, lineStart - 1);
+      const previousLineStart = previousLineEnd === 0
+        ? 0
+        : value.lastIndexOf('\n', previousLineEnd - 1) + 1;
+      const previousLine = value.slice(previousLineStart, previousLineEnd);
+      const previousNumberMatch = previousLine.match(/^([\t ]*)(\d+)\.\s+/);
+      const previousNumber = previousNumberMatch?.[1] === indentation
+        ? Number(previousNumberMatch[2])
+        : 0;
+      nextMarker = `${previousNumber + 1}. `;
+    }
+  }
+
+  const currentMarkerEnd = markerIndex + currentMarker.length;
+  const selectionDelta = nextMarker.length - currentMarker.length;
+  const adjustSelectionIndex = (index: number) => {
+    if (index < markerIndex) {
+      return index;
+    }
+    if (index <= currentMarkerEnd) {
+      return markerIndex + nextMarker.length;
+    }
+    return index + selectionDelta;
+  };
+
   return {
     selection: {
-      end: selection.end >= markerIndex ? selection.end + prefix.length : selection.end,
-      start: selection.start >= markerIndex ? selection.start + prefix.length : selection.start,
+      end: adjustSelectionIndex(selection.end),
+      start: adjustSelectionIndex(selection.start),
     },
-    value: `${value.slice(0, markerIndex)}${prefix}${value.slice(markerIndex)}`,
+    value: `${value.slice(0, markerIndex)}${nextMarker}${value.slice(currentMarkerEnd)}`,
   };
 };
+
+const toggleContentCheckboxAtSelection = (
+  value: string,
+  selection: TextSelection,
+) => toggleContentMarkerAtSelection(value, selection, 'checkbox');
 const MENU_DISMISS_VELOCITY = 680;
 const GOOGLE_IOS_LEGACY_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 const GOOGLE_IOS_CLIENT_ID = isDevAppVariant
@@ -2121,6 +2219,7 @@ const buildActiveFilterItems = (
 type NavTab = 'calendar' | 'menu' | 'notifications' | 'search' | 'settings';
 
 type CreateDrawerPicker = 'date' | 'list' | 'priority' | 'tags';
+type CreateDrawerFocusedField = 'content' | 'title';
 type CreateCommandGroup =
   | 'Date'
   | 'Reminder'
@@ -2473,6 +2572,18 @@ const getCreateTodoFilters = (
     reminder: reminderValues,
     tag: [],
   };
+};
+
+const resolveWidgetNewItemListLabel = (
+  listMenuTree: ListMenuNode[],
+  preferredLabel: string,
+) => {
+  const labels = collectListNodeLabels(listMenuTree);
+  const preferredKey = preferredLabel.trim().toLocaleLowerCase();
+
+  return labels.find((label) => label.toLocaleLowerCase() === preferredKey)
+    ?? labels[0]
+    ?? DEFAULT_WIDGET_NEW_ITEM_LIST;
 };
 
 const getCopiedTodoFilters = (todo: Todo): SelectedFilters => ({
@@ -4935,6 +5046,8 @@ export default function App() {
   const createDrawerVisibleRef = useRef(createDrawerVisible);
   createDrawerVisibleRef.current = createDrawerVisible;
   const [createDrawerExpanded, setCreateDrawerExpanded] = useState(false);
+  const [createDrawerFocusedField, setCreateDrawerFocusedField] =
+    useState<CreateDrawerFocusedField>('title');
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
@@ -5030,6 +5143,7 @@ export default function App() {
   const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
   const [settingsPresetsExpanded, setSettingsPresetsExpanded] = useState(false);
   const [settingsTagsExpanded, setSettingsTagsExpanded] = useState(false);
+  const [settingsWidgetExpanded, setSettingsWidgetExpanded] = useState(false);
   const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
@@ -5083,6 +5197,9 @@ export default function App() {
   const customTagsRef = useRef<string[]>([]);
   const [listMenuTree, setListMenuTree] = useState<ListMenuNode[]>(
     () => cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+  );
+  const [widgetNewItemList, setWidgetNewItemList] = useState(
+    DEFAULT_WIDGET_NEW_ITEM_LIST,
   );
   const [customTags, setCustomTags] = useState<string[]>([]);
   const [menuPresets, setMenuPresets] = useState<MenuPreset[]>([]);
@@ -5199,8 +5316,13 @@ export default function App() {
   );
   const todosRef = useRef<Todo[]>(todos);
   const loadedRef = useRef(loaded);
+  const settingsLoadedRef = useRef(settingsLoaded);
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
   const pendingTodoAlarmOpenIdRef = useRef<string | null>(null);
+  const pendingWidgetNewItemOpenRef = useRef(false);
+  const pendingWidgetTodayOpenRef = useRef(false);
+  const didReadInitialWidgetUrlRef = useRef(false);
+  const lastHandledWidgetUrlRef = useRef({ timestamp: 0, url: '' });
   const firebaseInitialSyncStartedRef = useRef(false);
   const firebaseLastAppliedRemoteAtRef = useRef(0);
   const firebaseBackendPullInFlightRef = useRef(false);
@@ -5231,6 +5353,7 @@ export default function App() {
   todoSortModeRef.current = todoSortMode;
   filterColorsRef.current = filterColors;
   loadedRef.current = loaded;
+  settingsLoadedRef.current = settingsLoaded;
   menuEditOwnerRef.current = menuEditOwner;
   pendingDeleteIdsRef.current = pendingDeleteIds;
   repeatingTodoCompletionFeedbackIdsRef.current = repeatingTodoCompletionFeedbackIds;
@@ -5308,6 +5431,10 @@ export default function App() {
   const googleDriveActionReady =
     googleOAuthConfigured && (Platform.OS === 'android' || Boolean(googleRequest));
   const dateStatusNow = useMemo(() => new Date(), [dateStatusKey]);
+  const androidWidgetItems = useMemo(
+    () => buildAndroidWidgetItems(todos, pendingDeleteIds, dateStatusNow),
+    [dateStatusNow, pendingDeleteIds, todos],
+  );
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const undoHistoryCount = undoHistory.length;
   const redoHistoryCount = redoHistory.length;
@@ -5430,6 +5557,14 @@ export default function App() {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!loaded) {
+      return;
+    }
+
+    syncAndroidWidgets(androidWidgetItems).catch(() => undefined);
+  }, [androidWidgetItems, loaded]);
 
   useEffect(() => {
     let alive = true;
@@ -5569,6 +5704,7 @@ export default function App() {
     setTodoGroupMode(appliedSettings.todoGroupMode);
     setCollapsedTodoGroupIds(new Set(appliedSettings.collapsedTodoGroupIds));
     setTodoSortMode(appliedSettings.todoSortMode);
+    setWidgetNewItemList(appliedSettings.widgetNewItemList);
     setMetaTagVisibility(cloneMetaTagVisibility(appliedSettings.metaTagVisibility));
     setLastCreateTodoFilters(nextLastCreateTodoFilters);
     setCreateDraftFilters(nextLastCreateTodoFilters);
@@ -5704,6 +5840,7 @@ export default function App() {
     showOverdueMetaTags,
     todoGroupMode,
     todoSortMode,
+    widgetNewItemList,
     ...overrides,
     googleDriveBackupEnabled: false,
     listMenuTree: cloneListMenuTree(
@@ -5738,6 +5875,7 @@ export default function App() {
     todoGroupMode,
     todoSortMode,
     undoHistory,
+    widgetNewItemList,
   ]);
 
   const saveAppSettingsSnapshot = useCallback(async (settings: AppSettings) => {
@@ -7378,6 +7516,7 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     createDrawerFocusPendingRef.current = true;
     createDrawerPickerRef.current = null;
+    setCreateDrawerFocusedField('title');
     setCreateDrawerPicker(null);
   }, []);
 
@@ -7401,6 +7540,7 @@ export default function App() {
     const nextTags = normalizedFilters.tag;
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
+    setCreateDrawerFocusedField('title');
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
     setCreateDraftText('');
@@ -7418,6 +7558,7 @@ export default function App() {
   const focusCreateTitleAtCommandCursor = useCallback(() => {
     const selection = createCommandReturnSelectionRef.current;
     createDrawerFocusPendingRef.current = true;
+    setCreateDrawerFocusedField('title');
     if (createInputFocusTimerRef.current) {
       clearTimeout(createInputFocusTimerRef.current);
     }
@@ -7964,6 +8105,7 @@ export default function App() {
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
+    setCreateDrawerFocusedField('title');
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
     setCreateDraftText(
@@ -7995,6 +8137,140 @@ export default function App() {
     todoTextMaxLength,
   ]);
 
+  const openCreateDrawerFromWidget = useCallback(() => {
+    if (!settingsLoadedRef.current) {
+      pendingWidgetNewItemOpenRef.current = true;
+      return;
+    }
+
+    pendingWidgetNewItemOpenRef.current = false;
+    const destinationList = resolveWidgetNewItemListLabel(
+      listMenuTree,
+      widgetNewItemList,
+    );
+    openCreateDrawerWithFilters({
+      ...cloneTodoFilters(),
+      list: [destinationList],
+    });
+  }, [listMenuTree, openCreateDrawerWithFilters, widgetNewItemList]);
+
+  const openTodayFromWidget = useCallback(() => {
+    if (!settingsLoadedRef.current) {
+      pendingWidgetTodayOpenRef.current = true;
+      return;
+    }
+
+    pendingWidgetTodayOpenRef.current = false;
+    const nextSelectedFilters = {
+      ...cloneTodoFilters(),
+      date: ['Today'],
+    };
+    const emptyFilters = cloneTodoFilters();
+
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    closeListMenuState();
+    flushFilterConfigUndoBatch();
+    resetCreateDrawerState();
+    clearNotificationTodoReveal();
+    selectedFiltersRef.current = nextSelectedFilters;
+    requiredFiltersRef.current = emptyFilters;
+    avoidedFiltersRef.current = emptyFilters;
+    todoDetailDraftTodoIdRef.current = null;
+    setSelectedFilters(nextSelectedFilters);
+    setRequiredFilters(emptyFilters);
+    setAvoidedFilters(emptyFilters);
+    setActiveTodoDetailId(null);
+    setActiveDeletedTodoDetailId(null);
+    setCreateDrawerPicker(null);
+    setCreateDrawerVisible(false);
+    setDatePickerVisible(false);
+    setFilterConfigModalVisible(false);
+    setSettingsModalVisible(false);
+    setPresetSaveModalVisible(false);
+    setSearchKeywordEditTarget(null);
+    setNotificationTodoRevealId(null);
+    setOpenMenuPresetId(null);
+    setOpenQuickPresetNavSlotNumber(null);
+    setQuery('');
+    setItemSearchState(null);
+    setNavTab(null);
+    reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
+  }, [
+    clearNotificationTodoReveal,
+    closeListMenuState,
+    flushFilterConfigUndoBatch,
+    resetCreateDrawerState,
+  ]);
+
+  const handleAndroidWidgetUrl = useCallback((url: string) => {
+    const route = parseAndroidWidgetRoute(url);
+    if (!route) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastHandled = lastHandledWidgetUrlRef.current;
+    if (lastHandled.url === url && now - lastHandled.timestamp < 750) {
+      return;
+    }
+    lastHandledWidgetUrlRef.current = { timestamp: now, url };
+
+    if (route.kind === 'new-item') {
+      openCreateDrawerFromWidget();
+      return;
+    }
+
+    if (route.todoId) {
+      openTodoAlarmDetail(route.todoId);
+      return;
+    }
+
+    openTodayFromWidget();
+  }, [openCreateDrawerFromWidget, openTodayFromWidget, openTodoAlarmDetail]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    let alive = true;
+    if (!didReadInitialWidgetUrlRef.current) {
+      didReadInitialWidgetUrlRef.current = true;
+      Linking.getInitialURL()
+        .then((url) => {
+          if (alive && url) {
+            handleAndroidWidgetUrl(url);
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      handleAndroidWidgetUrl(url);
+    });
+
+    return () => {
+      alive = false;
+      subscription.remove();
+    };
+  }, [handleAndroidWidgetUrl]);
+
+  useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
+
+    if (pendingWidgetNewItemOpenRef.current) {
+      openCreateDrawerFromWidget();
+    }
+    if (pendingWidgetTodayOpenRef.current) {
+      openTodayFromWidget();
+    }
+  }, [openCreateDrawerFromWidget, openTodayFromWidget, settingsLoaded]);
+
   const openCreateDrawerFromTodoSettings = useCallback((sourceTodo: Todo) => {
     if (listMenuOpen) {
       closeListMenu();
@@ -8008,6 +8284,7 @@ export default function App() {
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
+    setCreateDrawerFocusedField('title');
     setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
     setCreateDraftContent('');
     setCreateDraftText('');
@@ -8176,7 +8453,7 @@ export default function App() {
   ]);
 
   const handleCreateDraftContentChange = useCallback((nextValue: string) => {
-    const next = formatContentCheckboxChange(createDraftContent, nextValue);
+    const next = formatContentMarkerChange(createDraftContent, nextValue);
     setCreateDraftContent(next.value);
 
     if (next.selection) {
@@ -8191,6 +8468,22 @@ export default function App() {
     const next = toggleContentCheckboxAtSelection(
       createDraftContent,
       createDraftContentSelectionRef.current,
+    );
+
+    createDraftContentSelectionRef.current = next.selection;
+    setCreateDraftContent(next.value);
+    requestAnimationFrame(() => {
+      createContentInputRef.current?.focus();
+      createContentInputRef.current?.setNativeProps({ selection: next.selection });
+    });
+    triggerSubtleHaptic();
+  }, [createDraftContent]);
+
+  const toggleCreateDraftContentList = useCallback((kind: 'bullet' | 'numbered') => {
+    const next = toggleContentMarkerAtSelection(
+      createDraftContent,
+      createDraftContentSelectionRef.current,
+      kind,
     );
 
     createDraftContentSelectionRef.current = next.selection;
@@ -9632,6 +9925,10 @@ export default function App() {
     () => collectListNodeLabels(listMenuTree),
     [listMenuTree],
   );
+  const widgetNewItemDestinationList = useMemo(
+    () => resolveWidgetNewItemListLabel(listMenuTree, widgetNewItemList),
+    [listMenuTree, widgetNewItemList],
+  );
   const settingsListItemCounts = useMemo(
     () => listMenuTree.map((node) => countTodosUsingListNode(node, todos, pendingDeleteIds)),
     [listMenuTree, pendingDeleteIds, todos],
@@ -10155,7 +10452,7 @@ export default function App() {
     todoDetailDraftTodoIdRef.current = activeTodoDetail.id;
   }, [activeTodoDetail, activeTodoDetailId]);
   const handleActiveTodoDetailContentChange = useCallback((nextValue: string) => {
-    const next = formatContentCheckboxChange(activeTodoDetailDraftContent, nextValue);
+    const next = formatContentMarkerChange(activeTodoDetailDraftContent, nextValue);
     setActiveTodoDetailDraftContent(next.value);
 
     if (next.selection) {
@@ -11925,6 +12222,12 @@ export default function App() {
     void persistAppSettings({ habitQuietHoursEnabled: nextEnabled });
     triggerSubtleHaptic();
   }, [persistAppSettings, recordUndo]);
+
+  const selectWidgetNewItemList = useCallback((label: string) => {
+    setWidgetNewItemList(label);
+    void persistAppSettings({ widgetNewItemList: label });
+    triggerSubtleHaptic();
+  }, [persistAppSettings]);
 
   const toggleDateLabelDisplayMode = useCallback(() => {
     recordFilterConfigUndo('Change date labels');
@@ -14282,6 +14585,7 @@ export default function App() {
     setSettingsHistoryPreviewTarget(null);
     setSettingsListsExpanded(false);
     setSettingsPresetsExpanded(false);
+    setSettingsWidgetExpanded(false);
     setSettingsListReorderCancelNonce((current) => current + 1);
     setSettingsListSelectMode(false);
     setSelectedSettingsListLabels(new Set());
@@ -16576,9 +16880,6 @@ export default function App() {
                     ]}
                   >
                     <Ionicons color={NAV_ACCENT} name="arrow-undo" size={22} />
-                    {undoHistoryCount > 1 ? (
-                      <Text style={styles.appHeaderUndoCountBadge}>{undoHistoryCount}</Text>
-                    ) : null}
                   </Pressable>
                 ) : null}
                 {createFromSettingsCueVisible ? (
@@ -18563,6 +18864,7 @@ export default function App() {
                         autoCorrect
                         multiline
                         onChangeText={handleCreateDraftTextChange}
+                        onFocus={() => setCreateDrawerFocusedField('title')}
                         onSelectionChange={(event) => {
                           createDraftSelectionRef.current = event.nativeEvent.selection;
                         }}
@@ -18599,6 +18901,7 @@ export default function App() {
                         autoCorrect
                         multiline
                         onChangeText={handleCreateDraftContentChange}
+                        onFocus={() => setCreateDrawerFocusedField('content')}
                         onSelectionChange={(event) => {
                           createDraftContentSelectionRef.current = event.nativeEvent.selection;
                         }}
@@ -18636,91 +18939,124 @@ export default function App() {
                     showsHorizontalScrollIndicator={false}
                     style={styles.createDrawerToolbarScroll}
                   >
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Add or toggle content checkbox"
-                      onPress={toggleCreateDraftContentCheckbox}
-                      style={({ pressed }) => [
-                        styles.createDrawerToolbarButton,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                      ]}
-                    >
-                      <Ionicons
-                        color={THEME_ACCENT}
-                        name="checkbox-outline"
-                        size={22}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Date: ${createDrawerDateLabel}`}
-                      onPress={handleCreateDrawerCalendarPress}
-                      style={({ pressed }) => [
-                        styles.createDrawerToolbarButton,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerPicker === 'date' && styles.createDrawerToolbarButtonActive,
-                      ]}
-                    >
-                      <Ionicons
-                        color={createDrawerDateActive ? '#2F6F62' : '#8C847C'}
-                        name="calendar-outline"
-                        size={22}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={createDrawerListAccessibilityLabel}
-                      onPress={handleCreateDrawerListPress}
-                      style={({ pressed }) => [
-                        styles.createDrawerToolbarButton,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerPicker === 'list' && styles.createDrawerToolbarButtonActive,
-                      ]}
-                    >
-                      <Ionicons
-                        color={createDrawerListActive ? THEME_ACCENT : '#8C847C'}
-                        name="file-tray-outline"
-                        size={22}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={createDrawerTagsAccessibilityLabel}
-                      accessibilityState={{ selected: createDrawerTagsActive }}
-                      onPress={handleCreateDrawerTagsPress}
-                      style={({ pressed }) => [
-                        styles.createDrawerToolbarButton,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
-                      ]}
-                    >
-                      <Ionicons
-                        color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
-                        name="pricetags-outline"
-                        size={22}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Set priority"
-                      onPress={handleCreateDrawerPriorityPress}
-                      style={({ pressed }) => [
-                        styles.createDrawerToolbarButton,
-                        pressed && styles.createDrawerToolbarButtonPressed,
-                        createDrawerPicker === 'priority' && styles.createDrawerToolbarButtonActive,
-                      ]}
-                    >
-                      <Ionicons
-                        color={
-                          createDraftPriorityFromPicker &&
-                          createDraftFilters.priority.length > 0
-                            ? '#2F6F62'
-                            : '#8C847C'
-                        }
-                        name="pricetag-outline"
-                        size={22}
-                      />
-                    </Pressable>
+                    {createDrawerFocusedField === 'content' && !createDrawerPicker ? (
+                      <>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Add or toggle content checkbox"
+                          onPress={toggleCreateDraftContentCheckbox}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color={THEME_ACCENT} name="checkbox-outline" size={22} />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Add or remove content bullet point"
+                          onPress={() => toggleCreateDraftContentList('bullet')}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                          ]}
+                        >
+                          <MaterialCommunityIcons
+                            color={THEME_ACCENT}
+                            name="format-list-bulleted"
+                            size={23}
+                          />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Add or remove content numbered list"
+                          onPress={() => toggleCreateDraftContentList('numbered')}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                          ]}
+                        >
+                          <MaterialCommunityIcons
+                            color={THEME_ACCENT}
+                            name="format-list-numbered"
+                            size={23}
+                          />
+                        </Pressable>
+                      </>
+                    ) : (
+                      <>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Date: ${createDrawerDateLabel}`}
+                          onPress={handleCreateDrawerCalendarPress}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                            createDrawerPicker === 'date' && styles.createDrawerToolbarButtonActive,
+                          ]}
+                        >
+                          <Ionicons
+                            color={createDrawerDateActive ? '#2F6F62' : '#8C847C'}
+                            name="calendar-outline"
+                            size={22}
+                          />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={createDrawerListAccessibilityLabel}
+                          onPress={handleCreateDrawerListPress}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                            createDrawerPicker === 'list' && styles.createDrawerToolbarButtonActive,
+                          ]}
+                        >
+                          <Ionicons
+                            color={createDrawerListActive ? THEME_ACCENT : '#8C847C'}
+                            name="file-tray-outline"
+                            size={22}
+                          />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={createDrawerTagsAccessibilityLabel}
+                          accessibilityState={{ selected: createDrawerTagsActive }}
+                          onPress={handleCreateDrawerTagsPress}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                            createDrawerPicker === 'tags' && styles.createDrawerToolbarButtonActive,
+                          ]}
+                        >
+                          <Ionicons
+                            color={createDrawerTagsActive ? THEME_ACCENT : '#8C847C'}
+                            name="pricetags-outline"
+                            size={22}
+                          />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Set priority"
+                          onPress={handleCreateDrawerPriorityPress}
+                          style={({ pressed }) => [
+                            styles.createDrawerToolbarButton,
+                            pressed && styles.createDrawerToolbarButtonPressed,
+                            createDrawerPicker === 'priority' && styles.createDrawerToolbarButtonActive,
+                          ]}
+                        >
+                          <Ionicons
+                            color={
+                              createDraftPriorityFromPicker &&
+                              createDraftFilters.priority.length > 0
+                                ? '#2F6F62'
+                                : '#8C847C'
+                            }
+                            name="pricetag-outline"
+                            size={22}
+                          />
+                        </Pressable>
+                      </>
+                    )}
                   </ScrollView>
                   {!createDrawerPicker ? (
                     <>
@@ -19489,6 +19825,70 @@ export default function App() {
                       onSwap={handleSettingsNavbarSwap}
                       onSetIcon={setSettingsNavbarIcon}
                     />
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>New item widget</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      Creates in {widgetNewItemDestinationList}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsWidgetExpanded ? 'Collapse' : 'Expand'} New item widget section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsWidgetExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsWidgetExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsWidgetExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsWidgetExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Text style={styles.settingsRowSubtitle}>
+                      Choose the list used when the home-screen widget opens a new item.
+                    </Text>
+                    {settingsListColorLabels.map((label, index) => {
+                      const selected = label === widgetNewItemDestinationList;
+                      return (
+                        <Pressable
+                          accessibilityLabel={`Create widget items in ${label}`}
+                          accessibilityRole="radio"
+                          accessibilityState={{ selected }}
+                          key={label}
+                          onPress={() => selectWidgetNewItemList(label)}
+                          style={({ pressed }) => [
+                            styles.settingsRow,
+                            styles.settingsWidgetListRow,
+                            index > 0 && styles.settingsWidgetListRowSeparated,
+                            pressed && styles.settingsOptionRowPressed,
+                          ]}
+                        >
+                          <Text style={styles.settingsOptionText}>{label}</Text>
+                          <Ionicons
+                            color={selected ? THEME_ACCENT : '#B5ADA5'}
+                            name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                            size={21}
+                          />
+                        </Pressable>
+                      );
+                    })}
                   </View>
                 ) : null}
               </View>
@@ -22355,6 +22755,15 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     letterSpacing: 0.1,
   },
+  settingsWidgetListRow: {
+    marginTop: 10,
+    minHeight: 46,
+  },
+  settingsWidgetListRowSeparated: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 0,
+  },
   settingsPrimaryButton: {
     minHeight: 50,
     borderRadius: 14,
@@ -22477,23 +22886,6 @@ const styles = StyleSheet.create({
   },
   appHeaderUndoButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
-  },
-  appHeaderUndoCountBadge: {
-    backgroundColor: NAV_ACCENT,
-    borderColor: THEME_CARD,
-    borderRadius: 9,
-    borderWidth: 1,
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: FONT_SEMIBOLD,
-    lineHeight: 14,
-    minWidth: 17,
-    overflow: 'hidden',
-    paddingHorizontal: 4,
-    position: 'absolute',
-    right: -3,
-    textAlign: 'center',
-    top: -3,
   },
   appHeaderCreateFromSettingsCue: {
     alignItems: 'center',
@@ -22929,9 +23321,9 @@ const styles = StyleSheet.create({
   createDrawerTitleInput: {
     color: THEME_TEXT,
     flex: 1,
-    fontSize: 22,
+    fontSize: 29,
     fontWeight: FONT_SEMIBOLD,
-    lineHeight: 29,
+    lineHeight: 38,
     maxHeight: 92,
     minHeight: 44,
     minWidth: 0,
@@ -22939,9 +23331,9 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   createDrawerTitleInputPrompt: {
-    fontSize: 18,
+    fontSize: 23,
     fontWeight: FONT_REGULAR,
-    lineHeight: 23,
+    lineHeight: 30,
     maxHeight: 52,
     minHeight: 44,
     paddingTop: 6,
@@ -22949,9 +23341,9 @@ const styles = StyleSheet.create({
   },
   createDrawerContentInput: {
     color: '#3A332E',
-    fontSize: 18,
+    fontSize: 23,
     fontWeight: FONT_REGULAR,
-    lineHeight: 26,
+    lineHeight: 34,
     maxHeight: 172,
     minHeight: 118,
     paddingHorizontal: 0,
@@ -22963,8 +23355,8 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   createDrawerContentInputPrompt: {
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: 20,
+    lineHeight: 27,
     maxHeight: 92,
     minHeight: 76,
     paddingTop: 4,

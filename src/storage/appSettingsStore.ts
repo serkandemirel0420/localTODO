@@ -35,6 +35,8 @@ import {
 
 const STORAGE_KEY = 'local-todo.settings.v1';
 
+export const DEFAULT_WIDGET_NEW_ITEM_LIST = 'INDEX';
+
 export type ListOrderMode = 'alphabetical' | 'manual';
 export type TodoGroupMode = 'date' | 'list' | 'none' | 'priority' | 'status';
 export type TodoSortMode =
@@ -172,6 +174,7 @@ export type AppHistoryState = {
 };
 
 export const DEFAULT_LIST_MENU_TREE: StoredListMenuNode[] = [
+  { label: DEFAULT_WIDGET_NEW_ITEM_LIST },
   { label: 'Inbox' },
   { label: 'Today' },
   { label: 'Upcoming' },
@@ -237,6 +240,7 @@ export type AppSettings = {
   showOverdueMetaTags: boolean;
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
+  widgetNewItemList: string;
 };
 
 export const cloneListMenuTree = (nodes: StoredListMenuNode[]): StoredListMenuNode[] =>
@@ -433,6 +437,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   showOverdueMetaTags: true,
   todoGroupMode: 'none',
   todoSortMode: 'newest',
+  widgetNewItemList: DEFAULT_WIDGET_NEW_ITEM_LIST,
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -1087,6 +1092,17 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
   );
   const selectedFilters = normalizeTodoFilters(value.selectedFilters);
+  const widgetNewItemList =
+    typeof value.widgetNewItemList === 'string' && formatListLabel(value.widgetNewItemList)
+      ? formatListLabel(value.widgetNewItemList)
+      : DEFAULT_WIDGET_NEW_ITEM_LIST;
+  const normalizedListMenuTree = normalizeListMenuTree(value.listMenuTree);
+  const hasWidgetDestinationList = collectListNodeLabels(normalizedListMenuTree).some(
+    (label) => label.toLocaleLowerCase() === widgetNewItemList.toLocaleLowerCase(),
+  );
+  const listMenuTree = hasWidgetDestinationList
+    ? normalizedListMenuTree
+    : [{ label: widgetNewItemList }, ...normalizedListMenuTree];
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
@@ -1105,7 +1121,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     history: normalizeAppHistoryState(value.history),
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
-    listMenuTree: normalizeListMenuTree(value.listMenuTree),
+    listMenuTree,
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
     menuPresets: quickPresetDefaults.menuPresets,
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
@@ -1119,6 +1135,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     showOverdueMetaTags: value.showOverdueMetaTags !== false,
     todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
     todoSortMode: normalizeTodoSortMode(value.todoSortMode),
+    widgetNewItemList,
   };
 };
 

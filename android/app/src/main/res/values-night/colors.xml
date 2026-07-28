@@ -1,1 +1,8 @@
-<resources/>
+<resources>
+  <color name="widget_background">#222725</color>
+  <color name="widget_outline">#3E4A45</color>
+  <color name="widget_accent">#55C7A7</color>
+  <color name="widget_text_primary">#F5F8F6</color>
+  <color name="widget_text_secondary">#ADB8B3</color>
+  <color name="widget_divider">#3E4A45</color>
+</resources>

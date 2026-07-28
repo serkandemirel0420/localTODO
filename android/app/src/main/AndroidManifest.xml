@@ -29,5 +29,17 @@
         <data android:scheme="exp+local-todo"/>
       </intent-filter>
     </activity>
+    <receiver android:name=".NewItemWidgetProvider" android:exported="false" android:label="@string/widget_new_item_name">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/new_item_widget_info"/>
+    </receiver>
+    <receiver android:name=".TodayWidgetProvider" android:exported="false" android:label="@string/widget_today_name">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/today_widget_info"/>
+    </receiver>
   </application>
 </manifest>

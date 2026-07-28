@@ -4,7 +4,11 @@ import {
   toISODateString,
 } from './dates';
 import { decodeTodoReminder, type RepeatPreset } from './reminders';
-import { cloneTodoFilters, type Todo } from './todos';
+import {
+  cloneTodoFilters,
+  resetTodoContentCheckboxes,
+  type Todo,
+} from './todos';
 
 const addDays = (date: Date, days: number): Date => {
   const next = new Date(date);
@@ -92,6 +96,7 @@ export const advanceRepeatingTodoAfterDone = (
 
   return {
     ...todo,
+    content: resetTodoContentCheckboxes(todo.content),
     done: false,
     filters: {
       ...cloneTodoFilters(todo.filters),

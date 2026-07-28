@@ -197,6 +197,14 @@ export const formatTodoContentCheckboxShortcuts = (value: string) =>
     ),
   );
 
+export const resetTodoContentCheckboxes = (value: string) =>
+  value.replace(
+    /(^|\n)([\t ]*)☑(?=[\t ]|$)/g,
+    (_match, lineStart: string, indentation: string) => (
+      `${lineStart}${indentation}${TODO_CONTENT_CHECKBOX_UNCHECKED}`
+    ),
+  );
+
 export const normalizeTodoContent = (value: string) =>
   formatTodoContentCheckboxShortcuts(value.replace(/\r\n?/g, '\n')).trim();
 

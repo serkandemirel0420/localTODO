@@ -70,8 +70,10 @@ import {
   CUSTOM_DATE_LABEL,
   DATED_DATE_LABEL,
   formatDateDisplayLabel,
+  formatDateDisplayLabelParts,
   formatDateFilterLabel,
   formatDateFilterValue,
+  formatOverdueDaysLabel,
   formatRemainingDaysLabel,
   getDateFilterSortRank,
   getDateMenuClearValue,
@@ -170,6 +172,7 @@ import {
 import {
   cloneMetaTagVisibility,
   DEFAULT_META_TAG_VISIBILITY,
+  formatCreatedAtMetaLabel,
   formatMetaTagVisibilitySummary,
   META_TAG_KEYS,
   META_TAG_LABELS,
@@ -715,6 +718,30 @@ const getHistoryTodoPreviewDateLabel = (todo: Todo, now: Date): string => {
   });
 
   return bestLabel;
+};
+
+const formatTodoDatePropertyLabel = (
+  todo: Todo,
+  rawDateLabel: string,
+  dateLabelDisplayMode: DateLabelDisplayMode,
+  showOverdueMetaTags: boolean,
+  now: Date,
+) => {
+  const overdueLabel = showOverdueMetaTags
+    ? formatOverdueDaysLabel(rawDateLabel, now, todo.createdAt)
+    : null;
+  const dateLabelParts = formatDateDisplayLabelParts(
+    rawDateLabel,
+    dateLabelDisplayMode,
+    now,
+    todo.createdAt,
+  );
+
+  return overdueLabel ?? (
+    dateLabelParts.secondary
+      ? `${dateLabelParts.primary} ${dateLabelParts.secondary}`
+      : dateLabelParts.primary
+  );
 };
 
 const formatHistoryTodoPreviewContent = (content: string) =>
@@ -1886,10 +1913,12 @@ const buildSearchListRows = (
 
     rows.push({
       type: 'searchPresetHeader',
+      canCreate: item.canCreate,
       count: item.count,
       gapBefore: false,
       id: `search-preset:${item.preset.id}`,
       isCollapsed,
+      kind: item.kind,
       matchesQuery: item.matchesQuery,
       preset: item.preset,
     });
@@ -1995,34 +2024,94 @@ const FILTER_KIND_LABELS: Record<FilterKey, string> = {
 type SearchFilterItem = {
   displayLabel: string;
   filterKey: FilterKey;
+  sourceFilterKey: FilterKey | 'reminder';
   id: string;
   value: string;
+};
+
+type ActivePresetPropertyItem = SearchFilterItem & {
+  avoided: boolean;
+  categoryOrder: number;
+};
+
+type ActivePresetSectionSelection = {
+  baseAvoidedFilters: TodoFilters;
+  baseFilters: TodoFilters;
+  baseRequiredFilters: TodoFilters;
+  durableAvoidedFilters: TodoFilters;
+  durableFilters: TodoFilters;
+  durableRequiredFilters: TodoFilters;
+  presetFingerprint: string;
+  presetId: string;
+  sectionIds: string[];
 };
 
 type SearchMode = 'preset' | 'item';
 
 type SearchPresetItem = {
+  canCreate: boolean;
   count: number;
   index: number;
+  kind: 'property' | 'saved';
+  matchedTodos?: Todo[];
   matchesQuery: boolean;
   preset: MenuPreset;
   score: number;
 };
 
+type SearchPresetSource = Omit<SearchPresetItem, 'index' | 'matchesQuery' | 'score'>;
+
+type SearchPropertyPreset = {
+  canCreate: boolean;
+  matchedTodos: Todo[];
+  preset: MenuPreset;
+};
+
+const createSearchPropertyPreset = (
+  id: string,
+  label: string,
+  filters: TodoFilters,
+  searchKeywords: string,
+): MenuPreset => ({
+  avoidedFilters: cloneTodoFilters(),
+  createdAt: 0,
+  filters: normalizeTodoFilters(filters),
+  id: `search-property:${id}`,
+  label,
+  listOrderMode: 'alphabetical',
+  requiredFilters: cloneTodoFilters(),
+  searchKeywords,
+  todoGroupMode: 'none',
+  todoSortMode: 'newest',
+});
+
 type SearchListMenuItem = {
   count: number;
   index: number;
   listIndex: number;
+  matchedTodos: Todo[];
   matchesQuery: boolean;
   node: ListMenuNode;
   score: number;
 };
 
+type SearchListMenuSource = Omit<SearchListMenuItem, 'matchesQuery' | 'score'>;
+
+const EMPTY_SEARCH_PROPERTY_PRESETS: SearchPropertyPreset[] = [];
+const EMPTY_SEARCH_PRESET_SOURCES: SearchPresetSource[] = [];
+const EMPTY_SEARCH_PRESET_ITEMS: SearchPresetItem[] = [];
+const EMPTY_SEARCH_LIST_MENU_SOURCES: SearchListMenuSource[] = [];
+const EMPTY_SEARCH_LIST_MENU_ITEMS: SearchListMenuItem[] = [];
+const EMPTY_SEARCH_PRESET_TODOS_BY_PRESET_ID = new Map<string, Todo[]>();
+const EMPTY_SEARCH_LIST_MENU_TODOS_BY_LABEL = new Map<string, Todo[]>();
+
 type SearchPresetHeaderRow = {
+  canCreate: boolean;
   count: number;
   gapBefore: boolean;
   id: string;
   isCollapsed: boolean;
+  kind: 'property' | 'saved';
   matchesQuery: boolean;
   preset: MenuPreset;
   type: 'searchPresetHeader';
@@ -2256,6 +2345,7 @@ const buildActiveFilterItems = (
           : value,
         filterKey,
         id: `search-filter-${filterKey}-${value}`,
+        sourceFilterKey: filterKey,
         value,
       })),
     ),
@@ -2265,6 +2355,7 @@ const buildActiveFilterItems = (
             displayLabel: item.displayLabel,
             filterKey: 'date' as const,
             id: `search-filter-${item.id}`,
+            sourceFilterKey: 'reminder' as const,
             value: item.value,
           }]
         : []
@@ -3425,8 +3516,6 @@ const hasAnyFilterValues = (filters: TodoFilters): boolean =>
   filters.reminder.length > 0 ||
   filters.tag.length > 0;
 
-const hasAnyRequiredFilters = hasAnyFilterValues;
-
 const isFilterValueInFilters = (
   filters: TodoFilters,
   filterKey: FilterKey,
@@ -3637,6 +3726,11 @@ const menuPresetMatchesState = (
       : true
   );
 
+// A transient section selection caches the parent preset filters so repeated
+// chip taps stay cheap. Track the complete source preset alongside that cache
+// so a rename, sync, edit, or deletion can never leave the cached plan active.
+const getPresetFingerprint = (preset: MenuPreset): string => JSON.stringify(preset);
+
 const formatPresetCount = (count: number, label: string) =>
   `${count} ${label}${count === 1 ? '' : 's'}`;
 
@@ -3837,39 +3931,95 @@ const getOptionalSelectedFilters = (
   tag: filters.tag.filter((value) => !isFilterValueRequired(requiredFilters, 'tag', value)),
 });
 
+type PreparedTodoFilterGroup = {
+  filters: SelectedFilters;
+  hasHabitFilter: boolean;
+  hasRepeatingFilter: boolean;
+  hasValues: boolean;
+  listValueMatches: Set<string>[];
+  reminderValues: string[];
+};
+
+type PreparedTodoFilterMatch = {
+  avoided: PreparedTodoFilterGroup;
+  optional: PreparedTodoFilterGroup;
+  required: PreparedTodoFilterGroup;
+};
+
+const normalizeListFilterMatchValue = (value: string) => value.trim().toLocaleLowerCase();
+
+const prepareTodoFilterGroup = (
+  filters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+): PreparedTodoFilterGroup => ({
+  filters,
+  hasHabitFilter: hasHabitItemsFilter(filters.reminder),
+  hasRepeatingFilter: hasRepeatingItemsFilter(filters.reminder),
+  hasValues: hasAnyFilterValues(filters),
+  listValueMatches: filters.list.map((value) => {
+    const listNode = findListMenuNode(listMenuTree, value);
+    return new Set([
+      normalizeListFilterMatchValue(value),
+      ...(listNode?.children?.map((child) => (
+        normalizeListFilterMatchValue(child.label)
+      )) ?? []),
+    ]);
+  }),
+  reminderValues: removeRepeatStatusFilters(filters.reminder),
+});
+
+const prepareTodoFilterMatch = (
+  filters: SelectedFilters,
+  requiredFilters: SelectedFilters,
+  avoidedFilters: SelectedFilters,
+  listMenuTree: ListMenuNode[],
+): PreparedTodoFilterMatch => ({
+  avoided: prepareTodoFilterGroup(avoidedFilters, listMenuTree),
+  optional: prepareTodoFilterGroup(
+    getOptionalSelectedFilters(filters, requiredFilters),
+    listMenuTree,
+  ),
+  required: prepareTodoFilterGroup(requiredFilters, listMenuTree),
+});
+
 const todoMatchesRequiredFilters = (
   todo: Todo,
-  requiredFilters: SelectedFilters,
-  listMenuTree: ListMenuNode[],
+  preparedFilters: PreparedTodoFilterGroup,
   now = new Date(),
 ): boolean => {
-  if (!hasAnyRequiredFilters(requiredFilters)) {
+  if (!preparedFilters.hasValues) {
     return true;
   }
 
+  const requiredFilters = preparedFilters.filters;
   const effectiveDateLabels = requiredFilters.date.length > 0
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
-  const requiredReminderValues = removeRepeatStatusFilters(requiredFilters.reminder);
-  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
-  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
+  const todoIsHabit = preparedFilters.hasHabitFilter
+    ? hasTodoHabitInterval(todo.filters.reminder)
+    : false;
+  const todoRepeats = preparedFilters.hasRepeatingFilter
+    ? hasTodoRepeat(todo.filters.reminder)
+    : false;
 
   return (
-    requiredFilters.list.every((value) => (
-      todoMatchesSelectedListFilters([value], todo.filters.list, listMenuTree)
+    preparedFilters.listValueMatches.every((matchingValues) => (
+      todo.filters.list.some((value) => (
+        matchingValues.has(normalizeListFilterMatchValue(value))
+      ))
     )) &&
     requiredFilters.date.every((value) => (
       todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
     )) &&
     requiredFilters.priority.every((value) => todo.filters.priority.includes(value)) &&
     requiredFilters.tag.every((value) => todoHasTagFilter(todo, value)) &&
-    requiredReminderValues.every((value) => todo.filters.reminder.includes(value)) &&
+    preparedFilters.reminderValues.every((value) => todo.filters.reminder.includes(value)) &&
     (
-      !hasHabitItemsFilter(requiredFilters.reminder) ||
+      !preparedFilters.hasHabitFilter ||
       todoIsHabit
     ) &&
     (
-      !hasRepeatingItemsFilter(requiredFilters.reminder) ||
+      !preparedFilters.hasRepeatingFilter ||
       todoRepeats
     )
   );
@@ -3877,37 +4027,42 @@ const todoMatchesRequiredFilters = (
 
 const todoMatchesAvoidedFilters = (
   todo: Todo,
-  avoidedFilters: SelectedFilters,
-  listMenuTree: ListMenuNode[],
+  preparedFilters: PreparedTodoFilterGroup,
   now = new Date(),
 ): boolean => {
-  if (!hasAnyFilterValues(avoidedFilters)) {
+  if (!preparedFilters.hasValues) {
     return false;
   }
 
+  const avoidedFilters = preparedFilters.filters;
   const effectiveDateLabels = avoidedFilters.date.length > 0
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
-  const avoidedReminderValues = removeRepeatStatusFilters(avoidedFilters.reminder);
-  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
-  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
+  const todoIsHabit = preparedFilters.hasHabitFilter
+    ? hasTodoHabitInterval(todo.filters.reminder)
+    : false;
+  const todoRepeats = preparedFilters.hasRepeatingFilter
+    ? hasTodoRepeat(todo.filters.reminder)
+    : false;
 
   return (
-    avoidedFilters.list.some((value) => (
-      todoMatchesSelectedListFilters([value], todo.filters.list, listMenuTree)
+    preparedFilters.listValueMatches.some((matchingValues) => (
+      todo.filters.list.some((value) => (
+        matchingValues.has(normalizeListFilterMatchValue(value))
+      ))
     )) ||
     avoidedFilters.date.some((value) => (
       todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
     )) ||
     avoidedFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
     avoidedFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
-    avoidedReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
+    preparedFilters.reminderValues.some((value) => todo.filters.reminder.includes(value)) ||
     (
-      hasHabitItemsFilter(avoidedFilters.reminder) &&
+      preparedFilters.hasHabitFilter &&
       todoIsHabit
     ) ||
     (
-      hasRepeatingItemsFilter(avoidedFilters.reminder) &&
+      preparedFilters.hasRepeatingFilter &&
       todoRepeats
     )
   );
@@ -3915,56 +4070,56 @@ const todoMatchesAvoidedFilters = (
 
 const todoMatchesAnyOptionalFilter = (
   todo: Todo,
-  optionalFilters: SelectedFilters,
-  listMenuTree: ListMenuNode[],
+  preparedFilters: PreparedTodoFilterGroup,
   now = new Date(),
 ): boolean => {
-  if (!hasAnyRequiredFilters(optionalFilters)) {
+  if (!preparedFilters.hasValues) {
     return true;
   }
 
+  const optionalFilters = preparedFilters.filters;
   const effectiveDateLabels = optionalFilters.date.length > 0
     ? getEffectiveTodoDateLabels(todo, now)
     : [];
-  const optionalReminderValues = removeRepeatStatusFilters(optionalFilters.reminder);
-  const todoIsHabit = hasTodoHabitInterval(todo.filters.reminder);
-  const todoRepeats = hasTodoRepeat(todo.filters.reminder);
+  const todoIsHabit = preparedFilters.hasHabitFilter
+    ? hasTodoHabitInterval(todo.filters.reminder)
+    : false;
+  const todoRepeats = preparedFilters.hasRepeatingFilter
+    ? hasTodoRepeat(todo.filters.reminder)
+    : false;
 
   return (
-    optionalFilters.list.some((value) => (
-      todoMatchesSelectedListFilters([value], todo.filters.list, listMenuTree)
+    preparedFilters.listValueMatches.some((matchingValues) => (
+      todo.filters.list.some((value) => (
+        matchingValues.has(normalizeListFilterMatchValue(value))
+      ))
     )) ||
     optionalFilters.date.some((value) => (
       todoMatchesSelectedDateFilters(effectiveDateLabels, [value], now, todo.createdAt)
     )) ||
     optionalFilters.priority.some((value) => todo.filters.priority.includes(value)) ||
     optionalFilters.tag.some((value) => todoHasTagFilter(todo, value)) ||
-    optionalReminderValues.some((value) => todo.filters.reminder.includes(value)) ||
+    preparedFilters.reminderValues.some((value) => todo.filters.reminder.includes(value)) ||
     (
-      hasHabitItemsFilter(optionalFilters.reminder) &&
+      preparedFilters.hasHabitFilter &&
       todoIsHabit
     ) ||
     (
-      hasRepeatingItemsFilter(optionalFilters.reminder) &&
+      preparedFilters.hasRepeatingFilter &&
       todoRepeats
     )
   );
 };
 
-const todoMatchesFilters = (
+const todoMatchesPreparedFilters = (
   todo: Todo,
-  filters: SelectedFilters,
-  listMenuTree: ListMenuNode[],
+  preparedFilters: PreparedTodoFilterMatch,
   now = new Date(),
-  requiredFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
-  avoidedFilters: SelectedFilters = EMPTY_SELECTED_FILTERS,
 ) => {
-  const optionalFilters = getOptionalSelectedFilters(filters, requiredFilters);
-
   return (
-    !todoMatchesAvoidedFilters(todo, avoidedFilters, listMenuTree, now) &&
-    todoMatchesRequiredFilters(todo, requiredFilters, listMenuTree, now) &&
-    todoMatchesAnyOptionalFilter(todo, optionalFilters, listMenuTree, now)
+    !todoMatchesAvoidedFilters(todo, preparedFilters.avoided, now) &&
+    todoMatchesRequiredFilters(todo, preparedFilters.required, now) &&
+    todoMatchesAnyOptionalFilter(todo, preparedFilters.optional, now)
   );
 };
 
@@ -5253,6 +5408,7 @@ export default function App() {
   const [habitQuietHoursEnabled, setHabitQuietHoursEnabled] = useState(true);
   const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
   const [showOverdueMetaTags, setShowOverdueMetaTags] = useState(true);
+  const [showPresetPropertiesAboveSearch, setShowPresetPropertiesAboveSearch] = useState(false);
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
   const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
@@ -5323,6 +5479,7 @@ export default function App() {
   const [collapsedSearchPresetIds, setCollapsedSearchPresetIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const knownSearchPresetIdsRef = useRef<Set<string>>(new Set());
   const [collapsedSearchListLabels, setCollapsedSearchListLabels] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5357,6 +5514,32 @@ export default function App() {
   const [avoidedFilters, setAvoidedFilters] = useState<SelectedFilters>(
     () => cloneTodoFilters(),
   );
+  const [activePresetSectionSelection, setActivePresetSectionSelection] =
+    useState<ActivePresetSectionSelection | null>(null);
+  useEffect(() => {
+    setActivePresetSectionSelection((current) => (
+      current && current.presetId !== openMenuPresetId ? null : current
+    ));
+  }, [openMenuPresetId]);
+  useEffect(() => {
+    setActivePresetSectionSelection((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const currentPreset = menuPresets.find((preset) => preset.id === current.presetId);
+
+      return (
+        currentPreset !== undefined &&
+        current.presetFingerprint === getPresetFingerprint(currentPreset) &&
+        filtersEqual(current.durableFilters, selectedFilters) &&
+        filtersEqual(current.durableRequiredFilters, requiredFilters) &&
+        filtersEqual(current.durableAvoidedFilters, avoidedFilters)
+      )
+        ? current
+        : null;
+    });
+  }, [avoidedFilters, menuPresets, requiredFilters, selectedFilters]);
   const [todoListFrameHeight, setTodoListFrameHeight] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
   const suppressHeaderSearchFocusRef = useRef(false);
@@ -5468,6 +5651,7 @@ export default function App() {
   });
   const lastListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
   const lastRegisteredListTapRef = useRef({ pageX: 0, pageY: 0, timestamp: 0 });
+  const lastSearchInputTapRef = useRef(0);
   const lastSearchNavTapRef = useRef(0);
   const handledToggleAllTodoSectionsRequestRef = useRef(0);
   const lastQuickPresetNavTapRef = useRef({ presetId: '', timestamp: 0 });
@@ -5478,6 +5662,7 @@ export default function App() {
   const quickPresetEmptyAreaFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quickPresetEmptyAreaFlashSuppressedUntilRef = useRef(0);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
+  const pendingToggleAllSearchSectionsRef = useRef(false);
   const savedSearchScrollOffsetRef = useRef<number | null>(null);
   const searchScrollOffsetsByModeRef = useRef<Record<SearchMode, number | null>>({
     item: null,
@@ -5794,6 +5979,7 @@ export default function App() {
     setHideDoneTodos(appliedSettings.hideDoneTodos);
     setDateLabelDisplayMode(appliedSettings.dateLabelDisplayMode);
     setShowOverdueMetaTags(appliedSettings.showOverdueMetaTags);
+    setShowPresetPropertiesAboveSearch(appliedSettings.showPresetPropertiesAboveSearch);
     setListMenuTree(cloneListMenuTree(appliedSettings.listMenuTree));
     setCustomTags(normalizeCustomTags(appliedSettings.customTags));
     setListOrderMode(appliedSettings.listOrderMode);
@@ -5939,6 +6125,7 @@ export default function App() {
     requiredFilters: pruneTodoFilters(requiredFilters, selectedFilters),
     selectedFilters,
     showOverdueMetaTags,
+    showPresetPropertiesAboveSearch,
     todoGroupMode,
     todoSortMode,
     widgetNewItemList,
@@ -5974,6 +6161,7 @@ export default function App() {
     requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
+    showPresetPropertiesAboveSearch,
     todoGroupMode,
     todoSortMode,
     undoHistory,
@@ -8171,7 +8359,115 @@ export default function App() {
     return new Set(cachedIds ?? []);
   }, [itemSearchState, searchMode, searchQuery]);
 
-  const filteredTodos = useMemo(() => {
+  const activePresetSectionSourcePreset = useMemo(() => {
+    if (!activePresetSectionSelection) {
+      return null;
+    }
+
+    return menuPresets.find(
+      (candidate) => candidate.id === activePresetSectionSelection.presetId,
+    ) ?? null;
+  }, [activePresetSectionSelection, menuPresets]);
+  const activePresetSectionSourceFingerprint = useMemo(
+    () => (
+      activePresetSectionSourcePreset
+        ? getPresetFingerprint(activePresetSectionSourcePreset)
+        : null
+    ),
+    [activePresetSectionSourcePreset],
+  );
+  const activePresetSectionSelectionIsCurrent = Boolean(
+    activePresetSectionSelection &&
+    activePresetSectionSourceFingerprint &&
+    activePresetSectionSelection.presetFingerprint ===
+      activePresetSectionSourceFingerprint &&
+    filtersEqual(activePresetSectionSelection.durableFilters, selectedFilters) &&
+    filtersEqual(activePresetSectionSelection.durableRequiredFilters, requiredFilters) &&
+    filtersEqual(activePresetSectionSelection.durableAvoidedFilters, avoidedFilters)
+  );
+  const activePresetSelectedSections = useMemo<MenuPresetSection[]>(() => {
+    if (
+      !activePresetSectionSelection ||
+      !activePresetSectionSelectionIsCurrent ||
+      activePresetSectionSelection.presetId !== openMenuPresetId ||
+      activePresetSectionSelection.sectionIds.length === 0
+    ) {
+      return [];
+    }
+
+    const selectedSectionIds = new Set(activePresetSectionSelection.sectionIds);
+    return activePresetSectionSourcePreset?.sections?.filter(
+      (section) => selectedSectionIds.has(section.id),
+    ) ?? [];
+  }, [
+    activePresetSectionSelection,
+    activePresetSectionSelectionIsCurrent,
+    activePresetSectionSourcePreset,
+    openMenuPresetId,
+  ]);
+  const activePresetSectionFilterState =
+    navTab === null &&
+    activePresetSectionSelectionIsCurrent &&
+    activePresetSectionSelection?.presetId === openMenuPresetId
+      ? activePresetSectionSelection
+      : null;
+  const activePresetBaseFilters =
+    activePresetSectionFilterState?.baseFilters ?? selectedFilters;
+  const activePresetBaseRequiredFilters =
+    activePresetSectionFilterState?.baseRequiredFilters ?? requiredFilters;
+  const activePresetBaseAvoidedFilters =
+    activePresetSectionFilterState?.baseAvoidedFilters ?? avoidedFilters;
+  const activePresetBaseFilterMatch = useMemo(
+    () => prepareTodoFilterMatch(
+      activePresetBaseFilters,
+      activePresetBaseRequiredFilters,
+      activePresetBaseAvoidedFilters,
+      listMenuTree,
+    ),
+    [
+      activePresetBaseAvoidedFilters,
+      activePresetBaseFilters,
+      activePresetBaseRequiredFilters,
+      listMenuTree,
+    ],
+  );
+  const activePresetSectionFilterMatches = useMemo(
+    () => activePresetSelectedSections.map((section) => prepareTodoFilterMatch(
+      section.filters,
+      section.requiredFilters,
+      section.avoidedFilters,
+      listMenuTree,
+    )),
+    [activePresetSelectedSections, listMenuTree],
+  );
+  const shouldApplyActivePresetSectionFilter = Boolean(
+    activePresetSectionFilterState &&
+    activePresetSectionFilterState.sectionIds.length > 0 &&
+    activePresetSectionFilterMatches.length > 0
+  );
+  const baseFilteredTodos = useMemo(() => {
+    if (navTab === 'search' && searchMode === 'item') {
+      return [];
+    }
+
+    const now = dateStatusNow;
+    return todos
+      .filter((todo) => !hideDoneTodosForCurrentView || !todo.done)
+      .filter((todo) => todoMatchesPreparedFilters(
+        todo,
+        activePresetBaseFilterMatch,
+        now,
+      ));
+  }, [
+    activePresetBaseFilterMatch,
+    dateStatusNow,
+    hideDoneTodosForCurrentView,
+    navTab,
+    searchMode,
+    todos,
+  ]);
+
+  const filteredTodoOverride = useMemo<Todo[] | null>(() => {
     if (notificationTodoRevealId) {
       const notificationTodo = todosById.get(notificationTodoRevealId);
       return notificationTodo && !pendingDeleteIds.has(notificationTodoRevealId)
@@ -8186,35 +8482,13 @@ export default function App() {
         .filter((todo) => !pendingDeleteIds.has(todo.id));
     }
 
-    const matchedTodos = navTab === 'search' && searchMode === 'item'
-      ? []
-      : todos;
-    const now = dateStatusNow;
-
-    return matchedTodos
-      .filter((todo) => !hideDoneTodosForCurrentView || !todo.done)
-      .filter((todo) => todoMatchesFilters(
-        todo,
-        selectedFilters,
-        listMenuTree,
-        now,
-        requiredFilters,
-        avoidedFilters,
-      ));
+    return null;
   }, [
-    hideDoneTodosForCurrentView,
-    listMenuTree,
     notificationTodoRevealId,
     pendingDeleteIds,
-    navTab,
     searchMatchedTodoIds,
     searchMode,
     searchQuery,
-    avoidedFilters,
-    dateStatusNow,
-    requiredFilters,
-    selectedFilters,
-    todos,
     todosById,
   ]);
 
@@ -8697,6 +8971,15 @@ export default function App() {
     }
   }, [createDraftContent]);
 
+  const handleCreateDraftContentFocus = useCallback(() => {
+    const topSelection = { end: 0, start: 0 };
+    setCreateDrawerFocusedField('content');
+    createDraftContentSelectionRef.current = topSelection;
+    requestAnimationFrame(() => {
+      createContentInputRef.current?.setSelection(0, 0);
+    });
+  }, []);
+
   const toggleCreateDraftContentCheckbox = useCallback(() => {
     const next = toggleContentCheckboxAtSelection(
       createDraftContent,
@@ -8846,6 +9129,13 @@ export default function App() {
   const createDrawerListPickerTopSpace = Math.round(
     createDrawerListPickerSheetHeight * LIST_MENU_ONE_HANDED_SCROLL_RATIO,
   );
+  const createDrawerUsesTallEditLayout =
+    Platform.OS !== 'web' &&
+    createDrawerEditingTodoId !== null &&
+    keyboardOverlayInset === 0 &&
+    !createDrawerUsesFullScreen &&
+    !createDrawerPicker;
+  const createDrawerTallEditHeight = Math.round(windowHeight * 0.7);
   const createDrawerDateActive = createDraftFilters.date.length > 0
     || createDrawerReminder.time !== null
     || createDrawerReminder.repeat !== 'none';
@@ -10426,14 +10716,17 @@ export default function App() {
     : null;
   const openQuickPresetNavIndex = openQuickPresetNavItem?.navIndex ?? null;
   const focusedQuickPresetNavItem = useMemo(() => {
-    if (openMenuPresetId && menuPresetById.has(openMenuPresetId)) {
+    if (openMenuPresetId) {
       if (openQuickPresetNavItem?.preset?.id === openMenuPresetId) {
         return openQuickPresetNavItem;
       }
 
-      return quickPresetNavItems.find(
+      const explicitlyOpenQuickPreset = quickPresetNavItems.find(
         (item) => item.preset?.id === openMenuPresetId,
       ) ?? null;
+      if (explicitlyOpenQuickPreset || menuPresetById.has(openMenuPresetId)) {
+        return explicitlyOpenQuickPreset;
+      }
     }
 
     if (
@@ -10510,10 +10803,37 @@ export default function App() {
 
     return knownScopedListLabels.length > 0 ? knownScopedListLabels : todoListOrderedListLabels;
   }, [activeListPreset, selectedFilters.list, todoListGroupMode, todoListOrderedListLabels]);
-  const sortedTodos = useMemo(
-    () => [...filteredTodos].sort(createTodoSortComparator(todoListSortMode, dateStatusNow)),
-    [dateStatusNow, filteredTodos, todoListSortMode],
+  const todoSortComparator = useMemo(
+    () => createTodoSortComparator(todoListSortMode, dateStatusNow),
+    [dateStatusNow, todoListSortMode],
   );
+  const sortedBaseFilteredTodos = useMemo(
+    () => [...baseFilteredTodos].sort(todoSortComparator),
+    [baseFilteredTodos, todoSortComparator],
+  );
+  const sortedTodos = useMemo(() => {
+    if (filteredTodoOverride !== null) {
+      return [...filteredTodoOverride].sort(todoSortComparator);
+    }
+
+    if (!shouldApplyActivePresetSectionFilter) {
+      return sortedBaseFilteredTodos;
+    }
+
+    const now = dateStatusNow;
+    return sortedBaseFilteredTodos.filter((todo) => (
+      activePresetSectionFilterMatches.some((preparedFilters) => (
+        todoMatchesPreparedFilters(todo, preparedFilters, now)
+      ))
+    ));
+  }, [
+    activePresetSectionFilterMatches,
+    dateStatusNow,
+    filteredTodoOverride,
+    shouldApplyActivePresetSectionFilter,
+    sortedBaseFilteredTodos,
+    todoSortComparator,
+  ]);
   const todoListRows = useMemo(
     () => buildTodoListRows(
       sortedTodos,
@@ -10877,36 +11197,260 @@ export default function App() {
     countFilters(menuFilters, includeActiveTodoReminderRows) + countFilters(menuAvoidedFilters);
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
-  const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
-    const now = dateStatusNow;
+  const searchPropertyPresets = useMemo<SearchPropertyPreset[]>(() => {
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_PROPERTY_PRESETS;
+    }
 
-    return menuPresets
-      .map((preset, index) => {
-        const count = todos.reduce((total, todo) => {
+    // This is a local, derived index over the already-filtered view. Creating,
+    // editing, or deleting a todo updates `sortedTodos`, so the buckets refresh
+    // without another database query or a separately persisted summary that can drift.
+    type PropertyBucket = {
+      canCreate: boolean;
+      categoryOrder: number;
+      filters: TodoFilters;
+      id: string;
+      label: string;
+      matchedTodos: Todo[];
+      searchKeywords: string;
+      sortRank: number;
+    };
+    const buckets = new Map<string, PropertyBucket>();
+
+    sortedTodos.forEach((todo) => {
+      const todoPropertyIds = new Set<string>();
+      const addProperty = (property: Omit<PropertyBucket, 'matchedTodos'>) => {
+        if (todoPropertyIds.has(property.id)) {
+          return;
+        }
+
+        todoPropertyIds.add(property.id);
+        const existing = buckets.get(property.id);
+        if (existing) {
+          existing.matchedTodos.push(todo);
+          return;
+        }
+
+        buckets.set(property.id, { ...property, matchedTodos: [todo] });
+      };
+
+      normalizeTodoTags(todo.tags).forEach((tag) => {
+        const displayTag = formatTagLabel(tag);
+        const label = displayTag.startsWith('#') ? displayTag : `#${displayTag}`;
+        addProperty({
+          canCreate: true,
+          categoryOrder: 0,
+          filters: { ...cloneTodoFilters(), tag: [displayTag] },
+          id: `tag:${displayTag.toLocaleLowerCase()}`,
+          label,
+          searchKeywords: `${displayTag} ${label} tag property`,
+          sortRank: 0,
+        });
+      });
+
+      const rawDateLabel = getHistoryTodoPreviewDateLabel(todo, dateStatusNow);
+      if (rawDateLabel) {
+        // Keep this identical to TodoMetaTags: relative filters are anchored to
+        // the todo's creation time, and overdue labels may replace the normal
+        // date display. Bucketing by the rendered label guarantees that the
+        // summary and its expanded rows say the same thing.
+        const label = formatTodoDatePropertyLabel(
+          todo,
+          rawDateLabel,
+          dateLabelDisplayMode,
+          showOverdueMetaTags,
+          dateStatusNow,
+        );
+
+        addProperty({
+          canCreate: false,
+          categoryOrder: 1,
+          filters: cloneTodoFilters(),
+          id: `date:${normalizePresetSearchInput(label)}`,
+          label,
+          searchKeywords: `${rawDateLabel} ${label} date due calendar property`,
+          sortRank: getDateFilterSortRank(rawDateLabel, dateStatusNow, todo.createdAt),
+        });
+      }
+
+      todo.filters.priority.forEach((value) => {
+        if (!value || value === 'None') {
+          return;
+        }
+
+        const priorityIndex = PRIORITY_MENU_ITEMS.indexOf(value);
+        addProperty({
+          canCreate: true,
+          categoryOrder: 2,
+          filters: { ...cloneTodoFilters(), priority: [value] },
+          id: `priority:${value.toLocaleLowerCase()}`,
+          label: value,
+          searchKeywords: `${value} priority property`,
+          sortRank: priorityIndex >= 0 ? priorityIndex : PRIORITY_MENU_ITEMS.length,
+        });
+      });
+
+      const createdValue = toISODateString(startOfDay(new Date(todo.createdAt)));
+      const createdLabel = formatCreatedAtMetaLabel(todo.createdAt);
+      addProperty({
+        canCreate: false,
+        categoryOrder: 3,
+        filters: cloneTodoFilters(),
+        id: `created:${createdValue}`,
+        label: createdLabel,
+        searchKeywords: `${createdLabel} created creation age property`,
+        sortRank: -getDateFilterSortRank(createdValue, dateStatusNow),
+      });
+
+      const reminder = decodeTodoReminder(todo.filters.reminder);
+      if (reminder.habitHours) {
+        addProperty({
+          canCreate: false,
+          categoryOrder: 4,
+          filters: { ...cloneTodoFilters(), reminder: [HABIT_ITEMS_FILTER_VALUE] },
+          id: 'habit',
+          label: 'Habit',
+          searchKeywords: 'habit habits habit items schedule property',
+          sortRank: 0,
+        });
+      }
+
+      if (reminder.repeat !== 'none') {
+        addProperty({
+          canCreate: true,
+          categoryOrder: 5,
+          filters: { ...cloneTodoFilters(), reminder: [REPEATING_ITEMS_FILTER_VALUE] },
+          id: 'repeating',
+          label: 'Repeating',
+          searchKeywords: 'repeat repeating recurring schedule property',
+          sortRank: 0,
+        });
+      }
+
+      if (reminder.time) {
+        addProperty({
+          canCreate: false,
+          categoryOrder: 6,
+          filters: cloneTodoFilters(),
+          id: 'reminder',
+          label: 'Reminder',
+          searchKeywords: 'reminder alarm notification time property',
+          sortRank: 0,
+        });
+      }
+
+      if (todo.pinned) {
+        addProperty({
+          canCreate: false,
+          categoryOrder: 7,
+          filters: cloneTodoFilters(),
+          id: 'pinned',
+          label: 'Pinned',
+          searchKeywords: 'pin pinned important property',
+          sortRank: 0,
+        });
+      }
+    });
+
+    return [...buckets.values()]
+      .sort((first, second) => (
+        first.categoryOrder - second.categoryOrder ||
+        first.sortRank - second.sortRank ||
+        first.label.localeCompare(second.label, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        })
+      ))
+      .map((bucket) => ({
+        canCreate: bucket.canCreate,
+        matchedTodos: bucket.matchedTodos,
+        preset: createSearchPropertyPreset(
+          bucket.id,
+          bucket.label,
+          bucket.filters,
+          bucket.searchKeywords,
+        ),
+      }));
+  }, [
+    dateLabelDisplayMode,
+    dateStatusNow,
+    showOverdueMetaTags,
+    showSearchPresetSections,
+    sortedTodos,
+  ]);
+  const searchPresetSources = useMemo<SearchPresetSource[]>(() => {
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_PRESET_SOURCES;
+    }
+
+    const now = dateStatusNow;
+    return [
+      ...searchPropertyPresets.map((item) => ({
+        canCreate: item.canCreate,
+        count: item.matchedTodos.length,
+        kind: 'property' as const,
+        matchedTodos: item.matchedTodos,
+        preset: item.preset,
+      })),
+      ...menuPresets.map((preset) => {
+        const preparedFilters = prepareTodoFilterMatch(
+          preset.filters,
+          preset.requiredFilters,
+          preset.avoidedFilters,
+          listMenuTree,
+        );
+        const matchedTodos = todos.filter((todo) => {
           if (pendingDeleteIds.has(todo.id)) {
-            return total;
+            return false;
           }
 
           if (hideDoneTodos && preset.todoGroupMode !== 'status' && todo.done) {
-            return total;
+            return false;
           }
 
-          return todoMatchesFilters(
+          return todoMatchesPreparedFilters(
             todo,
-            preset.filters,
-            listMenuTree,
+            preparedFilters,
             now,
-            preset.requiredFilters,
-            preset.avoidedFilters,
-          )
-            ? total + 1
-            : total;
-        }, 0);
-        const score = getPresetSearchScore(preset, searchPresetQuery);
+          );
+        });
 
         return {
+          canCreate: true,
+          count: matchedTodos.length,
+          kind: 'saved' as const,
+          matchedTodos,
+          preset,
+        };
+      }),
+    ];
+  }, [
+    dateStatusNow,
+    hideDoneTodos,
+    listMenuTree,
+    menuPresets,
+    pendingDeleteIds,
+    searchPropertyPresets,
+    showSearchPresetSections,
+    todos,
+  ]);
+  const searchPresetItems = useMemo<SearchPresetItem[]>(() => {
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_PRESET_ITEMS;
+    }
+
+    return searchPresetSources
+      .map(({ canCreate, count, kind, matchedTodos, preset }, index) => {
+        const score = kind === 'property'
+          ? getSearchTextScore(preset.label, preset.searchKeywords, searchPresetQuery)
+          : getPresetSearchScore(preset, searchPresetQuery);
+
+        return {
+          canCreate,
           count,
           index,
+          kind,
+          matchedTodos,
           matchesQuery: Boolean(searchPresetQuery) && Number.isFinite(score),
           preset,
           score,
@@ -10925,38 +11469,40 @@ export default function App() {
 
         return first.index - second.index;
       });
-  }, [
-    dateStatusNow,
-    hideDoneTodos,
-    listMenuTree,
-    menuPresets,
-    pendingDeleteIds,
-    searchPresetQuery,
-    todos,
-  ]);
-  const searchListMenuItems = useMemo<SearchListMenuItem[]>(() => (
-    listMenuTree.map((node, index) => {
-      const count = todos.reduce((total, todo) => {
-        if (pendingDeleteIds.has(todo.id)) {
-          return total;
-        }
+  }, [searchPresetQuery, searchPresetSources, showSearchPresetSections]);
+  const searchListMenuSources = useMemo<SearchListMenuSource[]>(() => {
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_LIST_MENU_SOURCES;
+    }
 
-        if (hideDoneTodos && todo.done) {
-          return total;
-        }
-
-        return todoMatchesSelectedListFilters([node.label], todo.filters.list, listMenuTree)
-          ? total + 1
-          : total;
-      }, 0);
-      const score = getListMenuSearchScore(node, searchPresetQuery);
+    return listMenuTree.map((node, index) => {
+      const matchingListValues = new Set([
+        node.label,
+        ...(node.children?.map((child) => child.label) ?? []),
+      ]);
+      const matchedTodos = sortedTodos.filter((todo) => (
+        todo.filters.list.some((value) => matchingListValues.has(value))
+      ));
 
       return {
-        count,
+        count: matchedTodos.length,
         index,
         listIndex: index,
-        matchesQuery: Boolean(searchPresetQuery) && Number.isFinite(score),
+        matchedTodos,
         node,
+      };
+    }).filter((item) => item.count > 0);
+  }, [listMenuTree, showSearchPresetSections, sortedTodos]);
+  const searchListMenuItems = useMemo<SearchListMenuItem[]>(() => {
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_LIST_MENU_ITEMS;
+    }
+
+    return searchListMenuSources.map((item) => {
+      const score = getListMenuSearchScore(item.node, searchPresetQuery);
+      return {
+        ...item,
+        matchesQuery: Boolean(searchPresetQuery) && Number.isFinite(score),
         score,
       };
     }).sort((first, second) => {
@@ -10971,79 +11517,68 @@ export default function App() {
       }
 
       return first.index - second.index;
-    })
-  ), [
-    hideDoneTodos,
-    listMenuTree,
-    pendingDeleteIds,
-    searchPresetQuery,
-    todos,
-  ]);
+    });
+  }, [searchListMenuSources, searchPresetQuery, showSearchPresetSections]);
   const searchPresetTodosByPresetId = useMemo(() => {
-    const now = dateStatusNow;
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_PRESET_TODOS_BY_PRESET_ID;
+    }
+
     const todosByPresetId = new Map<string, Todo[]>();
 
-    searchPresetItems.forEach((item) => {
-      const presetTodos = todos.filter((todo) => {
-        if (pendingDeleteIds.has(todo.id)) {
-          return false;
-        }
-
-        if (hideDoneTodos && item.preset.todoGroupMode !== 'status' && todo.done) {
-          return false;
-        }
-
-        return todoMatchesFilters(
-          todo,
-          item.preset.filters,
-          listMenuTree,
-          now,
-          item.preset.requiredFilters,
-          item.preset.avoidedFilters,
-        );
-      });
-
-      todosByPresetId.set(item.preset.id, presetTodos);
+    searchPresetSources.forEach((item) => {
+      todosByPresetId.set(item.preset.id, item.matchedTodos ?? []);
     });
 
     return todosByPresetId;
-  }, [
-    dateStatusNow,
-    hideDoneTodos,
-    listMenuTree,
-    pendingDeleteIds,
-    searchPresetItems,
-    todos,
-  ]);
+  }, [searchPresetSources, showSearchPresetSections]);
   const searchListMenuTodosByLabel = useMemo(() => {
+    if (!showSearchPresetSections) {
+      return EMPTY_SEARCH_LIST_MENU_TODOS_BY_LABEL;
+    }
+
     const todosByLabel = new Map<string, Todo[]>();
 
-    searchListMenuItems.forEach((item) => {
-      const listTodos = todos.filter((todo) => {
-        if (pendingDeleteIds.has(todo.id)) {
-          return false;
-        }
-
-        if (hideDoneTodos && todo.done) {
-          return false;
-        }
-
-        return todoMatchesSelectedListFilters([item.node.label], todo.filters.list, listMenuTree);
-      });
-
-      todosByLabel.set(item.node.label, listTodos);
+    searchListMenuSources.forEach((item) => {
+      todosByLabel.set(item.node.label, item.matchedTodos);
     });
 
     return todosByLabel;
+  }, [searchListMenuSources, showSearchPresetSections]);
+  const searchPresetIdsCollapsedForRender = useMemo(() => {
+    if (!showSearchPresetSections) {
+      return collapsedSearchPresetIds;
+    }
+
+    const knownPresetIds = knownSearchPresetIdsRef.current;
+    let nextCollapsedPresetIds = collapsedSearchPresetIds;
+
+    searchPresetItems.forEach((item) => {
+      if (
+        knownPresetIds.has(item.preset.id) ||
+        nextCollapsedPresetIds.has(item.preset.id)
+      ) {
+        return;
+      }
+
+      if (nextCollapsedPresetIds === collapsedSearchPresetIds) {
+        nextCollapsedPresetIds = new Set(collapsedSearchPresetIds);
+      }
+      nextCollapsedPresetIds.add(item.preset.id);
+    });
+
+    return nextCollapsedPresetIds;
   }, [
-    hideDoneTodos,
-    listMenuTree,
-    pendingDeleteIds,
-    searchListMenuItems,
-    todos,
+    collapsedSearchPresetIds,
+    searchPresetItems,
+    showSearchPresetSections,
   ]);
   const searchListRows = useMemo(
     () => {
+      if (!showSearchPresetSections) {
+        return [];
+      }
+
       const listRows = buildSearchListMenuRows(
         searchListMenuItems,
         collapsedSearchListLabels,
@@ -11051,27 +11586,28 @@ export default function App() {
       );
       const presetRows = buildSearchListRows(
         searchPresetItems,
-        collapsedSearchPresetIds,
+        searchPresetIdsCollapsedForRender,
         searchPresetTodosByPresetId,
       );
 
       if (listRows.length === 0 || presetRows.length === 0) {
-        return [...listRows, ...presetRows];
+        return [...presetRows, ...listRows];
       }
 
       return [
-        ...listRows,
-        { id: 'before:search-presets', type: 'sectionGap' as const },
         ...presetRows,
+        { id: 'before:search-lists', type: 'sectionGap' as const },
+        ...listRows,
       ];
     },
     [
       collapsedSearchListLabels,
-      collapsedSearchPresetIds,
       searchListMenuItems,
       searchListMenuTodosByLabel,
+      searchPresetIdsCollapsedForRender,
       searchPresetItems,
       searchPresetTodosByPresetId,
+      showSearchPresetSections,
     ],
   );
   const itemSearchRows = useMemo(
@@ -11941,6 +12477,66 @@ export default function App() {
     triggerSubtleHaptic();
   }, [clearNotificationTodoReveal, hasTodoEditTargets, recordFilterConfigUndo]);
 
+  const toggleAvoidedFilterValue = useCallback((filterKey: FilterKey, value: string) => {
+    if (hasTodoEditTargets) {
+      return;
+    }
+
+    const currentlyAvoided = isFilterValueAvoided(
+      avoidedFiltersRef.current,
+      filterKey,
+      value,
+    );
+    const nextFilters = currentlyAvoided
+      ? selectedFiltersRef.current
+      : removeFilterValueFromRequiredFilters(selectedFiltersRef.current, filterKey, value);
+    const nextRequiredFilters = currentlyAvoided
+      ? requiredFiltersRef.current
+      : removeFilterValueFromRequiredFilters(requiredFiltersRef.current, filterKey, value);
+    const nextAvoidedFilters = currentlyAvoided
+      ? removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, filterKey, value)
+      : addFilterValueToAvoidedFilters(avoidedFiltersRef.current, filterKey, value);
+
+    if (
+      filtersEqual(selectedFiltersRef.current, nextFilters) &&
+      filtersEqual(requiredFiltersRef.current, nextRequiredFilters) &&
+      filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)
+    ) {
+      return;
+    }
+
+    clearNotificationTodoReveal();
+    recordFilterConfigUndo('Change filters');
+    setSelectedFilters(nextFilters);
+    setRequiredFilters(nextRequiredFilters);
+    setAvoidedFilters(nextAvoidedFilters);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, hasTodoEditTargets, recordFilterConfigUndo]);
+
+  const toggleIncludedPresetProperty = useCallback((filterKey: FilterKey, value: string) => {
+    if (hasTodoEditTargets) {
+      return;
+    }
+
+    const currentlyExcluded = isFilterValueAvoided(
+      avoidedFiltersRef.current,
+      filterKey,
+      value,
+    );
+    const nextAvoidedFilters = currentlyExcluded
+      ? removeFilterValueFromAvoidedFilters(avoidedFiltersRef.current, filterKey, value)
+      : addFilterValueToAvoidedFilters(avoidedFiltersRef.current, filterKey, value);
+
+    if (filtersEqual(avoidedFiltersRef.current, nextAvoidedFilters)) {
+      return;
+    }
+
+    clearNotificationTodoReveal();
+    recordFilterConfigUndo('Change filters');
+    setAvoidedFilters(nextAvoidedFilters);
+    triggerSubtleHaptic();
+  }, [clearNotificationTodoReveal, hasTodoEditTargets, recordFilterConfigUndo]);
+
   const toggleRequiredListMenuItem = useCallback((item: VisibleListMenuItem) => {
     if (hasTodoEditTargets) {
       return;
@@ -12225,6 +12821,7 @@ export default function App() {
       setTodoSortMode('newest');
       setTodoGroupMode('none');
       setListOrderMode('alphabetical');
+      setActivePresetSectionSelection(null);
       setOpenMenuPresetId(null);
       setOpenQuickPresetNavSlotNumber(null);
     }
@@ -12259,6 +12856,7 @@ export default function App() {
       setSelectedFilters(defaultFilters);
       setRequiredFilters(defaultFilters);
       setAvoidedFilters(defaultFilters);
+      setActivePresetSectionSelection(null);
     }
 
     closeListMenuState();
@@ -12368,19 +12966,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!showSearchPresetSections) {
+      return;
+    }
+
+    const previousPresetIds = knownSearchPresetIdsRef.current;
+    const availablePresetIds = new Set(
+      searchPresetItems.map((item) => item.preset.id),
+    );
+
     setCollapsedSearchPresetIds((current) => {
       const next = new Set(current);
       let changed = false;
 
-      menuPresets.forEach((preset) => {
-        if (!next.has(preset.id)) {
-          next.add(preset.id);
+      availablePresetIds.forEach((presetId) => {
+        if (!previousPresetIds.has(presetId) && !next.has(presetId)) {
+          next.add(presetId);
           changed = true;
         }
       });
 
       for (const presetId of next) {
-        if (!menuPresets.some((preset) => preset.id === presetId)) {
+        if (!availablePresetIds.has(presetId)) {
           next.delete(presetId);
           changed = true;
         }
@@ -12388,7 +12995,8 @@ export default function App() {
 
       return changed ? next : current;
     });
-  }, [menuPresets]);
+    knownSearchPresetIdsRef.current = availablePresetIds;
+  }, [searchPresetItems, showSearchPresetSections]);
 
   const toggleSearchPresetCollapsed = useCallback((presetId: string) => {
     triggerSubtleHaptic();
@@ -12434,7 +13042,7 @@ export default function App() {
     triggerSubtleHaptic();
 
     const allPresetsCollapsed = presetIds.every((presetId) => (
-      collapsedSearchPresetIds.has(presetId)
+      searchPresetIdsCollapsedForRender.has(presetId)
     ));
     const allListsCollapsed = listLabels.every((listLabel) => (
       collapsedSearchListLabels.has(listLabel)
@@ -12486,9 +13094,25 @@ export default function App() {
     });
   }, [
     collapsedSearchListLabels,
-    collapsedSearchPresetIds,
     searchListMenuItems,
+    searchPresetIdsCollapsedForRender,
     searchPresetItems,
+  ]);
+
+  useEffect(() => {
+    if (!pendingToggleAllSearchSectionsRef.current || !showSearchPresetSections) {
+      return;
+    }
+
+    pendingToggleAllSearchSectionsRef.current = false;
+    if (searchPresetItems.length > 0 || searchListMenuItems.length > 0) {
+      toggleAllSearchSections();
+    }
+  }, [
+    searchListMenuItems.length,
+    searchPresetItems.length,
+    showSearchPresetSections,
+    toggleAllSearchSections,
   ]);
 
   useLayoutEffect(() => {
@@ -12585,6 +13209,13 @@ export default function App() {
     setShowOverdueMetaTags((current) => !current);
     triggerSubtleHaptic();
   }, [recordUndo]);
+
+  const toggleShowPresetPropertiesAboveSearch = useCallback(() => {
+    const nextVisible = !showPresetPropertiesAboveSearch;
+    setShowPresetPropertiesAboveSearch(nextVisible);
+    void persistAppSettings({ showPresetPropertiesAboveSearch: nextVisible });
+    triggerSubtleHaptic();
+  }, [persistAppSettings, showPresetPropertiesAboveSearch]);
 
   const getDateMenuDisplayLabel = useCallback(
     (menuLabel: string, dateLabels: string[]) =>
@@ -12803,14 +13434,13 @@ export default function App() {
   const handleCreateDraftTextChange = useCallback((nextText: string) => {
     const previousText = createDraftTextValueRef.current;
     const commandCursorPosition = getDoubleSpaceCommandCursorPosition(previousText, nextText);
-    const opensCommandPalette =
-      !createCommandPaletteVisible
-      && commandCursorPosition !== null;
 
-    if (opensCommandPalette && commandCursorPosition !== null) {
+    if (commandCursorPosition !== null) {
       createDraftTextValueRef.current = previousText;
       setCreateDraftText(previousText);
-      openCreateCommandPalette(commandCursorPosition);
+      if (!createCommandPaletteVisible) {
+        openCreateCommandPalette(commandCursorPosition);
+      }
       return;
     }
 
@@ -13261,11 +13891,17 @@ export default function App() {
     const nextPresetIdLength = Math.max(
       quickPresetNavPresetIdsRef.current.length,
       quickPresetNavIconNamesRef.current.length,
+      quickPresetNavItems.reduce((maxIndex, item) => Math.max(maxIndex, item.navIndex), -1) + 1,
       navIndex + 1,
     );
     const nextQuickPresetNavPresetIds = Array.from(
       { length: nextPresetIdLength },
-      (_, index) => quickPresetNavPresetIdsRef.current[index] ?? null,
+      (_, index) => (
+        quickPresetNavPresetIdsRef.current[index]
+        ?? quickPresetNavItemByNavIndex.get(index)?.presetId
+        ?? quickPresetNavItemByNavIndex.get(index)?.preset?.id
+        ?? null
+      ),
     );
     nextQuickPresetNavPresetIds[navIndex] = presetId;
     const normalizedQuickPresetNavPresetIds = cloneQuickPresetNavPresetIds(
@@ -13287,6 +13923,7 @@ export default function App() {
     addCustomTagsForMenuPresets,
     persistAppSettings,
     quickPresetNavItemByNavIndex,
+    quickPresetNavItems,
     recordUndo,
   ]);
 
@@ -13526,9 +14163,15 @@ export default function App() {
         preset.todoSortMode,
         preset.todoGroupMode,
       ));
-      if (preset.metaTagVisibility) {
-        setMetaTagVisibility(cloneMetaTagVisibility(preset.metaTagVisibility));
+      const presetMetaTagVisibility = preset.metaTagVisibility;
+      if (presetMetaTagVisibility) {
+        setMetaTagVisibility((current) => (
+          metaTagVisibilityEqual(current, presetMetaTagVisibility)
+            ? current
+            : cloneMetaTagVisibility(presetMetaTagVisibility)
+        ));
       }
+      setActivePresetSectionSelection(null);
       setOpenMenuPresetId(preset.id);
       setOpenQuickPresetNavSlotNumber(null);
     }
@@ -13621,6 +14264,11 @@ export default function App() {
     preset: MenuPreset,
     section: MenuPresetSection,
   ) => {
+    const baseFilters = removeMeaninglessPresetSelfListFilter(
+      preset,
+      cloneTodoFilters(preset.filters),
+    );
+    const baseRequiredFilters = pruneTodoFilters(preset.requiredFilters, baseFilters);
     const nextFilters = cloneTodoFilters(section.filters);
     const nextRequiredFilters = pruneTodoFilters(section.requiredFilters, nextFilters);
     const nextAvoidedFilters = cloneTodoFilters(section.avoidedFilters);
@@ -13647,9 +14295,25 @@ export default function App() {
         section.todoSortMode,
         section.todoGroupMode,
       ));
-      if (section.metaTagVisibility) {
-        setMetaTagVisibility(cloneMetaTagVisibility(section.metaTagVisibility));
+      const sectionMetaTagVisibility = section.metaTagVisibility;
+      if (sectionMetaTagVisibility) {
+        setMetaTagVisibility((current) => (
+          metaTagVisibilityEqual(current, sectionMetaTagVisibility)
+            ? current
+            : cloneMetaTagVisibility(sectionMetaTagVisibility)
+        ));
       }
+      setActivePresetSectionSelection({
+        baseAvoidedFilters: cloneTodoFilters(preset.avoidedFilters),
+        baseFilters,
+        baseRequiredFilters,
+        durableAvoidedFilters: cloneTodoFilters(nextAvoidedFilters),
+        durableFilters: cloneTodoFilters(nextFilters),
+        durableRequiredFilters: cloneTodoFilters(nextRequiredFilters),
+        presetFingerprint: getPresetFingerprint(preset),
+        presetId: preset.id,
+        sectionIds: [section.id],
+      });
       setOpenMenuPresetId(preset.id);
       setOpenQuickPresetNavSlotNumber(null);
     }
@@ -13660,6 +14324,7 @@ export default function App() {
     clearNotificationTodoReveal,
     closeListMenuState,
     hasTodoEditTargets,
+    removeMeaninglessPresetSelfListFilter,
     updateCurrentTodoTargetFilters,
   ]);
 
@@ -15037,14 +15702,23 @@ export default function App() {
       || activeMenuPreset?.label,
     );
 
+  const scrollFocusedSearchIntoView = useCallback(() => {
+    savedSearchScrollOffsetRef.current = todoListSearchOffset;
+    searchScrollOffsetsByModeRef.current.item = todoListSearchOffset;
+    scrollTodoListToHeaderTop({ target: 'search' });
+  }, [scrollTodoListToHeaderTop, todoListSearchOffset]);
+
   const focusHeaderSearchInput = useCallback(() => {
+    setSearchMode('item');
     searchInputRef.current?.blur();
+    scrollFocusedSearchIntoView();
     requestAnimationFrame(() => {
+      scrollFocusedSearchIntoView();
       requestAnimationFrame(() => {
         searchInputRef.current?.focus();
       });
     });
-  }, []);
+  }, [scrollFocusedSearchIntoView]);
 
   const openHeaderSearch = useCallback((options?: {
     focusInput?: boolean;
@@ -15054,10 +15728,10 @@ export default function App() {
     setSearchMode(options?.mode ?? 'item');
     setNavTab('search');
     closeListMenuState();
-    restoreSearchScroll();
     if (options?.focusInput !== false) {
       focusHeaderSearchInput();
     } else {
+      restoreSearchScroll();
       searchInputRef.current?.blur();
       Keyboard.dismiss();
     }
@@ -15144,9 +15818,7 @@ export default function App() {
     }
 
     if (tab === 'search' && navTab === 'search') {
-      setSearchMode('preset');
-      searchInputRef.current?.blur();
-      Keyboard.dismiss();
+      focusHeaderSearchInput();
       triggerSubtleHaptic();
       return;
     }
@@ -15206,7 +15878,7 @@ export default function App() {
         setActiveTodoDetailId(null);
         break;
       case 'search':
-        openHeaderSearch({ focusInput: false, mode: 'preset' });
+        openHeaderSearch({ mode: 'item' });
         return;
       default:
         break;
@@ -15248,8 +15920,8 @@ export default function App() {
     handleNavTabPress('calendar');
   }, [handleNavTabPress]);
 
-  const handleSearchNavPress = useCallback((event: GestureResponderEvent) => {
-    const timestamp = event.nativeEvent.timestamp || Date.now();
+  const handleSearchNavPress = useCallback(() => {
+    const timestamp = Date.now();
     const sinceLastTap = timestamp - lastSearchNavTapRef.current;
 
     if (!todoSelectMode && sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
@@ -15263,11 +15935,27 @@ export default function App() {
     handleNavTabPress('search');
   }, [handleNavTabPress, handleSearchQueryChange, todoSelectMode]);
 
+  const handleSearchInputPressIn = useCallback(() => {
+    const timestamp = Date.now();
+    const sinceLastTap = timestamp - lastSearchInputTapRef.current;
+
+    if (sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
+      lastSearchInputTapRef.current = 0;
+      handleSearchQueryChange('');
+      triggerSubtleHaptic();
+      return;
+    }
+
+    lastSearchInputTapRef.current = timestamp;
+  }, [handleSearchQueryChange]);
+
   const handleSearchNavLongPress = useCallback(() => {
     lastSearchNavTapRef.current = 0;
 
-    if (navTab !== 'search') {
+    if (!showSearchPresetSections) {
+      pendingToggleAllSearchSectionsRef.current = true;
       openHeaderSearch({ focusInput: false, mode: 'preset' });
+      return;
     }
 
     const hasSearchSections =
@@ -15280,10 +15968,10 @@ export default function App() {
 
     triggerSubtleHaptic();
   }, [
-    navTab,
     openHeaderSearch,
     searchListMenuItems,
     searchPresetItems,
+    showSearchPresetSections,
     toggleAllSearchSections,
   ]);
 
@@ -15668,6 +16356,7 @@ export default function App() {
       requiredFilters,
       selectedFilters,
       showOverdueMetaTags,
+      showPresetPropertiesAboveSearch,
       todoGroupMode,
       todoSortMode,
       metaTagVisibility,
@@ -15705,6 +16394,7 @@ export default function App() {
     requiredFilters,
     selectedFilters,
     showOverdueMetaTags,
+    showPresetPropertiesAboveSearch,
     todoGroupMode,
     todoSortMode,
     todos,
@@ -15811,6 +16501,7 @@ export default function App() {
       requiredFilters: restoredRequiredFilters,
       selectedFilters: restoredSelectedFilters,
       showOverdueMetaTags: payload.settings.showOverdueMetaTags,
+      showPresetPropertiesAboveSearch: payload.settings.showPresetPropertiesAboveSearch,
       todoGroupMode: payload.settings.todoGroupMode,
       todoSortMode: payload.settings.todoSortMode,
     });
@@ -15866,6 +16557,7 @@ export default function App() {
     setHabitQuietHoursEnabled(payload.settings.habitQuietHoursEnabled);
     setHideDoneTodos(payload.settings.hideDoneTodos);
     setShowOverdueMetaTags(payload.settings.showOverdueMetaTags);
+    setShowPresetPropertiesAboveSearch(payload.settings.showPresetPropertiesAboveSearch);
     setDateLabelDisplayMode(normalizeDateLabelDisplayMode(
       payload.settings.dateLabelDisplayMode,
     ));
@@ -16731,14 +17423,25 @@ export default function App() {
               >
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityHint="Tap to expand or collapse. Press and hold to edit hidden search keywords."
-                  accessibilityLabel={`List ${item.preset.label}, ${item.count} items`}
+                  accessibilityHint={
+                    item.kind === 'saved'
+                      ? 'Tap to expand or collapse. Press and hold to edit hidden search keywords.'
+                      : 'Tap to expand or collapse.'
+                  }
+                  accessibilityLabel={`${
+                    item.kind === 'property' ? 'Property' : 'Preset'
+                  } ${item.preset.label}, ${item.count} items`}
                   accessibilityState={{ expanded: isExpanded }}
                   collapsable={false}
-                  onLongPress={() => openPresetSearchKeywordPrompt(item.preset)}
+                  onLongPress={
+                    item.kind === 'saved'
+                      ? () => openPresetSearchKeywordPrompt(item.preset)
+                      : undefined
+                  }
                   onPress={() => toggleSearchPresetCollapsed(item.preset.id)}
                   style={({ pressed }) => [
                     styles.todoSectionHeaderPressable,
+                    item.kind === 'property' && styles.searchPropertyHeaderPressable,
                     pressed && styles.todoGroupHeaderPressed,
                   ]}
                 >
@@ -16753,19 +17456,33 @@ export default function App() {
                       {item.preset.label}
                     </Text>
                   </View>
+                  {item.kind === 'property' ? (
+                    <View style={styles.todoSectionHeaderMeta}>
+                      <Text style={styles.todoGroupCount}>{item.count}</Text>
+                      <Ionicons
+                        name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                        color={THEME_TEXT_SECONDARY}
+                        size={15}
+                      />
+                    </View>
+                  ) : null}
                 </Pressable>
-                <View style={styles.todoSectionHeaderMeta}>
-                  {renderTodoSectionAddButton(
-                    `Add todo to ${item.preset.label}`,
-                    mergeCreateSectionFilters(item.preset.requiredFilters, item.preset.filters),
-                  )}
-                  <Text style={styles.todoGroupCount}>{item.count}</Text>
-                  <Ionicons
-                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                    color={THEME_TEXT_SECONDARY}
-                    size={15}
-                  />
-                </View>
+                {item.kind === 'saved' ? (
+                  <View style={styles.todoSectionHeaderMeta}>
+                    {item.canCreate
+                      ? renderTodoSectionAddButton(
+                        `Add todo to ${item.preset.label}`,
+                        mergeCreateSectionFilters(item.preset.requiredFilters, item.preset.filters),
+                      )
+                      : null}
+                    <Text style={styles.todoGroupCount}>{item.count}</Text>
+                    <Ionicons
+                      name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                      color={THEME_TEXT_SECONDARY}
+                      size={15}
+                    />
+                  </View>
+                ) : null}
               </View>
               {isExpanded && item.count === 0 ? (
                 <View
@@ -17171,6 +17888,359 @@ export default function App() {
     [deleteNotificationLogEntry, openNotificationLogEntry, todosById],
   );
 
+  const activePresetSectionPreset =
+    navTab === null && !hasTodoEditTargets && !todoSelectMode
+      ? openMenuPreset ?? focusedQuickPresetNavItem?.preset ?? activeMenuPreset
+      : null;
+  const activePresetSections = useMemo(
+    () => activePresetSectionPreset?.sections ?? [],
+    [activePresetSectionPreset],
+  );
+  const activePresetAvailableSectionIds = useMemo(
+    () => new Set(activePresetSections.map((section) => section.id)),
+    [activePresetSections],
+  );
+  useEffect(() => {
+    if (!activePresetSectionPreset) {
+      return;
+    }
+
+    setActivePresetSectionSelection((current) => {
+      if (!current || current.presetId !== activePresetSectionPreset.id) {
+        return current;
+      }
+
+      const sectionIds = current.sectionIds.filter((sectionId) => (
+        activePresetAvailableSectionIds.has(sectionId)
+      ));
+
+      if (sectionIds.length === current.sectionIds.length) {
+        return current;
+      }
+
+      return { ...current, sectionIds };
+    });
+  }, [activePresetAvailableSectionIds, activePresetSectionPreset]);
+  const activePresetPropertyPreset = activePresetSectionPreset;
+  const activePresetPropertySourceTodos = useMemo(() => {
+    if (!showPresetPropertiesAboveSearch || !activePresetPropertyPreset) {
+      return [];
+    }
+
+    const presetFilters = removeMeaninglessPresetSelfListFilter(
+      activePresetPropertyPreset,
+      activePresetPropertyPreset.filters,
+    );
+    const preparedPresetFilters = prepareTodoFilterMatch(
+      presetFilters,
+      activePresetPropertyPreset.requiredFilters,
+      activePresetPropertyPreset.avoidedFilters,
+      listMenuTree,
+    );
+
+    return todos.filter((todo) => (
+      !pendingDeleteIds.has(todo.id) &&
+      (!hideDoneTodos || activePresetPropertyPreset.todoGroupMode === 'status' || !todo.done) &&
+      todoMatchesPreparedFilters(
+        todo,
+        preparedPresetFilters,
+        dateStatusNow,
+      )
+    ));
+  }, [
+    activePresetPropertyPreset,
+    dateStatusNow,
+    hideDoneTodos,
+    listMenuTree,
+    pendingDeleteIds,
+    removeMeaninglessPresetSelfListFilter,
+    showPresetPropertiesAboveSearch,
+    todos,
+  ]);
+  const activePresetPropertyItems = useMemo<ActivePresetPropertyItem[]>(() => {
+    if (!showPresetPropertiesAboveSearch || !activePresetPropertyPreset) {
+      return [];
+    }
+
+    const propertyByKey = new Map<string, ActivePresetPropertyItem>();
+    const addProperty = (property: ActivePresetPropertyItem) => {
+      propertyByKey.set(
+        `${property.sourceFilterKey}:${property.value.toLocaleLowerCase()}`,
+        property,
+      );
+    };
+
+    activePresetPropertySourceTodos.forEach((todo) => {
+      normalizeTodoTags(todo.tags).forEach((tag) => {
+        const displayTag = formatTagLabel(tag);
+        addProperty({
+          avoided: false,
+          categoryOrder: 0,
+          displayLabel: `#${displayTag.replace(/^#/, '')}`,
+          filterKey: 'tag',
+          id: `active-property-tag-${displayTag.toLocaleLowerCase()}`,
+          sourceFilterKey: 'tag',
+          value: displayTag,
+        });
+      });
+
+      todo.filters.list.forEach((value) => {
+        addProperty({
+          avoided: false,
+          categoryOrder: 1,
+          displayLabel: formatListLabel(value),
+          filterKey: 'list',
+          id: `active-property-list-${value.toLocaleLowerCase()}`,
+          sourceFilterKey: 'list',
+          value,
+        });
+      });
+
+      const rawDateLabel = getHistoryTodoPreviewDateLabel(todo, dateStatusNow);
+      if (rawDateLabel) {
+        const resolvedDate = resolveDateFilterValueDate(
+          rawDateLabel,
+          dateStatusNow,
+          todo.createdAt,
+        );
+        const value = resolvedDate
+          ? toISODateString(resolvedDate)
+          : formatDateFilterValue(rawDateLabel) || rawDateLabel;
+        addProperty({
+          avoided: false,
+          categoryOrder: 2,
+          displayLabel: formatTodoDatePropertyLabel(
+            todo,
+            rawDateLabel,
+            dateLabelDisplayMode,
+            showOverdueMetaTags,
+            dateStatusNow,
+          ),
+          filterKey: 'date',
+          id: `active-property-date-${value.toLocaleLowerCase()}`,
+          sourceFilterKey: 'date',
+          value,
+        });
+      }
+
+      todo.filters.priority.forEach((value) => {
+        if (!value || value === 'None') {
+          return;
+        }
+
+        addProperty({
+          avoided: false,
+          categoryOrder: 3,
+          displayLabel: value,
+          filterKey: 'priority',
+          id: `active-property-priority-${value.toLocaleLowerCase()}`,
+          sourceFilterKey: 'priority',
+          value,
+        });
+      });
+
+      const reminder = decodeTodoReminder(todo.filters.reminder);
+      if (reminder.habitHours) {
+        addProperty({
+          avoided: false,
+          categoryOrder: 4,
+          displayLabel: HABIT_ITEMS_FILTER_LABEL,
+          filterKey: 'date',
+          id: 'active-property-habit-items',
+          sourceFilterKey: 'reminder',
+          value: HABIT_ITEMS_FILTER_VALUE,
+        });
+      }
+
+      if (reminder.repeat !== 'none') {
+        addProperty({
+          avoided: false,
+          categoryOrder: 5,
+          displayLabel: REPEATING_ITEMS_FILTER_LABEL,
+          filterKey: 'date',
+          id: 'active-property-repeating-items',
+          sourceFilterKey: 'reminder',
+          value: REPEATING_ITEMS_FILTER_VALUE,
+        });
+      }
+    });
+
+    buildActiveFilterItems(
+      activePresetPropertyPreset.avoidedFilters,
+      dateLabelDisplayMode,
+    ).forEach((property) => {
+      const displayLabel = property.filterKey === 'tag'
+        ? `#${property.displayLabel.replace(/^#/, '')}`
+        : property.displayLabel;
+      const categoryOrder = property.sourceFilterKey === 'reminder'
+        ? 5
+        : property.filterKey === 'tag'
+          ? 0
+          : property.filterKey === 'list'
+            ? 1
+            : property.filterKey === 'date'
+              ? 2
+              : 3;
+
+      addProperty({
+        ...property,
+        avoided: true,
+        categoryOrder,
+        displayLabel: `${displayLabel} (!)`,
+        id: `active-property-avoid-${property.id}`,
+      });
+    });
+
+    return [...propertyByKey.values()].sort((first, second) => (
+      first.categoryOrder - second.categoryOrder ||
+      first.displayLabel.localeCompare(second.displayLabel, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      })
+    ));
+  }, [
+    activePresetPropertyPreset,
+    activePresetPropertySourceTodos,
+    dateLabelDisplayMode,
+    dateStatusNow,
+    showOverdueMetaTags,
+    showPresetPropertiesAboveSearch,
+  ]);
+  const isActivePresetPropertyEnabled = (property: ActivePresetPropertyItem) => {
+    if (property.avoided) {
+      return isFilterValueAvoided(
+        avoidedFilters,
+        property.filterKey,
+        property.value,
+      );
+    }
+
+    return !isFilterValueAvoided(
+      avoidedFilters,
+      property.filterKey,
+      property.value,
+    );
+  };
+  const activePresetHeaderPreview = showPresetPropertiesAboveSearch && activePresetPropertyPreset ? (
+    <View
+      onTouchStart={markTodoListContentTouchStart}
+      style={styles.activePresetPreviewSlot}
+    >
+      <View style={styles.activePresetPreviewCard}>
+        <View style={styles.activePresetPreviewHeading}>
+          <Text numberOfLines={1} style={styles.activePresetPreviewTitle}>
+            {appHeaderTitle}
+          </Text>
+          <Text style={styles.activePresetPreviewCount}>
+            {sortedTodos.length === 1 ? '1 item' : `${sortedTodos.length} items`}
+          </Text>
+        </View>
+        <View style={styles.activePresetPropertyList}>
+          {activePresetPropertyItems.length > 0 ? (
+            activePresetPropertyItems.map((property) => {
+              const enabled = isActivePresetPropertyEnabled(property);
+              const required = !property.avoided && isFilterValueRequired(
+                activePresetPropertyPreset.requiredFilters,
+                property.filterKey,
+                property.value,
+              );
+              const displayLabel = property.displayLabel;
+              const colorTheme = property.filterKey === 'tag'
+                ? null
+                : getFilterColorTheme(
+                    deferredFilterColors,
+                    property.filterKey,
+                    property.value,
+                  );
+
+              return (
+                <Pressable
+                  accessibilityHint={
+                    property.avoided
+                      ? enabled
+                        ? 'Stops excluding this property from the current filter'
+                        : 'Excludes this property from the current filter'
+                      : enabled
+                        ? 'Excludes this property from the preset list'
+                        : 'Includes this property in the preset list'
+                  }
+                  accessibilityLabel={`${displayLabel} ${
+                    property.avoided ? 'avoided' : 'preset'
+                  } property`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: enabled }}
+                  key={`${property.sourceFilterKey}:${property.value}`}
+                  onPress={() => {
+                    setOpenMenuPresetId(activePresetPropertyPreset.id);
+
+                    if (property.avoided) {
+                      toggleAvoidedFilterValue(property.filterKey, property.value);
+                      return;
+                    }
+
+                    toggleIncludedPresetProperty(property.filterKey, property.value);
+                  }}
+                  style={({ pressed }) => [
+                    styles.activePresetPropertyChip,
+                    enabled && styles.activePresetPropertyChipEnabled,
+                    !enabled && styles.activePresetPropertyChipDisabled,
+                    enabled && property.avoided && styles.activePresetPropertyChipAvoided,
+                    enabled && !property.avoided && colorTheme && {
+                      backgroundColor: colorTheme.tint,
+                      borderColor: colorTheme.border,
+                    },
+                    pressed && styles.activePresetPropertyChipPressed,
+                  ]}
+                >
+                  {required ? (
+                    <Text
+                      style={[
+                        styles.activePresetPropertyQualifier,
+                        enabled && colorTheme && { color: colorTheme.text },
+                      ]}
+                    >
+                      Must
+                    </Text>
+                  ) : null}
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.activePresetPropertyText,
+                      !enabled && styles.activePresetPropertyTextDisabled,
+                      enabled && property.avoided && styles.activePresetPropertyTextAvoided,
+                      enabled && !property.avoided && colorTheme && { color: colorTheme.text },
+                    ]}
+                  >
+                    {displayLabel}
+                  </Text>
+                  <Ionicons
+                    color={
+                      enabled
+                        ? property.avoided
+                          ? THEME_DANGER
+                          : colorTheme?.text ?? NAV_ACCENT
+                        : THEME_TEXT_TERTIARY
+                    }
+                    name={
+                      enabled
+                        ? property.avoided ? 'ban' : 'checkmark-circle'
+                        : 'ellipse-outline'
+                    }
+                    size={14}
+                  />
+                </Pressable>
+              );
+            })
+          ) : (
+            <View style={styles.activePresetPropertyChipAll}>
+              <Text style={styles.activePresetPropertyText}>All items</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </View>
+  ) : null;
+
   // Avoid painting transient list/preset state before local settings settle.
   // Firebase startup sync continues in the background after the local copy is visible.
   if (!startupDataReady) {
@@ -17399,7 +18469,7 @@ export default function App() {
                       paddingBottom: listMenuHeight + LIST_MENU_BOTTOM_OFFSET + 104,
                     },
                   !showSearchPresetSections &&
-                    filteredTodos.length === 0 &&
+                    sortedTodos.length === 0 &&
                     styles.emptyListContent,
                 ]}
                 data={appTodoListData}
@@ -17478,39 +18548,55 @@ export default function App() {
                           failOffsetY={QUICK_PRESET_HEADER_SWIPE_FAIL_OFFSET_Y}
                           onHandlerStateChange={handleQuickPresetHeaderSwipeStateChange}
                         >
-                          <Pressable
-                            accessibilityHint="Toggles swipe navigation between navbar presets"
-                            accessibilityLabel="Toggle navbar preset focus"
-                            accessibilityRole="button"
+                          <View
                             collapsable={false}
-                            onPress={focusNavbarPresetsFromSectionGap}
-                            onPressIn={() => {
-                              todoSectionGapTouchRef.current = true;
-                            }}
                             style={[
                               styles.quickPresetHeaderSwipeZone,
                               { height: todoListOneHandedOffset },
                             ]}
-                          />
+                          >
+                            <Pressable
+                              accessibilityHint="Toggles swipe navigation between navbar presets"
+                              accessibilityLabel="Toggle navbar preset focus"
+                              accessibilityRole="button"
+                              onPress={focusNavbarPresetsFromSectionGap}
+                              onPressIn={() => {
+                                todoSectionGapTouchRef.current = true;
+                              }}
+                              style={StyleSheet.absoluteFill}
+                            />
+                          </View>
                         </PanGestureHandler>
                       ) : canFocusNavbarPresetsFromSectionGap ? (
-                        <Pressable
-                          accessibilityHint="Toggles swipe navigation between navbar presets"
-                          accessibilityLabel="Toggle navbar preset focus"
-                          accessibilityRole="button"
-                          onPress={focusNavbarPresetsFromSectionGap}
-                          onPressIn={() => {
-                            todoSectionGapTouchRef.current = true;
-                          }}
-                          style={{ height: todoListOneHandedOffset }}
-                        />
+                        <View
+                          style={[
+                            styles.quickPresetHeaderSwipeZone,
+                            { height: todoListOneHandedOffset },
+                          ]}
+                        >
+                          <Pressable
+                            accessibilityHint="Toggles swipe navigation between navbar presets"
+                            accessibilityLabel="Toggle navbar preset focus"
+                            accessibilityRole="button"
+                            onPress={focusNavbarPresetsFromSectionGap}
+                            onPressIn={() => {
+                              todoSectionGapTouchRef.current = true;
+                            }}
+                            style={StyleSheet.absoluteFill}
+                          />
+                        </View>
                       ) : (
                         <View
-                          pointerEvents="none"
-                          style={{ height: todoListOneHandedOffset }}
-                        />
+                          style={[
+                            styles.quickPresetHeaderSwipeZone,
+                            { height: todoListOneHandedOffset },
+                          ]}
+                        >
+                          <View pointerEvents="none" style={StyleSheet.absoluteFill} />
+                        </View>
                       )
                     ) : null}
+                    {activePresetHeaderPreview}
                     <View
                       onTouchStart={markTodoListContentTouchStart}
                       style={styles.headerSearchRow}
@@ -17527,6 +18613,7 @@ export default function App() {
                           autoCapitalize="sentences"
                           autoCorrect
                           clearButtonMode="while-editing"
+                          multiline={false}
                           onChangeText={handleSearchQueryChange}
                           onFocus={() => {
                             if (suppressHeaderSearchFocusRef.current) {
@@ -17544,21 +18631,13 @@ export default function App() {
                               return;
                             }
 
-                            const enteringSearch = navTab !== 'search';
                             clearNotificationTodoReveal();
-                            if (searchMode !== 'item') {
-                              handleSearchModeChange('item');
-                            }
+                            setSearchMode('item');
                             setNavTab('search');
-                            if (enteringSearch) {
-                              restoreSearchScroll();
-                            }
+                            scrollFocusedSearchIntoView();
                           }}
-                          placeholder={
-                            navTab === 'search' && searchMode === 'item'
-                              ? 'Search items…'
-                              : 'Search keywords…'
-                          }
+                          onPressIn={handleSearchInputPressIn}
+                          placeholder="Search"
                           placeholderTextColor={THEME_TEXT_SECONDARY}
                           returnKeyType="search"
                           selectionColor={NAV_ACCENT}
@@ -17569,7 +18648,7 @@ export default function App() {
                         {navTab === 'search' ? (
                           <View style={styles.searchModeToggle}>
                             <Pressable
-                              accessibilityLabel="List search"
+                              accessibilityLabel="Preset and property search"
                               accessibilityRole="button"
                               accessibilityState={{ selected: searchMode === 'preset' }}
                               onPress={() => handleSearchModeChange('preset')}
@@ -17735,7 +18814,7 @@ export default function App() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Opens preset and list search; tap the search field for item search; quick double tap clears search text; press and hold expands or collapses all search sections"
+              accessibilityHint="Focuses Search and opens the keyboard; quick double tap clears search text; press and hold expands or collapses all search sections"
               accessibilityLabel="Search"
               accessibilityState={{ selected: navTab === 'search' }}
               onLongPress={handleSearchNavLongPress}
@@ -19072,6 +20151,7 @@ export default function App() {
                     styles.createDrawerPrompt,
                   createDrawerUsesFullScreen && styles.createDrawerExpanded,
                   createDrawerListPickerHalfSheet && styles.createDrawerListPickerSheet,
+                  createDrawerUsesTallEditLayout && { height: createDrawerTallEditHeight },
                 ]}
               >
                 {!createDrawerExpanded && createDrawerPicker ? (
@@ -19308,6 +20388,7 @@ export default function App() {
                       styles.createDrawerEditor,
                       !createDrawerUsesFullScreen && styles.createDrawerEditorPrompt,
                       createDrawerUsesFullScreen && styles.createDrawerEditorExpanded,
+                      createDrawerUsesTallEditLayout && styles.createDrawerEditorExpanded,
                     ]}
                   >
                     <View
@@ -19322,31 +20403,33 @@ export default function App() {
                         createCommandPaletteVisible && styles.createDrawerTitleRowCommandHidden,
                       ]}
                     >
-                      <TextInput
-                        ref={createInputRef}
-                        autoCapitalize="sentences"
-                        autoCorrect
-                        multiline
-                        onChangeText={handleCreateDraftTextChange}
-                        onFocus={() => setCreateDrawerFocusedField('title')}
-                        onSelectionChange={(event) => {
-                          createDraftSelectionRef.current = event.nativeEvent.selection;
-                        }}
-                        onSubmitEditing={submitCreateTodo}
-                        placeholder="Title"
-                        placeholderTextColor="#D1D3D6"
-                        returnKeyType="done"
-                        selectionColor="#2F6F62"
-                        scrollEnabled={false}
-                        showSoftInputOnFocus
-                        style={[
-                          styles.createDrawerTitleInput,
-                          !createDrawerExpanded && styles.createDrawerTitleInputPrompt,
-                        ]}
-                        submitBehavior="submit"
-                        textAlignVertical="top"
-                        value={createDraftText}
-                      />
+                      {!createCommandPaletteVisible ? (
+                        <TextInput
+                          ref={createInputRef}
+                          autoCapitalize="sentences"
+                          autoCorrect
+                          multiline
+                          onChangeText={handleCreateDraftTextChange}
+                          onFocus={() => setCreateDrawerFocusedField('title')}
+                          onSelectionChange={(event) => {
+                            createDraftSelectionRef.current = event.nativeEvent.selection;
+                          }}
+                          onSubmitEditing={submitCreateTodo}
+                          placeholder="Title"
+                          placeholderTextColor="#D1D3D6"
+                          returnKeyType="done"
+                          selectionColor="#2F6F62"
+                          scrollEnabled={false}
+                          showSoftInputOnFocus
+                          style={[
+                            styles.createDrawerTitleInput,
+                            !createDrawerExpanded && styles.createDrawerTitleInputPrompt,
+                          ]}
+                          submitBehavior="submit"
+                          textAlignVertical="top"
+                          value={createDraftText}
+                        />
+                      ) : null}
                     </View>
                     {createCommandPaletteVisible ? (
                       <CreateCommandPalette
@@ -19360,12 +20443,13 @@ export default function App() {
                     ) : null}
                     {!createCommandPaletteVisible ? (
                       <TextInput
+                        key={createDrawerEditingTodoId ?? 'new-todo-content'}
                         ref={createContentInputRef}
                         autoCapitalize="sentences"
                         autoCorrect
                         multiline
                         onChangeText={handleCreateDraftContentChange}
-                        onFocus={() => setCreateDrawerFocusedField('content')}
+                        onFocus={handleCreateDraftContentFocus}
                         onSelectionChange={(event) => {
                           createDraftContentSelectionRef.current = event.nativeEvent.selection;
                         }}
@@ -19378,6 +20462,8 @@ export default function App() {
                           createDrawerExpanded
                             ? styles.createDrawerContentInputExpanded
                             : styles.createDrawerContentInputPrompt,
+                          createDrawerUsesTallEditLayout &&
+                            styles.createDrawerContentInputExpanded,
                         ]}
                         textAlignVertical="top"
                         value={createDraftContent}
@@ -19660,7 +20746,7 @@ export default function App() {
           onToggleDateLabelDisplayMode={toggleDateLabelDisplayMode}
           onToggleMetaTag={toggleMetaTagVisibility}
           onUiStateChange={setFilterConfigUiState}
-          resultCount={filteredTodos.length}
+          resultCount={sortedTodos.length}
           sortMode={effectiveSortMode}
           visible={filterConfigModalVisible}
         />
@@ -19695,6 +20781,53 @@ export default function App() {
               showsVerticalScrollIndicator={false}
               style={styles.settingsBody}
             >
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Preset properties</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {showPresetPropertiesAboveSearch ? 'Shown above Search' : 'Hidden above Search'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.settingsCard}>
+                  <Pressable
+                    accessibilityHint="Controls the property filter panel above Search"
+                    accessibilityLabel="Show preset properties above Search"
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: showPresetPropertiesAboveSearch }}
+                    onPress={toggleShowPresetPropertiesAboveSearch}
+                    style={({ pressed }) => [
+                      styles.settingsRow,
+                      pressed && styles.settingsOptionRowPressed,
+                    ]}
+                  >
+                    <View style={styles.settingsRowTextWrap}>
+                      <Text style={styles.settingsRowTitle}>Show above Search</Text>
+                      <Text style={styles.settingsRowSubtitle}>
+                        Show the active preset's tags, lists, dates, and reminders.
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.settingsStatusPill,
+                        showPresetPropertiesAboveSearch && styles.settingsStatusPillEnabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.settingsStatusText,
+                          showPresetPropertiesAboveSearch && styles.settingsStatusTextEnabled,
+                        ]}
+                      >
+                        {showPresetPropertiesAboveSearch ? 'On' : 'Off'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
+              </View>
+
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
@@ -23488,6 +24621,157 @@ const styles = StyleSheet.create({
   },
   quickPresetHeaderSwipeZone: {
     backgroundColor: 'transparent',
+    position: 'relative',
+  },
+  activePresetPreviewSlot: {
+    marginBottom: 10,
+    marginHorizontal: HORIZONTAL_PADDING,
+  },
+  activePresetPreviewCard: {
+    alignSelf: 'stretch',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: CARD_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 3,
+    overflow: 'hidden',
+    paddingBottom: 13,
+    paddingHorizontal: 16,
+    paddingTop: 13,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    width: '100%',
+  },
+  activePresetPreviewHeading: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  activePresetPreviewTitle: {
+    color: THEME_TEXT,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: -0.1,
+    lineHeight: 21,
+    minWidth: 0,
+  },
+  activePresetPreviewCount: {
+    color: THEME_TEXT_SECONDARY,
+    flexShrink: 0,
+    fontSize: 11,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 16,
+  },
+  activePresetPropertyList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  activePresetPropertyChip: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 30,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    width: '100%',
+  },
+  activePresetPropertyChipEnabled: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#C8D6FF',
+  },
+  activePresetPropertyChipDisabled: {
+    backgroundColor: '#F8F8F8',
+    borderColor: '#D7D9DD',
+  },
+  activePresetPropertyChipAvoided: {
+    backgroundColor: '#FFF1F0',
+    borderColor: '#F0B6B1',
+  },
+  activePresetPropertyChipPressed: {
+    opacity: 0.7,
+    transform: [{ scale: 0.98 }],
+  },
+  activePresetPropertyChipAll: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#C8D6FF',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    justifyContent: 'center',
+    minHeight: 30,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    width: '100%',
+  },
+  activePresetPropertyQualifier: {
+    color: NAV_ACCENT,
+    fontSize: 9,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 12,
+    textTransform: 'uppercase',
+  },
+  activePresetPropertyText: {
+    color: NAV_ACCENT,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 16,
+    minWidth: 0,
+  },
+  activePresetPropertyTextDisabled: {
+    color: THEME_TEXT_TERTIARY,
+  },
+  activePresetPropertyTextAvoided: {
+    color: THEME_DANGER,
+  },
+  activePresetSectionList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  activePresetSectionChip: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 30,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    width: '100%',
+  },
+  activePresetSectionChipEnabled: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#C8D6FF',
+  },
+  activePresetSectionChipDisabled: {
+    backgroundColor: '#F8F8F8',
+    borderColor: '#D7D9DD',
+  },
+  activePresetSectionChipPressed: {
+    opacity: 0.7,
+    transform: [{ scale: 0.98 }],
+  },
+  activePresetSectionText: {
+    color: NAV_ACCENT,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 16,
+    minWidth: 0,
+  },
+  activePresetSectionTextDisabled: {
+    color: THEME_TEXT_TERTIARY,
   },
   headerSearchRow: {
     backgroundColor: 'transparent',
@@ -24803,6 +26087,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 24,
     minWidth: 0,
+  },
+  searchPropertyHeaderPressable: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    width: '100%',
   },
   todoSectionHeaderMain: {
     alignItems: 'center',

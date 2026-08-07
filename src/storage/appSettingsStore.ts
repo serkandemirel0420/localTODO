@@ -98,7 +98,7 @@ export type StoredMenuPresetSection = {
 
 export const QUICK_PRESET_NAV_SLOT_COUNT = 10;
 export const QUICK_PRESET_NAV_MAX_SLOT_COUNT = 50;
-export const QUICK_PRESET_DEFAULTS_VERSION = 2;
+export const QUICK_PRESET_DEFAULTS_VERSION = 5;
 export const APP_HISTORY_LIMIT = 10;
 export type QuickPresetNavPresetIds = Array<string | null>;
 export type QuickPresetNavIconNames = string[];
@@ -166,22 +166,365 @@ export const cloneFilterMenuShortcuts = (
 ): FilterMenuShortcut[] => normalizeFilterMenuShortcuts(shortcuts, []);
 
 export const DEFAULT_QUICK_PRESET_NAV_ICON_NAMES: QuickPresetNavIconNames = [
-  'penguin',
+  'horse-variant',
   'rabbit-variant',
-  'turtle',
-  'cat',
+  'emoticon-happy-outline',
   'owl',
-  'butterfly-outline',
-  'bee',
-  'ladybug',
-  'dog-side',
+  'turtle',
   'star-four-points',
+  'paw',
+  'fruit-grapes',
+  'bird',
+  'fish',
+  'airplane',
+  'rabbit-variant',
 ];
 
-const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = [];
+type RecoveredPresetDefinition = {
+  id: string;
+  label: string;
+  createdAt: number;
+  filters?: Partial<TodoFilters>;
+  requiredFilters?: Partial<TodoFilters>;
+  avoidedFilters?: Partial<TodoFilters>;
+  priorityMetaTag?: boolean;
+  tagsMetaTag?: boolean;
+  todoGroupMode: TodoGroupMode;
+  todoSortMode: TodoSortMode;
+};
+
+const createRecoveredPresetFilters = (
+  filters: Partial<TodoFilters> = {},
+): TodoFilters => ({
+  date: [...(filters.date ?? [])],
+  list: [...(filters.list ?? [])],
+  priority: [...(filters.priority ?? [])],
+  reminder: [...(filters.reminder ?? [])],
+  tag: [...(filters.tag ?? [])],
+});
+
+const createRecoveredPreset = (
+  definition: RecoveredPresetDefinition,
+): StoredMenuPreset => ({
+  id: definition.id,
+  label: definition.label,
+  metaTagVisibility: {
+    createdAt: false,
+    date: true,
+    list: true,
+    priority: definition.priorityMetaTag === true,
+    tags: definition.tagsMetaTag !== false,
+  },
+  filters: createRecoveredPresetFilters(definition.filters),
+  requiredFilters: createRecoveredPresetFilters(definition.requiredFilters),
+  avoidedFilters: createRecoveredPresetFilters(definition.avoidedFilters),
+  listOrderMode: 'alphabetical',
+  todoGroupMode: definition.todoGroupMode,
+  todoSortMode: definition.todoSortMode,
+  createdAt: definition.createdAt,
+});
+
+// Recovered byte-for-byte from the last intact on-device settings database.
+// This is used only to repair the empty preset state produced by defaults v3/v4.
+const RECOVERED_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
+  createRecoveredPreset({
+    id: 'starter-today',
+    label: 'Lists',
+    createdAt: 6,
+    todoGroupMode: 'list',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'starter-tomorrow',
+    label: 'Tomorrow',
+    createdAt: 7,
+    filters: { date: ['Tomorrow'] },
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'starter-high',
+    label: 'High',
+    createdAt: 8,
+    todoGroupMode: 'none',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'starter-later',
+    label: 'Later',
+    createdAt: 9,
+    filters: { date: ['Later'] },
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'starter-newest',
+    label: 'Newest',
+    createdAt: 10,
+    todoGroupMode: 'none',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'starter-status',
+    label: 'Status',
+    createdAt: 1,
+    filters: { list: ['Ideas'] },
+    todoGroupMode: 'status',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'starter-priority',
+    label: 'Priority',
+    createdAt: 2,
+    todoGroupMode: 'priority',
+    todoSortMode: 'priority',
+  }),
+  createRecoveredPreset({
+    id: 'starter-repeating',
+    label: 'Repeating',
+    createdAt: 3,
+    filters: {
+      date: ['Overdue', 'Tomorrow', 'Today', '2 days'],
+      reminder: ['filter:repeating-items'],
+    },
+    requiredFilters: { reminder: ['filter:repeating-items'] },
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'starter-lists',
+    label: 'Lists',
+    createdAt: 4,
+    todoGroupMode: 'list',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'starter-date',
+    label: 'Date',
+    createdAt: 5,
+    filters: {
+      date: ['Overdue', 'Today', 'Tomorrow', '2 days', '7 days', 'Later'],
+    },
+    avoidedFilters: { reminder: ['filter:repeating-items'] },
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1780583217304-dnk5q75r9sr',
+    label: 'list',
+    createdAt: 1780583217304,
+    todoGroupMode: 'list',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1780585551627-le19shjxjr8',
+    label: 'date',
+    createdAt: 1780585551627,
+    todoGroupMode: 'date',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781857747926-ste0pcyfzlc',
+    label: 'Repeating',
+    createdAt: 1781857747926,
+    filters: {
+      reminder: ['filter:repeating-items'],
+      tag: ['Repeating'],
+    },
+    requiredFilters: { tag: ['Repeating'] },
+    todoGroupMode: 'date',
+    todoSortMode: 'priorityDate',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781857863307-sbo21x7wf1j',
+    label: 'By Date',
+    createdAt: 1781857863307,
+    filters: {
+      date: ['Overdue', 'Dated items', 'Today', 'Tomorrow', '2 days', '7 days', 'Later'],
+      reminder: ['filter:repeating-items'],
+    },
+    avoidedFilters: { tag: ['Repeating'] },
+    priorityMetaTag: true,
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781858007538-s9gmb53wr7g',
+    label: 'Lists',
+    createdAt: 1781858007538,
+    priorityMetaTag: true,
+    todoGroupMode: 'list',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781858020211-3hzn130jxf8',
+    label: 'Lists',
+    createdAt: 1781858020211,
+    priorityMetaTag: true,
+    todoGroupMode: 'list',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781864080867-q9guybwjsqb',
+    label: 'Lists',
+    createdAt: 1781864080867,
+    priorityMetaTag: true,
+    todoGroupMode: 'list',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781871610196-natm3bzg69a',
+    label: 'Lists',
+    createdAt: 1781871610196,
+    todoGroupMode: 'list',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781979988650-a049cydr5a6',
+    label: 'All',
+    createdAt: 1781979988650,
+    priorityMetaTag: true,
+    todoGroupMode: 'none',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1781997348646-35hhsra989c',
+    label: 'Newest',
+    createdAt: 1781997348646,
+    priorityMetaTag: true,
+    todoGroupMode: 'none',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782009420419-rzaapf2e2m8',
+    label: 'by datejdjd',
+    createdAt: 1782009420419,
+    filters: {
+      date: ['Overdue', 'Dated items', 'Tomorrow', 'Today', '2 days', '7 days'],
+    },
+    avoidedFilters: { reminder: ['filter:repeating-items'] },
+    priorityMetaTag: true,
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782069327663-6x0a0oyrfdh',
+    label: 'Ideas',
+    createdAt: 1782069327663,
+    filters: { list: ['Ideas'] },
+    todoGroupMode: 'list',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782069354727-ahux26w8j6e',
+    label: 'Meditation Ideas',
+    createdAt: 1782069354727,
+    filters: { list: ['Meditation Idea'] },
+    todoGroupMode: 'list',
+    todoSortMode: 'newest',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782080918057-pptfvvwdvns',
+    label: 'Trading',
+    createdAt: 1782080918057,
+    filters: { list: ['Trading'] },
+    priorityMetaTag: true,
+    tagsMetaTag: false,
+    todoGroupMode: 'date',
+    todoSortMode: 'priorityDate',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782165642000-lj0dzhdc2d',
+    label: 'Research',
+    createdAt: 1782165642000,
+    filters: { list: ['Research'], tag: ['Research'] },
+    priorityMetaTag: true,
+    todoGroupMode: 'none',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782224279247-pd6dq2sb10d',
+    label: 'Errands',
+    createdAt: 1782224279247,
+    filters: { list: ['Errands'] },
+    priorityMetaTag: true,
+    todoGroupMode: 'none',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1782423450992-usi8j5r80v',
+    label: 'Notes',
+    createdAt: 1782423450992,
+    filters: { list: ['Notes'] },
+    priorityMetaTag: true,
+    todoGroupMode: 'date',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1783679944893-0ljisb78lyae',
+    label: 'Habbit',
+    createdAt: 1783679944893,
+    filters: {
+      list: ['Habbit'],
+      reminder: ['filter:habit-items'],
+    },
+    priorityMetaTag: true,
+    todoGroupMode: 'none',
+    todoSortMode: 'date',
+  }),
+  createRecoveredPreset({
+    id: 'preset-1784793106602-gqblxr3codr',
+    label: 'INBOX',
+    createdAt: 1784793106602,
+    filters: { list: ['INBOX'] },
+    priorityMetaTag: true,
+    todoGroupMode: 'none',
+    todoSortMode: 'date',
+  }),
+];
+
+const RECOVERED_QUICK_PRESET_NAV_PRESET_IDS: QuickPresetNavPresetIds = [
+  'preset-1781997348646-35hhsra989c',
+  'preset-1784793106602-gqblxr3codr',
+  'preset-1781857747926-ste0pcyfzlc',
+  'preset-1781857863307-sbo21x7wf1j',
+  'starter-today',
+  'preset-1782069327663-6x0a0oyrfdh',
+  'preset-1782069354727-ahux26w8j6e',
+  'preset-1782165642000-lj0dzhdc2d',
+  'preset-1782224279247-pd6dq2sb10d',
+  'preset-1782423450992-usi8j5r80v',
+  'preset-1783679944893-0ljisb78lyae',
+  'preset-1784793106602-gqblxr3codr',
+];
+
+const RECOVERED_QUICK_PRESET_NAV_ICON_NAMES: QuickPresetNavIconNames = [
+  ...DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
+];
+
+const DEFAULT_QUICK_MENU_PRESETS: StoredMenuPreset[] = RECOVERED_QUICK_MENU_PRESETS;
 
 export const DEFAULT_QUICK_PRESET_NAV_PRESET_IDS: QuickPresetNavPresetIds =
-  [];
+  RECOVERED_QUICK_PRESET_NAV_PRESET_IDS;
+
+const UNINTENDED_RECOVERY_PRESET_IDS = [
+  'starter-status',
+  'starter-priority',
+  'starter-repeating',
+  'starter-lists',
+  'starter-date',
+] as const;
+
+const hasUnintendedRecoveryPresetConfiguration = (
+  menuPresets: StoredMenuPreset[],
+  quickPresetNavPresetIds: QuickPresetNavPresetIds,
+) => (
+  menuPresets.length === UNINTENDED_RECOVERY_PRESET_IDS.length &&
+  quickPresetNavPresetIds.length === UNINTENDED_RECOVERY_PRESET_IDS.length &&
+  UNINTENDED_RECOVERY_PRESET_IDS.every((presetId, index) => (
+    menuPresets[index]?.id === presetId && quickPresetNavPresetIds[index] === presetId
+  ))
+);
 
 export type FilterConfigExpandedSections = {
   lists: boolean;
@@ -302,6 +645,7 @@ export type AppSettings = {
   requiredFilters: TodoFilters;
   selectedFilters: TodoFilters;
   showOverdueMetaTags: boolean;
+  showPresetPropertiesAboveSearch: boolean;
   todoGroupMode: TodoGroupMode;
   todoSortMode: TodoSortMode;
   widgetNewItemList: string;
@@ -430,6 +774,7 @@ export const ensureQuickPresetDefaults = (
   const normalizedVersion = normalizeQuickPresetDefaultsVersion(quickPresetDefaultsVersion);
   if (normalizedVersion >= QUICK_PRESET_DEFAULTS_VERSION) {
     return {
+      removedUnintendedRecoveryPresets: false,
       menuPresets: cloneMenuPresets(menuPresets),
       quickPresetDefaultsVersion: normalizedVersion,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(
@@ -440,32 +785,36 @@ export const ensureQuickPresetDefaults = (
     };
   }
 
-  const existingPresetIds = new Set(menuPresets.map((preset) => preset.id));
-  const missingDefaults = DEFAULT_QUICK_MENU_PRESETS.filter(
-    (preset) => !existingPresetIds.has(preset.id),
-  );
   const existingAssignments = cloneQuickPresetNavPresetIds(quickPresetNavPresetIds);
+  const removedUnintendedRecoveryPresets =
+    normalizedVersion === 3 &&
+    hasUnintendedRecoveryPresetConfiguration(menuPresets, existingAssignments);
+  const hasLostEmptyPresetConfiguration =
+    menuPresets.length === 0 && existingAssignments.length === 0;
+  const shouldRestoreSavedPresetConfiguration =
+    removedUnintendedRecoveryPresets || hasLostEmptyPresetConfiguration;
+  const nextMenuPresets = shouldRestoreSavedPresetConfiguration
+    ? cloneMenuPresets(RECOVERED_QUICK_MENU_PRESETS)
+    : cloneMenuPresets(menuPresets);
+  const nextAssignments = shouldRestoreSavedPresetConfiguration
+    ? cloneQuickPresetNavPresetIds(RECOVERED_QUICK_PRESET_NAV_PRESET_IDS)
+    : existingAssignments;
   const existingIconNames = cloneQuickPresetNavIconNames(
     quickPresetNavIconNames,
-    Math.max(
-      DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.length,
-      existingAssignments.length,
-      quickPresetNavIconNames.length,
-    ),
+    nextAssignments.length || undefined,
   );
 
   return {
-    menuPresets: [
-      ...cloneMenuPresets(missingDefaults),
-      ...cloneMenuPresets(menuPresets),
-    ],
+    removedUnintendedRecoveryPresets,
+    menuPresets: nextMenuPresets,
     quickPresetDefaultsVersion: QUICK_PRESET_DEFAULTS_VERSION,
-    quickPresetNavIconNames: DEFAULT_QUICK_PRESET_NAV_ICON_NAMES.map(
-      (iconName, index) => existingIconNames[index] ?? iconName,
-    ),
-    quickPresetNavPresetIds: existingAssignments.length > 0
-      ? existingAssignments
-      : cloneQuickPresetNavPresetIds(DEFAULT_QUICK_PRESET_NAV_PRESET_IDS),
+    quickPresetNavIconNames: shouldRestoreSavedPresetConfiguration
+      ? cloneQuickPresetNavIconNames(
+          RECOVERED_QUICK_PRESET_NAV_ICON_NAMES,
+          nextAssignments.length,
+        )
+      : existingIconNames,
+    quickPresetNavPresetIds: nextAssignments,
   };
 };
 
@@ -500,6 +849,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   requiredFilters: cloneTodoFilters(),
   selectedFilters: cloneTodoFilters(),
   showOverdueMetaTags: true,
+  showPresetPropertiesAboveSearch: false,
   todoGroupMode: 'none',
   todoSortMode: 'newest',
   widgetNewItemList: DEFAULT_WIDGET_NEW_ITEM_LIST,
@@ -846,8 +1196,13 @@ export const todoMatchesSelectedListFilters = (
     return true;
   }
 
+  const normalizedTodoListFilters = new Set(
+    todoListFilters.map((label) => label.trim().toLocaleLowerCase()),
+  );
+
   return listFilters.some((selectedLabel) => {
-    if (todoListFilters.includes(selectedLabel)) {
+    const normalizedSelectedLabel = selectedLabel.trim().toLocaleLowerCase();
+    if (normalizedTodoListFilters.has(normalizedSelectedLabel)) {
       return true;
     }
 
@@ -856,8 +1211,10 @@ export const todoMatchesSelectedListFilters = (
       return false;
     }
 
-    const childLabels = new Set(node.children.map((child) => child.label));
-    return todoListFilters.some((label) => childLabels.has(label));
+    const childLabels = new Set(
+      node.children.map((child) => child.label.trim().toLocaleLowerCase()),
+    );
+    return [...normalizedTodoListFilters].some((label) => childLabels.has(label));
   });
 };
 
@@ -1141,6 +1498,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       requiredFilters: cloneTodoFilters(),
       selectedFilters: cloneTodoFilters(),
       showOverdueMetaTags: true,
+      showPresetPropertiesAboveSearch: false,
       todoGroupMode: 'none',
       todoSortMode: 'newest',
     };
@@ -1158,6 +1516,23 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     ),
     normalizeQuickPresetDefaultsVersion(value.quickPresetDefaultsVersion),
   );
+  const normalizedHistory = normalizeAppHistoryState(value.history);
+  const history = quickPresetDefaults.removedUnintendedRecoveryPresets
+    ? {
+        redo: normalizedHistory.redo.filter((entry) => (
+          !hasUnintendedRecoveryPresetConfiguration(
+            entry.snapshot.menuPresets,
+            entry.snapshot.quickPresetNavPresetIds,
+          )
+        )),
+        undo: normalizedHistory.undo.filter((entry) => (
+          !hasUnintendedRecoveryPresetConfiguration(
+            entry.snapshot.menuPresets,
+            entry.snapshot.quickPresetNavPresetIds,
+          )
+        )),
+      }
+    : normalizedHistory;
   const selectedFilters = normalizeTodoFilters(value.selectedFilters);
   const widgetNewItemList =
     typeof value.widgetNewItemList === 'string' && formatListLabel(value.widgetNewItemList)
@@ -1186,7 +1561,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       typeof value.googleDriveLastRestoreAt === 'string' ? value.googleDriveLastRestoreAt : null,
     habitNotificationsPaused: value.habitNotificationsPaused === true,
     habitQuietHoursEnabled: value.habitQuietHoursEnabled !== false,
-    history: normalizeAppHistoryState(value.history),
+    history,
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
     listMenuTree,
@@ -1201,6 +1576,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     requiredFilters: pruneTodoFilters(normalizeTodoFilters(value.requiredFilters), selectedFilters),
     selectedFilters,
     showOverdueMetaTags: value.showOverdueMetaTags !== false,
+    showPresetPropertiesAboveSearch: value.showPresetPropertiesAboveSearch === true,
     todoGroupMode: normalizeTodoGroupMode(value.todoGroupMode),
     todoSortMode: normalizeTodoSortMode(value.todoSortMode),
     widgetNewItemList,
@@ -1210,7 +1586,27 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
 export const appSettingsStore = {
   async load() {
     const stored = await AsyncStorage.getItem(STORAGE_KEY);
-    return stored ? normalizeAppSettings(JSON.parse(stored) as unknown) : DEFAULT_APP_SETTINGS;
+    if (!stored) {
+      return DEFAULT_APP_SETTINGS;
+    }
+
+    const parsed = JSON.parse(stored) as unknown;
+    const normalized = normalizeAppSettings(parsed);
+    const storedDefaultsVersion = isRecord(parsed)
+      ? normalizeQuickPresetDefaultsVersion(parsed.quickPresetDefaultsVersion)
+      : 0;
+
+    if (storedDefaultsVersion < normalized.quickPresetDefaultsVersion) {
+      await AsyncStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          ...normalized,
+          deletedTodos: cloneDeletedTodos(normalized.deletedTodos),
+        }),
+      );
+    }
+
+    return normalized;
   },
 
   async save(settings: AppSettings) {

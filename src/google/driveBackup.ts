@@ -27,13 +27,16 @@ import {
 } from '../metaTags';
 import { normalizeMaterialCommunityIconName } from '../materialCommunityIconNames';
 import {
+  cloneFilterMenuShortcuts,
   cloneFilterConfigUiState,
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   ensureQuickPresetDefaults,
+  normalizeFilterMenuShortcuts,
   normalizeFilterConfigUiState,
   normalizeQuickPresetNavIconNames,
   normalizeQuickPresetNavPresetIds,
+  type FilterMenuShortcut,
   type FilterConfigUiState,
   type QuickPresetNavIconNames,
   type QuickPresetNavPresetIds,
@@ -105,6 +108,7 @@ export type BackupSettings = {
   deletedTodos: DeletedTodo[];
   filterConfigUiState: FilterConfigUiState;
   filterColors: FilterColorSettings;
+  filterMenuShortcuts: FilterMenuShortcut[];
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
@@ -629,6 +633,7 @@ export const createBackupPayload = (
       deletedTodos: cloneDeletedTodos(settings.deletedTodos),
       filterConfigUiState: cloneFilterConfigUiState(settings.filterConfigUiState),
       filterColors: cloneFilterColors(settings.filterColors),
+      filterMenuShortcuts: cloneFilterMenuShortcuts(settings.filterMenuShortcuts),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled,
       googleDriveLastBackupAt: exportedAt,
       googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
@@ -689,6 +694,7 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
       filterConfigUiState: normalizeFilterConfigUiState(settings.filterConfigUiState),
       filterColors: normalizeFilterColors(settings.filterColors),
+      filterMenuShortcuts: normalizeFilterMenuShortcuts(settings.filterMenuShortcuts),
       googleDriveBackupEnabled: settings.googleDriveBackupEnabled === true,
       googleDriveLastBackupAt:
         typeof settings.googleDriveLastBackupAt === 'string' ? settings.googleDriveLastBackupAt : null,

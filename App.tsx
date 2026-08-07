@@ -190,17 +190,20 @@ import {
   APP_HISTORY_LIMIT,
   cloneAppHistoryState,
   clearListNodeDisplaySettings,
+  cloneFilterMenuShortcuts,
   cloneFilterConfigUiState,
   cloneListMenuTree,
   cloneMenuPresets,
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
+  DEFAULT_FILTER_MENU_SHORTCUTS,
   DEFAULT_WIDGET_NEW_ITEM_LIST,
   DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
   DEFAULT_FILTER_CONFIG_UI_STATE,
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
+  FILTER_MENU_SHORTCUT_NONE_VALUE,
   normalizeCustomTags,
   QUICK_PRESET_DEFAULTS_VERSION,
   QUICK_PRESET_NAV_MAX_SLOT_COUNT,
@@ -210,6 +213,8 @@ import {
   type AppSettings,
   type AppHistoryEntry,
   type AppHistorySnapshot,
+  type FilterMenuShortcut,
+  type FilterMenuShortcutKey,
   type FilterConfigUiState,
   type ListOrderMode,
   type StoredListMenuNode,
@@ -412,6 +417,7 @@ const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
   dateLabelDisplayMode: true,
   deletedTodos: true,
   filterColors: true,
+  filterMenuShortcuts: true,
   googleDriveBackupEnabled: true,
   habitNotificationsPaused: true,
   habitQuietHoursEnabled: true,
@@ -871,6 +877,17 @@ const formatHistoryFilterColors = (colors: FilterColorSettings) => {
   return formatHistoryListLabels(assignments, 'Default colors');
 };
 
+const formatHistoryFilterMenuShortcuts = (shortcuts: FilterMenuShortcut[]) => (
+  formatHistoryListLabels(
+    shortcuts.map((shortcut) => (
+      `${shortcut.filterKey}: ${
+        shortcut.value === FILTER_MENU_SHORTCUT_NONE_VALUE ? 'None' : shortcut.value
+      }`
+    )),
+    'No shortcuts',
+  )
+);
+
 const buildUndoSnapshotChangeDetails = (
   label: string,
   before: UndoSnapshot,
@@ -993,6 +1010,14 @@ const buildUndoSnapshotChangeDetails = (
     formatHistoryFilterColors(before.filterColors),
     formatHistoryFilterColors(after.filterColors),
   );
+  compareHistorySummary(
+    details,
+    'Shortcuts',
+    before.filterMenuShortcuts,
+    after.filterMenuShortcuts,
+    formatHistoryFilterMenuShortcuts(before.filterMenuShortcuts),
+    formatHistoryFilterMenuShortcuts(after.filterMenuShortcuts),
+  );
   compareHistoryScalar(
     details,
     'Preset label tags',
@@ -1074,8 +1099,38 @@ const isListMenuItemSelected = (
   _listMenuTree: ListMenuNode[],
 ) => listFilters.includes(item.label);
 
-type FilterKey = 'list' | 'tag' | 'date' | 'priority';
+type FilterKey = FilterMenuShortcutKey;
 const FILTER_KEYS: FilterKey[] = ['list', 'tag', 'date', 'priority'];
+
+type FilterMenuShortcutOption = {
+  category: string;
+  id: string;
+  label: string;
+  shortcut: FilterMenuShortcut;
+};
+
+const getFilterMenuShortcutId = (shortcut: FilterMenuShortcut) => (
+  `${shortcut.filterKey}\u0000${shortcut.value}`
+);
+
+const renameFilterMenuShortcutValue = (
+  shortcuts: FilterMenuShortcut[],
+  filterKey: FilterMenuShortcutKey,
+  oldValue: string,
+  newValue: string,
+) => cloneFilterMenuShortcuts(shortcuts.map((shortcut) => (
+  shortcut.filterKey === filterKey && shortcut.value === oldValue
+    ? { ...shortcut, value: newValue }
+    : shortcut
+)));
+
+const removeFilterMenuShortcutValues = (
+  shortcuts: FilterMenuShortcut[],
+  filterKey: FilterMenuShortcutKey,
+  values: ReadonlySet<string>,
+) => cloneFilterMenuShortcuts(shortcuts.filter((shortcut) => (
+  shortcut.filterKey !== filterKey || !values.has(shortcut.value)
+)));
 
 type MenuMode =
   | 'date'
@@ -5177,14 +5232,19 @@ export default function App() {
   const [settingsDoneExpanded, setSettingsDoneExpanded] = useState(false);
   const [settingsListsExpanded, setSettingsListsExpanded] = useState(false);
   const [settingsPresetsExpanded, setSettingsPresetsExpanded] = useState(false);
+  const [settingsShortcutsExpanded, setSettingsShortcutsExpanded] = useState(false);
   const [settingsTagsExpanded, setSettingsTagsExpanded] = useState(false);
   const [settingsWidgetExpanded, setSettingsWidgetExpanded] = useState(false);
   const [deletedTodos, setDeletedTodos] = useState<DeletedTodo[]>([]);
   const [filterColors, setFilterColors] = useState<FilterColorSettings>(
     () => cloneFilterColors(),
   );
+  const [filterMenuShortcuts, setFilterMenuShortcuts] = useState<FilterMenuShortcut[]>(
+    () => cloneFilterMenuShortcuts(DEFAULT_FILTER_MENU_SHORTCUTS),
+  );
   const deferredFilterColors = useDeferredValue(filterColors);
   const filterColorsRef = useRef(filterColors);
+  const filterMenuShortcutsRef = useRef(filterMenuShortcuts);
   const [filterConfigUiState, setFilterConfigUiState] = useState<FilterConfigUiState>(
     () => cloneFilterConfigUiState(DEFAULT_FILTER_CONFIG_UI_STATE),
   );
@@ -5387,6 +5447,7 @@ export default function App() {
   todoGroupModeRef.current = todoGroupMode;
   todoSortModeRef.current = todoSortMode;
   filterColorsRef.current = filterColors;
+  filterMenuShortcutsRef.current = filterMenuShortcuts;
   loadedRef.current = loaded;
   settingsLoadedRef.current = settingsLoaded;
   menuEditOwnerRef.current = menuEditOwner;
@@ -5715,6 +5776,10 @@ export default function App() {
     setDeletedTodos(appliedSettings.deletedTodos);
     setFilterConfigUiState(cloneFilterConfigUiState(appliedSettings.filterConfigUiState));
     setFilterColors(appliedSettings.filterColors);
+    filterMenuShortcutsRef.current = cloneFilterMenuShortcuts(
+      appliedSettings.filterMenuShortcuts,
+    );
+    setFilterMenuShortcuts(filterMenuShortcutsRef.current);
     setGoogleDriveBackupEnabled(false);
     setGoogleDriveLastBackupAt(appliedSettings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(appliedSettings.googleDriveLastRestoreAt);
@@ -5851,6 +5916,7 @@ export default function App() {
     deletedTodos,
     filterConfigUiState,
     filterColors,
+    filterMenuShortcuts,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
     habitNotificationsPaused,
@@ -5888,6 +5954,7 @@ export default function App() {
     deletedTodos,
     filterConfigUiState,
     filterColors,
+    filterMenuShortcuts,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
@@ -6274,6 +6341,7 @@ export default function App() {
     dateLabelDisplayMode: dateLabelDisplayModeRef.current,
     deletedTodos: cloneDeletedTodos(deletedTodosRef.current),
     filterColors: cloneFilterColors(filterColorsRef.current),
+    filterMenuShortcuts: cloneFilterMenuShortcuts(filterMenuShortcutsRef.current),
     googleDriveBackupEnabled: googleDriveBackupEnabledRef.current,
     habitNotificationsPaused: habitNotificationsPausedRef.current,
     habitQuietHoursEnabled: habitQuietHoursEnabledRef.current,
@@ -6450,6 +6518,7 @@ export default function App() {
     const restoredTodos = snapshot.todos.map(cloneTodo);
     const restoredDeletedTodos = cloneDeletedTodos(snapshot.deletedTodos);
     const restoredFilterColors = cloneFilterColors(snapshot.filterColors);
+    const restoredFilterMenuShortcuts = cloneFilterMenuShortcuts(snapshot.filterMenuShortcuts);
     const restoredLastCreateTodoFilters = cloneTodoFilters(snapshot.lastCreateTodoFilters);
     const restoredListMenuTree = cloneListMenuTree(snapshot.listMenuTree);
     const restoredMenuPresets = cloneMenuPresets(snapshot.menuPresets);
@@ -6475,6 +6544,7 @@ export default function App() {
       dateLabelDisplayMode: snapshot.dateLabelDisplayMode,
       deletedTodos: restoredDeletedTodos,
       filterColors: restoredFilterColors,
+      filterMenuShortcuts: restoredFilterMenuShortcuts,
       googleDriveBackupEnabled: false,
       habitNotificationsPaused: snapshot.habitNotificationsPaused,
       habitQuietHoursEnabled: snapshot.habitQuietHoursEnabled,
@@ -6499,6 +6569,7 @@ export default function App() {
     customTagsRef.current = restoredCustomTags;
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
+    filterMenuShortcutsRef.current = restoredFilterMenuShortcuts;
     googleDriveBackupEnabledRef.current = false;
     habitNotificationsPausedRef.current = snapshot.habitNotificationsPaused;
     habitQuietHoursEnabledRef.current = snapshot.habitQuietHoursEnabled;
@@ -6529,6 +6600,7 @@ export default function App() {
     setCustomTags(restoredCustomTags);
     setDeletedTodos(restoredDeletedTodos);
     setFilterColors(restoredFilterColors);
+    setFilterMenuShortcuts(restoredFilterMenuShortcuts);
     setGoogleDriveBackupEnabled(false);
     setHabitNotificationsPaused(snapshot.habitNotificationsPaused);
     setHabitQuietHoursEnabled(snapshot.habitQuietHoursEnabled);
@@ -10086,6 +10158,74 @@ export default function App() {
     () => collectListNodeLabels(listMenuTree),
     [listMenuTree],
   );
+  const filterMenuShortcutOptions = useMemo<FilterMenuShortcutOption[]>(() => {
+    const directDateLabels = DATE_PICKER_MENU_ITEMS.filter((label) => (
+      label !== CUSTOM_DATE_LABEL
+      && label !== HABIT_PICKER_LABEL
+      && label !== REMINDER_PICKER_LABEL
+      && label !== REPEAT_PICKER_LABEL
+    ));
+    const dateOptions = [
+      ...directDateLabels.slice(0, 2),
+      FILTER_MENU_SHORTCUT_NONE_VALUE,
+      ...directDateLabels.slice(2),
+    ].map((value) => {
+      const shortcut: FilterMenuShortcut = { filterKey: 'date', value };
+      return {
+        category: 'Date',
+        id: getFilterMenuShortcutId(shortcut),
+        label: value === FILTER_MENU_SHORTCUT_NONE_VALUE ? 'No date' : value,
+        shortcut,
+      };
+    });
+    const listOptions = [
+      FILTER_MENU_SHORTCUT_NONE_VALUE,
+      ...settingsListColorLabels,
+    ].map((value) => {
+      const shortcut: FilterMenuShortcut = { filterKey: 'list', value };
+      return {
+        category: 'List',
+        id: getFilterMenuShortcutId(shortcut),
+        label: value === FILTER_MENU_SHORTCUT_NONE_VALUE ? 'No list' : value,
+        shortcut,
+      };
+    });
+    const priorityOptions = [
+      FILTER_MENU_SHORTCUT_NONE_VALUE,
+      ...PRIORITY_MENU_ITEMS.filter((label) => label !== 'None'),
+    ].map((value) => {
+      const shortcut: FilterMenuShortcut = { filterKey: 'priority', value };
+      return {
+        category: 'Priority',
+        id: getFilterMenuShortcutId(shortcut),
+        label: value === FILTER_MENU_SHORTCUT_NONE_VALUE ? 'No priority' : value,
+        shortcut,
+      };
+    });
+    const tagOptions = customTags.map((value) => {
+      const shortcut: FilterMenuShortcut = { filterKey: 'tag', value };
+      return {
+        category: 'Tag',
+        id: getFilterMenuShortcutId(shortcut),
+        label: value,
+        shortcut,
+      };
+    });
+
+    return [...dateOptions, ...listOptions, ...priorityOptions, ...tagOptions];
+  }, [customTags, settingsListColorLabels]);
+  const enabledFilterMenuShortcutOptions = useMemo(() => {
+    const optionById = new Map(filterMenuShortcutOptions.map((option) => [option.id, option]));
+
+    return filterMenuShortcuts.flatMap((shortcut) => {
+      const option = optionById.get(getFilterMenuShortcutId(shortcut));
+      return option ? [option] : [];
+    });
+  }, [filterMenuShortcutOptions, filterMenuShortcuts]);
+  const enabledFilterMenuShortcutIds = useMemo(
+    () => new Set(filterMenuShortcuts.map(getFilterMenuShortcutId)),
+    [filterMenuShortcuts],
+  );
   const widgetNewItemDestinationList = useMemo(
     () => resolveWidgetNewItemListLabel(listMenuTree, widgetNewItemList),
     [listMenuTree, widgetNewItemList],
@@ -11599,6 +11739,31 @@ export default function App() {
     updateCurrentTodoTargetFilters,
   ]);
 
+  const applyFilterMenuShortcut = useCallback((shortcut: FilterMenuShortcut) => {
+    if (shortcut.value === FILTER_MENU_SHORTCUT_NONE_VALUE) {
+      updateCurrentTodoTargetFilters((current) => ({
+        ...current,
+        [shortcut.filterKey]: [],
+      }));
+      triggerSubtleHaptic();
+      return;
+    }
+
+    toggleFilterValue(shortcut.filterKey, shortcut.value);
+  }, [toggleFilterValue, updateCurrentTodoTargetFilters]);
+
+  const isFilterMenuShortcutSelected = useCallback((shortcut: FilterMenuShortcut) => {
+    const values = menuSelectionFilters[shortcut.filterKey];
+
+    if (shortcut.value === FILTER_MENU_SHORTCUT_NONE_VALUE) {
+      return values.length === 0;
+    }
+
+    return shortcut.filterKey === 'date'
+      ? isDateMenuItemSelected(shortcut.value, menuSelectionFilters.date)
+      : values.includes(shortcut.value);
+  }, [menuSelectionFilters]);
+
   const toggleRepeatingItemsFilter = useCallback(() => {
     clearNotificationTodoReveal();
     const nextFilters = {
@@ -12390,6 +12555,25 @@ export default function App() {
     triggerSubtleHaptic();
   }, [persistAppSettings]);
 
+  const toggleFilterMenuShortcut = useCallback((shortcut: FilterMenuShortcut) => {
+    const shortcutId = getFilterMenuShortcutId(shortcut);
+    const currentShortcuts = filterMenuShortcutsRef.current;
+    const isEnabled = currentShortcuts.some((item) => (
+      getFilterMenuShortcutId(item) === shortcutId
+    ));
+    const nextShortcuts = cloneFilterMenuShortcuts(
+      isEnabled
+        ? currentShortcuts.filter((item) => getFilterMenuShortcutId(item) !== shortcutId)
+        : [...currentShortcuts, shortcut],
+    );
+
+    recordUndo(isEnabled ? 'Remove shortcut' : 'Add shortcut');
+    filterMenuShortcutsRef.current = nextShortcuts;
+    setFilterMenuShortcuts(nextShortcuts);
+    void persistAppSettings({ filterMenuShortcuts: nextShortcuts });
+    triggerSubtleHaptic();
+  }, [persistAppSettings, recordUndo]);
+
   const toggleDateLabelDisplayMode = useCallback(() => {
     recordFilterConfigUndo('Change date labels');
     setDateLabelDisplayMode((current) => getNextDateLabelDisplayMode(current));
@@ -12934,6 +13118,12 @@ export default function App() {
       oldLabel,
       newLabel,
     );
+    const nextFilterMenuShortcuts = renameFilterMenuShortcutValue(
+      filterMenuShortcutsRef.current,
+      'list',
+      oldLabel,
+      newLabel,
+    );
     const nextMenuPresets = menuPresetsRef.current.map((preset) => (
       renameListLabelInPreset(preset, oldLabel, newLabel)
     ));
@@ -12952,6 +13142,7 @@ export default function App() {
     avoidedFiltersRef.current = nextAvoidedFilters;
     lastCreateTodoFiltersRef.current = nextLastCreateTodoFilters;
     filterColorsRef.current = nextFilterColors;
+    filterMenuShortcutsRef.current = nextFilterMenuShortcuts;
     menuPresetsRef.current = nextMenuPresets;
     deletedTodosRef.current = nextDeletedTodos;
     todosRef.current = nextTodos;
@@ -12965,6 +13156,7 @@ export default function App() {
       renameListLabelInFilters(filters, oldLabel, newLabel)
     ));
     setFilterColors(nextFilterColors);
+    setFilterMenuShortcuts(nextFilterMenuShortcuts);
     setMenuPresets(nextMenuPresets);
     setDeletedTodos(nextDeletedTodos);
     setTodos(nextTodos);
@@ -12987,6 +13179,7 @@ export default function App() {
     void persistAppSettings({
       deletedTodos: cloneDeletedTodos(nextDeletedTodos),
       filterColors: cloneFilterColors(nextFilterColors),
+      filterMenuShortcuts: cloneFilterMenuShortcuts(nextFilterMenuShortcuts),
       lastCreateTodoFilters: cloneTodoFilters(nextLastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(nextListMenuTree),
       menuPresets: cloneMenuPresets(nextMenuPresets),
@@ -14116,6 +14309,14 @@ export default function App() {
       label,
     ]);
     const labelChanged = Boolean(editingLabel && editingLabel !== label);
+    const nextFilterMenuShortcuts = labelChanged
+      ? renameFilterMenuShortcutValue(
+          filterMenuShortcutsRef.current,
+          'tag',
+          editingLabel,
+          label,
+        )
+      : filterMenuShortcutsRef.current;
 
     if (
       !labelChanged &&
@@ -14129,8 +14330,13 @@ export default function App() {
 
     recordUndo(editingLabel ? 'Edit tag' : 'Add tag');
     customTagsRef.current = nextTags;
+    filterMenuShortcutsRef.current = nextFilterMenuShortcuts;
     setCustomTags(nextTags);
-    persistCustomTags(nextTags);
+    setFilterMenuShortcuts(nextFilterMenuShortcuts);
+    void persistAppSettings({
+      customTags: nextTags,
+      filterMenuShortcuts: nextFilterMenuShortcuts,
+    });
     if (labelChanged) {
       applyTagUpdateToTodos((tags) => (
         tags.map((tag) => (
@@ -14145,7 +14351,7 @@ export default function App() {
     applyTagUpdateToTodos,
     editingTagName,
     newTagName,
-    persistCustomTags,
+    persistAppSettings,
     recordUndo,
   ]);
 
@@ -14168,9 +14374,19 @@ export default function App() {
     const nextTags = normalizeCustomTags(
       customTagsRef.current.filter((tag) => tag.toLocaleLowerCase() !== labelKey),
     );
+    const nextFilterMenuShortcuts = removeFilterMenuShortcutValues(
+      filterMenuShortcutsRef.current,
+      'tag',
+      new Set([formattedLabel]),
+    );
     customTagsRef.current = nextTags;
+    filterMenuShortcutsRef.current = nextFilterMenuShortcuts;
     setCustomTags(nextTags);
-    persistCustomTags(nextTags);
+    setFilterMenuShortcuts(nextFilterMenuShortcuts);
+    void persistAppSettings({
+      customTags: nextTags,
+      filterMenuShortcuts: nextFilterMenuShortcuts,
+    });
     applyTagUpdateToTodos((tags) => (
       tags.filter((tag) => tag.toLocaleLowerCase() !== labelKey)
     ));
@@ -14179,7 +14395,7 @@ export default function App() {
       setNewTagName('');
     }
     triggerSubtleHaptic();
-  }, [applyTagUpdateToTodos, editingTagName, persistCustomTags, recordUndo]);
+  }, [applyTagUpdateToTodos, editingTagName, persistAppSettings, recordUndo]);
 
   const addSettingsNavbarItem = useCallback(() => {
     const label = formatListLabel(newNavbarName);
@@ -14530,6 +14746,11 @@ export default function App() {
       filterColorsRef.current,
       removedLabels,
     );
+    const nextFilterMenuShortcuts = removeFilterMenuShortcutValues(
+      filterMenuShortcutsRef.current,
+      'list',
+      removedLabels,
+    );
 
     recordUndo(removedNodes.length === 1 ? 'Delete list' : 'Delete lists');
     setSettingsListReorderCancelNonce((current) => current + 1);
@@ -14545,6 +14766,7 @@ export default function App() {
     deletedTodosRef.current = nextDeletedTodos;
     todosRef.current = nextTodos;
     filterColorsRef.current = nextFilterColors;
+    filterMenuShortcutsRef.current = nextFilterMenuShortcuts;
 
     setSelectedFilters(nextSelectedFilters);
     setRequiredFilters(nextRequiredFilters);
@@ -14556,6 +14778,7 @@ export default function App() {
     setDeletedTodos(nextDeletedTodos);
     setTodos(nextTodos);
     setFilterColors(nextFilterColors);
+    setFilterMenuShortcuts(nextFilterMenuShortcuts);
     setCollapsedSearchListLabels((current) => {
       let changed = false;
       const next = new Set(current);
@@ -14584,6 +14807,7 @@ export default function App() {
     void persistAppSettings({
       deletedTodos: cloneDeletedTodos(nextDeletedTodos),
       filterColors: cloneFilterColors(nextFilterColors),
+      filterMenuShortcuts: cloneFilterMenuShortcuts(nextFilterMenuShortcuts),
       lastCreateTodoFilters: cloneTodoFilters(nextLastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(nextListMenuTree),
       menuPresets: cloneMenuPresets(nextMenuPresets),
@@ -14744,6 +14968,7 @@ export default function App() {
     setSettingsHistoryPreviewTarget(null);
     setSettingsListsExpanded(false);
     setSettingsPresetsExpanded(false);
+    setSettingsShortcutsExpanded(false);
     setSettingsWidgetExpanded(false);
     setSettingsListReorderCancelNonce((current) => current + 1);
     setSettingsListSelectMode(false);
@@ -15425,6 +15650,7 @@ export default function App() {
       deletedTodos,
       filterConfigUiState,
       filterColors,
+      filterMenuShortcuts,
       googleDriveBackupEnabled,
       googleDriveLastBackupAt,
       googleDriveLastRestoreAt,
@@ -15459,6 +15685,7 @@ export default function App() {
     deletedTodos,
     filterConfigUiState,
     filterColors,
+    filterMenuShortcuts,
     googleDriveBackupEnabled,
     googleDriveLastBackupAt,
     googleDriveLastRestoreAt,
@@ -15536,6 +15763,9 @@ export default function App() {
     const restoredAvoidedFilters = normalizeTodoFilters(payload.settings.avoidedFilters);
     const restoredFilterConfigUiState = cloneFilterConfigUiState(payload.settings.filterConfigUiState);
     const restoredFilterColors = cloneFilterColors(payload.settings.filterColors);
+    const restoredFilterMenuShortcuts = cloneFilterMenuShortcuts(
+      payload.settings.filterMenuShortcuts,
+    );
     const restoredListMenuTree = cloneListMenuTree(
       payload.settings.listMenuTree.length > 0
         ? payload.settings.listMenuTree
@@ -15562,6 +15792,7 @@ export default function App() {
       deletedTodos: restoredDeletedTodos,
       filterConfigUiState: restoredFilterConfigUiState,
       filterColors: restoredFilterColors,
+      filterMenuShortcuts: restoredFilterMenuShortcuts,
       googleDriveBackupEnabled: false,
       googleDriveLastBackupAt: payload.settings.googleDriveLastBackupAt,
       googleDriveLastRestoreAt: restoredAt,
@@ -15589,6 +15820,7 @@ export default function App() {
     dateLabelDisplayModeRef.current = payload.settings.dateLabelDisplayMode;
     deletedTodosRef.current = restoredDeletedTodos;
     filterColorsRef.current = restoredFilterColors;
+    filterMenuShortcutsRef.current = restoredFilterMenuShortcuts;
     googleDriveBackupEnabledRef.current = false;
     habitNotificationsPausedRef.current = payload.settings.habitNotificationsPaused;
     habitQuietHoursEnabledRef.current = payload.settings.habitQuietHoursEnabled;
@@ -15626,6 +15858,7 @@ export default function App() {
     setAvoidedFilters(restoredAvoidedFilters);
     setFilterConfigUiState(restoredFilterConfigUiState);
     setFilterColors(restoredFilterColors);
+    setFilterMenuShortcuts(restoredFilterMenuShortcuts);
     setGoogleDriveBackupEnabled(false);
     setGoogleDriveLastBackupAt(payload.settings.googleDriveLastBackupAt);
     setGoogleDriveLastRestoreAt(restoredAt);
@@ -17684,6 +17917,74 @@ export default function App() {
                                       visibility={HISTORY_TODO_PREVIEW_META_TAG_VISIBILITY}
                                       wrap
                                     />
+                                  </View>
+                                ) : null}
+                                {hasTodoEditTargets
+                                  && menuMode === 'main'
+                                  && enabledFilterMenuShortcutOptions.length > 0 ? (
+                                  <View style={styles.listMenuShortcutSection}>
+                                    <Text style={styles.listMenuShortcutSectionLabel}>
+                                      Shortcuts
+                                    </Text>
+                                    {enabledFilterMenuShortcutOptions.map((option) => {
+                                      const selected = isFilterMenuShortcutSelected(
+                                        option.shortcut,
+                                      );
+                                      const colorTheme = (
+                                        option.shortcut.value === FILTER_MENU_SHORTCUT_NONE_VALUE
+                                        || option.shortcut.filterKey === 'tag'
+                                      )
+                                        ? null
+                                        : getFilterColorTheme(
+                                            filterColors,
+                                            option.shortcut.filterKey,
+                                            option.shortcut.value,
+                                          );
+
+                                      return (
+                                        <Pressable
+                                          accessibilityLabel={`${option.label}, ${option.category} shortcut`}
+                                          accessibilityRole="button"
+                                          accessibilityState={{ selected }}
+                                          key={option.id}
+                                          onPress={() => applyFilterMenuShortcut(option.shortcut)}
+                                          style={({ pressed }) => [
+                                            styles.listMenuShortcutRow,
+                                            (selected || pressed) && styles.listMenuRowSelected,
+                                            colorTheme && (selected || pressed) && {
+                                              backgroundColor: colorTheme.tint,
+                                              borderBottomColor: colorTheme.border,
+                                            },
+                                          ]}
+                                        >
+                                          <View style={styles.listMenuRowTextWrap}>
+                                            <View
+                                              style={[
+                                                styles.listMenuColorDot,
+                                                colorTheme
+                                                  ? { backgroundColor: colorTheme.accent }
+                                                  : styles.listMenuColorDotNoColor,
+                                              ]}
+                                            />
+                                            <Text numberOfLines={1} style={styles.listMenuRowTitle}>
+                                              {option.label}
+                                            </Text>
+                                          </View>
+                                          <View style={styles.listMenuShortcutMeta}>
+                                            <Text style={styles.listMenuShortcutCategory}>
+                                              {option.category}
+                                            </Text>
+                                            {selected ? (
+                                              <Ionicons
+                                                color={colorTheme?.text ?? THEME_ACCENT}
+                                                name="checkmark"
+                                                size={18}
+                                              />
+                                            ) : null}
+                                          </View>
+                                        </Pressable>
+                                      );
+                                    })}
                                   </View>
                                 ) : null}
                                 <View
@@ -19992,6 +20293,77 @@ export default function App() {
                       onSwap={handleSettingsNavbarSwap}
                       onSetIcon={setSettingsNavbarIcon}
                     />
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Shortcuts</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      {enabledFilterMenuShortcutOptions.length} in item menu
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsShortcutsExpanded ? 'Collapse' : 'Expand'} Shortcuts section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsShortcutsExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsShortcutsExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsShortcutsExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsShortcutsExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Text style={styles.settingsRowSubtitle}>
+                      Selected values appear as direct choices below Item summary.
+                    </Text>
+                    <View style={styles.settingsShortcutList}>
+                      {filterMenuShortcutOptions.map((option, index) => {
+                        const selected = enabledFilterMenuShortcutIds.has(option.id);
+
+                        return (
+                          <Pressable
+                            accessibilityLabel={`${option.label}, ${option.category} shortcut`}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: selected }}
+                            key={option.id}
+                            onPress={() => toggleFilterMenuShortcut(option.shortcut)}
+                            style={({ pressed }) => [
+                              styles.settingsShortcutRow,
+                              index > 0 && styles.settingsShortcutRowSeparated,
+                              (selected || pressed) && styles.settingsShortcutRowSelected,
+                            ]}
+                          >
+                            <View style={styles.settingsShortcutTextWrap}>
+                              <Text numberOfLines={1} style={styles.settingsOptionText}>
+                                {option.label}
+                              </Text>
+                              <Text style={styles.settingsShortcutCategory}>{option.category}</Text>
+                            </View>
+                            <Ionicons
+                              color={selected ? THEME_ACCENT : '#B5ADA5'}
+                              name={selected ? 'checkbox' : 'square-outline'}
+                              size={21}
+                            />
+                          </Pressable>
+                        );
+                      })}
+                    </View>
                   </View>
                 ) : null}
               </View>
@@ -22915,6 +23287,36 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: 0.1,
   },
+  settingsShortcutList: {
+    marginTop: 10,
+  },
+  settingsShortcutRow: {
+    alignItems: 'center',
+    borderRadius: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    paddingHorizontal: 8,
+  },
+  settingsShortcutRowSeparated: {
+    borderTopColor: '#F2EBE3',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  settingsShortcutRowSelected: {
+    backgroundColor: '#F4F8F6',
+  },
+  settingsShortcutTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
+  },
+  settingsShortcutCategory: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 1,
+  },
   settingsOptionValue: {
     color: THEME_ACCENT,
     fontSize: 14,
@@ -23940,6 +24342,42 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
     letterSpacing: 0.2,
     lineHeight: 14,
+  },
+  listMenuShortcutSection: {
+    marginHorizontal: 4,
+    marginTop: 12,
+  },
+  listMenuShortcutSectionLabel: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 11,
+    fontWeight: FONT_MEDIUM,
+    letterSpacing: 0.2,
+    lineHeight: 14,
+    paddingBottom: 4,
+    paddingHorizontal: 12,
+  },
+  listMenuShortcutRow: {
+    alignItems: 'center',
+    borderBottomColor: '#F2EBE3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    flexDirection: 'row',
+    height: LIST_MENU_ROW_HEIGHT,
+    justifyContent: 'space-between',
+    marginTop: 2,
+    paddingHorizontal: 12,
+  },
+  listMenuShortcutMeta: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    marginLeft: 10,
+  },
+  listMenuShortcutCategory: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
   },
   listMenuBackIcon: {
     color: THEME_ACCENT,

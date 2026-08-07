@@ -103,6 +103,68 @@ export const APP_HISTORY_LIMIT = 10;
 export type QuickPresetNavPresetIds = Array<string | null>;
 export type QuickPresetNavIconNames = string[];
 
+export type FilterMenuShortcutKey = 'date' | 'list' | 'priority' | 'tag';
+export type FilterMenuShortcut = {
+  filterKey: FilterMenuShortcutKey;
+  value: string;
+};
+
+export const FILTER_MENU_SHORTCUT_NONE_VALUE = '__none__';
+export const DEFAULT_FILTER_MENU_SHORTCUTS: FilterMenuShortcut[] = [
+  { filterKey: 'date', value: 'Today' },
+  { filterKey: 'date', value: 'Tomorrow' },
+  { filterKey: 'date', value: FILTER_MENU_SHORTCUT_NONE_VALUE },
+];
+
+const isFilterMenuShortcutKey = (value: unknown): value is FilterMenuShortcutKey => (
+  value === 'date' || value === 'list' || value === 'priority' || value === 'tag'
+);
+
+export const normalizeFilterMenuShortcuts = (
+  value: unknown,
+  fallback: FilterMenuShortcut[] = DEFAULT_FILTER_MENU_SHORTCUTS,
+): FilterMenuShortcut[] => {
+  if (!Array.isArray(value)) {
+    return fallback.map((shortcut) => ({ ...shortcut }));
+  }
+
+  const seen = new Set<string>();
+  const shortcuts: FilterMenuShortcut[] = [];
+
+  value.forEach((item) => {
+    if (
+      typeof item !== 'object'
+      || item === null
+      || !isFilterMenuShortcutKey((item as Record<string, unknown>).filterKey)
+    ) {
+      return;
+    }
+
+    const shortcutRecord = item as Record<string, unknown>;
+    const filterKey = shortcutRecord.filterKey as FilterMenuShortcutKey;
+    const shortcutValue = typeof shortcutRecord.value === 'string'
+      ? shortcutRecord.value.trim()
+      : '';
+    if (!shortcutValue) {
+      return;
+    }
+
+    const id = `${filterKey}\u0000${shortcutValue}`;
+    if (seen.has(id)) {
+      return;
+    }
+
+    seen.add(id);
+    shortcuts.push({ filterKey, value: shortcutValue });
+  });
+
+  return shortcuts;
+};
+
+export const cloneFilterMenuShortcuts = (
+  shortcuts: FilterMenuShortcut[],
+): FilterMenuShortcut[] => normalizeFilterMenuShortcuts(shortcuts, []);
+
 export const DEFAULT_QUICK_PRESET_NAV_ICON_NAMES: QuickPresetNavIconNames = [
   'penguin',
   'rabbit-variant',
@@ -140,6 +202,7 @@ export type AppHistorySnapshot = {
   customTags: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
+  filterMenuShortcuts: FilterMenuShortcut[];
   filterColors: FilterColorSettings;
   googleDriveBackupEnabled: boolean;
   habitNotificationsPaused: boolean;
@@ -218,6 +281,7 @@ export type AppSettings = {
   deletedTodos: DeletedTodo[];
   filterConfigUiState: FilterConfigUiState;
   filterColors: FilterColorSettings;
+  filterMenuShortcuts: FilterMenuShortcut[];
   googleDriveBackupEnabled: boolean;
   googleDriveLastBackupAt: string | null;
   googleDriveLastRestoreAt: string | null;
@@ -412,6 +476,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   deletedTodos: [],
   filterConfigUiState: DEFAULT_FILTER_CONFIG_UI_STATE,
   filterColors: cloneFilterColors(),
+  filterMenuShortcuts: cloneFilterMenuShortcuts(DEFAULT_FILTER_MENU_SHORTCUTS),
   googleDriveBackupEnabled: false,
   googleDriveLastBackupAt: null,
   googleDriveLastRestoreAt: null,
@@ -949,6 +1014,7 @@ const normalizeAppHistorySnapshotRecord = (
     customTags: normalizeCustomTags(value.customTags),
     dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
+    filterMenuShortcuts: normalizeFilterMenuShortcuts(value.filterMenuShortcuts),
     filterColors: normalizeFilterColors(value.filterColors),
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
     habitNotificationsPaused: value.habitNotificationsPaused === true,
@@ -1056,6 +1122,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       deletedTodos: [],
       filterConfigUiState: cloneFilterConfigUiState(),
       filterColors: cloneFilterColors(),
+      filterMenuShortcuts: cloneFilterMenuShortcuts(DEFAULT_FILTER_MENU_SHORTCUTS),
       history: {
         redo: [],
         undo: [],
@@ -1111,6 +1178,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
     filterConfigUiState: normalizeFilterConfigUiState(value.filterConfigUiState),
     filterColors: normalizeFilterColors(value.filterColors),
+    filterMenuShortcuts: normalizeFilterMenuShortcuts(value.filterMenuShortcuts),
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
     googleDriveLastBackupAt:
       typeof value.googleDriveLastBackupAt === 'string' ? value.googleDriveLastBackupAt : null,

@@ -2402,6 +2402,40 @@ const getInsertedSpaceIndex = (previousText: string, nextText: string): number |
   return insertedSpaceIndex;
 };
 
+const getDoubleSpaceCommandCursorPosition = (
+  previousText: string,
+  nextText: string,
+): number | null => {
+  const insertedSpaceIndex = getInsertedSpaceIndex(previousText, nextText);
+  if (
+    insertedSpaceIndex !== null
+    && insertedSpaceIndex > 0
+    && previousText[insertedSpaceIndex - 1] === ' '
+  ) {
+    return insertedSpaceIndex;
+  }
+
+  if (nextText.length !== previousText.length + 1) {
+    return null;
+  }
+
+  // Some mobile keyboards replace the two spaces with ". " before onChangeText fires.
+  for (let cursorPosition = 1; cursorPosition < nextText.length; cursorPosition += 1) {
+    const autoPeriodIndex = cursorPosition - 1;
+    if (
+      previousText[autoPeriodIndex] === ' '
+      && nextText[autoPeriodIndex] === '.'
+      && nextText[cursorPosition] === ' '
+      && nextText.slice(0, autoPeriodIndex) === previousText.slice(0, autoPeriodIndex)
+      && nextText.slice(cursorPosition + 1) === previousText.slice(cursorPosition)
+    ) {
+      return cursorPosition;
+    }
+  }
+
+  return null;
+};
+
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
 const CREATE_DRAWER_DATE_PICKER_MENU_ITEMS = DATE_PICKER_MENU_ITEMS.filter(
@@ -5045,6 +5079,7 @@ export default function App() {
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
   const createDrawerVisibleRef = useRef(createDrawerVisible);
   createDrawerVisibleRef.current = createDrawerVisible;
+  const [createDrawerEditingTodoId, setCreateDrawerEditingTodoId] = useState<string | null>(null);
   const [createDrawerExpanded, setCreateDrawerExpanded] = useState(false);
   const [createDrawerFocusedField, setCreateDrawerFocusedField] =
     useState<CreateDrawerFocusedField>('title');
@@ -7158,6 +7193,45 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
+  const openTodoEditor = useCallback((todo: Todo) => {
+    const nextFilters = getCopiedTodoFilters(todo);
+    createDraftCopiesTodoSettingsRef.current = false;
+    createCommandRestoreAfterPickerRef.current = false;
+    createCommandReturnSelectionRef.current = { end: 0, start: 0 };
+    createDraftContentSelectionRef.current = { end: 0, start: 0 };
+    createDraftSelectionRef.current = { end: todo.text.length, start: todo.text.length };
+    createDraftTextValueRef.current = todo.text;
+    createDrawerPickerRef.current = null;
+    setActiveTodoDetailId(null);
+    setActiveTodoDetailDraftContent('');
+    setActiveTodoDetailDraftText('');
+    setActiveTodoDetailDraftTags([]);
+    todoDetailDraftTodoIdRef.current = null;
+    setActiveDeletedTodoDetailId(null);
+    setCreateDrawerEditingTodoId(todo.id);
+    setCreateDrawerExpanded(false);
+    setCreateDrawerFocusedField('title');
+    setCreateDrawerPicker(null);
+    setCreateCommandPaletteVisible(false);
+    setCreateCommandQuery('');
+    setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(nextFilters));
+    setCreateDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
+    setCreateDraftText(todo.text);
+    setCreateDraftPinned(todo.pinned);
+    setCreateDraftTags(normalizeTodoTags(todo.tags));
+    setCreateDraftFilters(nextFilters);
+    setDatePickerVisible(false);
+    reminderTimeModalRef.current?.close();
+    setHabitReminderModalVisible(false);
+    setRepeatReminderModalVisible(false);
+    setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
+    setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
+    setCreateFromSettingsCueVisible(false);
+    createDrawerVisibleRef.current = true;
+    createDrawerFocusPendingRef.current = true;
+    setCreateDrawerVisible(true);
+  }, []);
+
   const openTodoDetailModal = useCallback((id: string) => {
     if (pendingDeleteIds.has(id)) {
       return;
@@ -7167,15 +7241,26 @@ export default function App() {
     searchInputRef.current?.blur();
     const todo = todos.find((item) => item.id === id);
 
+    if (!todo) {
+      return;
+    }
+
     if (listMenuOpen) {
       closeListMenu();
     }
 
     exitTodoSelectMode();
+
+    if (!todo.done) {
+      openTodoEditor(todo);
+      triggerSubtleHaptic();
+      return;
+    }
+
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
-    setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo?.content ?? ''));
-    setActiveTodoDetailDraftText(todo?.text ?? '');
-    setActiveTodoDetailDraftTags(normalizeTodoTags(todo?.tags));
+    setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
+    setActiveTodoDetailDraftText(todo.text);
+    setActiveTodoDetailDraftTags(normalizeTodoTags(todo.tags));
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
     triggerSubtleHaptic();
@@ -7183,6 +7268,7 @@ export default function App() {
     closeListMenu,
     exitTodoSelectMode,
     listMenuOpen,
+    openTodoEditor,
     pendingDeleteIds,
     todos,
   ]);
@@ -7538,6 +7624,7 @@ export default function App() {
       ? normalizedFilters
       : getRememberedCreateDraftFilters(listMenuTree, filters);
     const nextTags = normalizedFilters.tag;
+    setCreateDrawerEditingTodoId(null);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerFocusedField('title');
@@ -7646,13 +7733,19 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
+
+    if (!todo.done) {
+      openTodoEditor(todo);
+      return;
+    }
+
     setActiveTodoDetailContentSelection({ end: 0, start: 0 });
     setActiveTodoDetailDraftContent(formatTodoDetailDraftContentForEditing(todo.content));
     setActiveTodoDetailDraftText(todo.text);
     setActiveTodoDetailDraftTags(normalizeTodoTags(todo.tags));
     todoDetailDraftTodoIdRef.current = id;
     setActiveTodoDetailId(id);
-  }, [closeListMenuState, resetCreateDrawerState]);
+  }, [closeListMenuState, openTodoEditor, resetCreateDrawerState]);
 
   const mergeNotificationLog = useCallback((entries: NotificationLogEntry[]) => {
     if (entries.length === 0) {
@@ -8102,6 +8195,7 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    setCreateDrawerEditingTodoId(null);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -8281,6 +8375,7 @@ export default function App() {
 
     exitTodoSelectMode();
     searchInputRef.current?.blur();
+    setCreateDrawerEditingTodoId(null);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -8405,6 +8500,69 @@ export default function App() {
       return;
     }
 
+    if (createDrawerEditingTodoId) {
+      const existingTodo = todosRef.current.find(
+        (todo) => todo.id === createDrawerEditingTodoId,
+      );
+      if (
+        !existingTodo
+        || existingTodo.done
+        || pendingDeleteIdsRef.current.has(existingTodo.id)
+      ) {
+        closeCreateDrawer();
+        return;
+      }
+
+      const rawNextFilters: TodoFilters = {
+        ...cloneTodoFilters(createDraftFilters),
+        tag: [],
+      };
+      const dateChanged = !filterValueListsEqual(
+        rawNextFilters.date,
+        existingTodo.filters.date,
+      );
+      const nextFilters = normalizeTodoFilters(
+        rawNextFilters,
+        dateChanged ? Date.now() : undefined,
+      );
+      const nextTags = normalizeTodoTags(createDraftTags);
+      const updatedTodo: Todo = {
+        ...existingTodo,
+        content,
+        filters: nextFilters,
+        pinned: createDraftPinned,
+        tags: nextTags,
+        text,
+      };
+      const hasChanges = (
+        existingTodo.content !== updatedTodo.content
+        || !filtersEqual(existingTodo.filters, updatedTodo.filters)
+        || existingTodo.pinned !== updatedTodo.pinned
+        || !filterValueListsEqual(normalizeTodoTags(existingTodo.tags), updatedTodo.tags)
+        || existingTodo.text !== updatedTodo.text
+      );
+
+      if (hasChanges) {
+        recordUndo('Edit todo');
+        setTodos((current) => current.map((todo) => (
+          todo.id === updatedTodo.id ? updatedTodo : todo
+        )));
+        localTodoStore.upsert(updatedTodo).catch(() => undefined);
+        syncTodoAlarm(updatedTodo).catch(() => undefined);
+        highlightEditedTodos([updatedTodo.id]);
+      }
+
+      createDrawerVisibleRef.current = false;
+      createDrawerFocusPendingRef.current = false;
+      createDrawerPickerRef.current = null;
+      Keyboard.dismiss();
+      setCreateDrawerVisible(false);
+      setCreateDrawerPicker(null);
+      resetCreateDrawerState();
+      triggerSubtleHaptic();
+      return;
+    }
+
     const copiesTodoSettings = createDraftCopiesTodoSettingsRef.current;
     const todoFilters = copiesTodoSettings
       ? cloneTodoFilters(createDraftFilters)
@@ -8443,8 +8601,11 @@ export default function App() {
     createDraftPinned,
     createDraftTags,
     createDraftText,
+    createDrawerEditingTodoId,
     clearNotificationTodoReveal,
+    closeCreateDrawer,
     highlightNewlyCreatedTodo,
+    highlightEditedTodos,
     listMenuTree,
     recordUndo,
     resetCreateDrawerState,
@@ -12457,17 +12618,15 @@ export default function App() {
 
   const handleCreateDraftTextChange = useCallback((nextText: string) => {
     const previousText = createDraftTextValueRef.current;
-    const insertedSpaceIndex = getInsertedSpaceIndex(previousText, nextText);
+    const commandCursorPosition = getDoubleSpaceCommandCursorPosition(previousText, nextText);
     const opensCommandPalette =
       !createCommandPaletteVisible
-      && insertedSpaceIndex !== null
-      && insertedSpaceIndex > 0
-      && previousText[insertedSpaceIndex - 1] === ' ';
+      && commandCursorPosition !== null;
 
-    if (opensCommandPalette && insertedSpaceIndex !== null) {
+    if (opensCommandPalette && commandCursorPosition !== null) {
       createDraftTextValueRef.current = previousText;
       setCreateDraftText(previousText);
-      openCreateCommandPalette(insertedSpaceIndex);
+      openCreateCommandPalette(commandCursorPosition);
       return;
     }
 
@@ -18583,7 +18742,9 @@ export default function App() {
             >
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Close new todo"
+                accessibilityLabel={
+                  createDrawerEditingTodoId ? 'Close todo editor' : 'Close new todo'
+                }
                 onPress={closeCreateDrawer}
                 pointerEvents={createDrawerVisible ? 'auto' : 'none'}
                 style={StyleSheet.absoluteFillObject}
@@ -18825,7 +18986,9 @@ export default function App() {
                       {createDrawerPicker !== 'priority' ? (
                         <Pressable
                           accessibilityRole="button"
-                          accessibilityLabel="Close new todo"
+                          accessibilityLabel={
+                            createDrawerEditingTodoId ? 'Close todo editor' : 'Close new todo'
+                          }
                           hitSlop={8}
                           onPress={closeCreateDrawer}
                           style={({ pressed }) => [
@@ -19064,8 +19227,8 @@ export default function App() {
                         accessibilityRole="button"
                         accessibilityLabel={
                           createDrawerExpanded
-                            ? 'Collapse new todo editor'
-                            : 'Expand new todo editor to full screen'
+                            ? 'Collapse todo editor'
+                            : 'Expand todo editor to full screen'
                         }
                         accessibilityState={{ expanded: createDrawerExpanded }}
                         hitSlop={8}
@@ -19086,7 +19249,9 @@ export default function App() {
                       </Pressable>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel="Close new todo"
+                        accessibilityLabel={
+                          createDrawerEditingTodoId ? 'Close todo editor' : 'Close new todo'
+                        }
                         hitSlop={8}
                         onPress={closeCreateDrawer}
                         style={({ pressed }) => [
@@ -19103,7 +19268,9 @@ export default function App() {
                     accessibilityLabel={
                       createDrawerPicker
                         ? 'Back to task title'
-                        : 'Create todo'
+                        : createDrawerEditingTodoId
+                          ? 'Save todo changes'
+                          : 'Create todo'
                     }
                     accessibilityState={{
                       disabled: !createDrawerPicker && !createDrawerCanSubmit,
@@ -23312,7 +23479,7 @@ const styles = StyleSheet.create({
   },
   createDrawerTitleRowPrompt: {
     flex: 0,
-    maxHeight: 52,
+    maxHeight: 68,
     minHeight: 44,
   },
   createDrawerTitleRowCommandHidden: {
@@ -23334,7 +23501,7 @@ const styles = StyleSheet.create({
     fontSize: 23,
     fontWeight: FONT_REGULAR,
     lineHeight: 30,
-    maxHeight: 52,
+    maxHeight: 68,
     minHeight: 44,
     paddingTop: 6,
     paddingBottom: 0,

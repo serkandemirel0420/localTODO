@@ -11735,6 +11735,20 @@ export default function App() {
         metaTagVisibility,
       ),
   );
+  const editingMenuPresetHasChanges = Boolean(
+    editingMenuPreset &&
+      !hasTodoEditTargets &&
+      !menuPresetMatchesState(
+        editingMenuPreset,
+        menuFilters,
+        menuRequiredFilters,
+        menuAvoidedFilters,
+        effectiveSortMode,
+        effectiveGroupMode,
+        listOrderMode,
+        metaTagVisibility,
+      ),
+  );
   const bottomMenuItems = useMemo<BottomMenuItem[]>(() => {
     if (menuMode === 'lists' || menuMode === 'presetLists') {
       return filterConfigListItems;
@@ -14601,19 +14615,20 @@ export default function App() {
       activeFilterCount > 0,
   );
   const canSaveListMenuPreset = Boolean(
-    editingMenuPreset ||
+    editingMenuPresetHasChanges ||
       (openMenuPresetHasChanges && openMenuPreset) ||
       canSaveCurrentMenuPreset,
+  );
+  const showListMenuOwnerBadge = Boolean(
+    hasTodoEditTargets || (!editingMenuPreset && !openMenuPreset),
   );
   const listMenuOwnerLabel = hasTodoEditTargets
     ? activeTodoMenuId
       ? 'Editing item'
       : `${selectedTodoCount} selected ${selectedTodoCount === 1 ? 'item' : 'items'}`
-    : editingMenuPreset || openMenuPreset
-      ? 'Saved list'
-      : activeMenuPreset
-        ? `Preset: ${activeMenuPreset.label}`
-        : 'Current filters';
+    : activeMenuPreset
+      ? `Preset: ${activeMenuPreset.label}`
+      : 'Current filters';
   const listMenuOwnerIcon = hasTodoEditTargets ? 'checkbox-outline' : 'albums-outline';
   const saveListMenuPreset = useCallback(() => {
     if (editingMenuPreset) {
@@ -18901,29 +18916,31 @@ export default function App() {
                     >
                       <View style={styles.menuDragHandle} accessibilityRole="adjustable">
                         <View style={styles.menuDragPill} />
-                        <View
-                          style={[
-                            styles.listMenuOwnerBadge,
-                            hasTodoEditTargets
-                              ? styles.listMenuOwnerBadgeItems
-                              : styles.listMenuOwnerBadgePresets,
-                          ]}
-                        >
-                          <Ionicons
-                            color={hasTodoEditTargets ? '#7A4E1D' : THEME_ACCENT}
-                            name={listMenuOwnerIcon}
-                            size={14}
-                          />
-                          <Text
-                            numberOfLines={1}
+                        {showListMenuOwnerBadge ? (
+                          <View
                             style={[
-                              styles.listMenuOwnerBadgeText,
-                              hasTodoEditTargets && styles.listMenuOwnerBadgeTextItems,
+                              styles.listMenuOwnerBadge,
+                              hasTodoEditTargets
+                                ? styles.listMenuOwnerBadgeItems
+                                : styles.listMenuOwnerBadgePresets,
                             ]}
                           >
-                            {listMenuOwnerLabel}
-                          </Text>
-                        </View>
+                            <Ionicons
+                              color={hasTodoEditTargets ? '#7A4E1D' : THEME_ACCENT}
+                              name={listMenuOwnerIcon}
+                              size={14}
+                            />
+                            <Text
+                              numberOfLines={1}
+                              style={[
+                                styles.listMenuOwnerBadgeText,
+                                hasTodoEditTargets && styles.listMenuOwnerBadgeTextItems,
+                              ]}
+                            >
+                              {listMenuOwnerLabel}
+                            </Text>
+                          </View>
+                        ) : null}
                         {canSaveListMenuPreset ? (
                           <Pressable
                             accessibilityRole="button"

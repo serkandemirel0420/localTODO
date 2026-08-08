@@ -142,7 +142,7 @@ import {
   linkStoredGoogleAuthToFirebase,
 } from './src/firebase/localTodoFirebase';
 import {
-  loadFirebaseAppDataFromBackend,
+  loadFirebaseSettingsFromBackend,
   queueFirebaseNotificationLogSave,
   queueFirebaseSettingsSave,
   setFirebaseRemoteWritesEnabled,
@@ -5284,6 +5284,13 @@ export default function App() {
   const [firebaseInitialSyncReady, setFirebaseInitialSyncReady] = useState(
     () => !isFirebaseConfigured(),
   );
+  const [firebaseSettingsBackupBusy, setFirebaseSettingsBackupBusy] = useState(false);
+  const [firebaseSettingsRestoreBusy, setFirebaseSettingsRestoreBusy] = useState(false);
+  const [firebaseSettingsStatus, setFirebaseSettingsStatus] = useState(() => (
+    isFirebaseConfigured()
+      ? 'Settings stay local until you choose Back up now.'
+      : 'Firebase is not configured for this build.'
+  ));
   const [startupDataReady, setStartupDataReady] = useState(false);
   const [notificationTodoRevealId, setNotificationTodoRevealId] = useState<string | null>(null);
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false);
@@ -5380,6 +5387,8 @@ export default function App() {
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
   const [settingsHabitsExpanded, setSettingsHabitsExpanded] = useState(false);
   const [settingsHistoryExpanded, setSettingsHistoryExpanded] = useState(false);
+  const [settingsFirebaseBackupExpanded, setSettingsFirebaseBackupExpanded] = useState(false);
+  const [settingsPresetPropertiesExpanded, setSettingsPresetPropertiesExpanded] = useState(false);
   const [settingsHistoryPreviewTarget, setSettingsHistoryPreviewTarget] =
     useState<UndoHistoryPreviewTarget | null>(null);
   const [activeDeletedTodoDetailId, setActiveDeletedTodoDetailId] = useState<string | null>(null);
@@ -5602,10 +5611,6 @@ export default function App() {
   const didReadInitialWidgetUrlRef = useRef(false);
   const lastHandledWidgetUrlRef = useRef({ timestamp: 0, url: '' });
   const firebaseInitialSyncStartedRef = useRef(false);
-  const firebaseLastAppliedRemoteAtRef = useRef(0);
-  const firebaseBackendPullInFlightRef = useRef(false);
-  const firebaseBackendPullReadyRef = useRef(false);
-  const lastFirebaseBackendPullStartedAtRef = useRef(0);
   const settingsAutoSaveInitializedRef = useRef(false);
   todosRef.current = todos;
   dateLabelDisplayModeRef.current = dateLabelDisplayMode;
@@ -6007,20 +6012,12 @@ export default function App() {
     return appliedSettings;
   }, []);
 
-  const applyFirebaseAppDataSnapshot = useCallback((
-    snapshot: FirebaseAppDataSnapshot,
-    remoteUpdatedAt: number,
-    options: { preserveVisibleView?: boolean } = {},
-  ) => {
+  const applyFirebaseAppDataSnapshot = useCallback((snapshot: FirebaseAppDataSnapshot) => {
     const remoteTodos = removeInitialSeedTodos(snapshot.todos);
     const remoteNotificationLogEntries = normalizeNotificationLogEntries(
       snapshot.notificationLogEntries,
     );
 
-    firebaseLastAppliedRemoteAtRef.current = Math.max(
-      firebaseLastAppliedRemoteAtRef.current,
-      remoteUpdatedAt,
-    );
     itemSearchResultsCacheRef.current.clear();
     todosRef.current = remoteTodos;
     pendingDeleteIdsRef.current = new Set();
@@ -6028,14 +6025,100 @@ export default function App() {
     setSelectedTodoIds(new Set());
     setTodos(remoteTodos);
     setNotificationLogEntries(remoteNotificationLogEntries);
-    const appliedSettings = applyLoadedSettings(snapshot.settings, options);
     localTodoStore.replaceAllLocal(remoteTodos).catch(() => undefined);
-    appSettingsStore.save(appliedSettings).catch(() => undefined);
     notificationLogStore
       .replaceAll(remoteNotificationLogEntries)
       .catch(() => undefined);
     reconcileTodoAlarms(remoteTodos).catch(() => undefined);
+  }, []);
+
+  const restoreSettingsFromFirebase = useCallback(async () => {
+    setFirebaseSettingsRestoreBusy(true);
+    setFirebaseSettingsStatus('Loading the settings copy from Firebase...');
+
+    try {
+      const result = await loadFirebaseSettingsFromBackend();
+
+      if (result.status === 'skipped') {
+        setFirebaseSettingsStatus(
+          result.reason === 'firebase-disabled'
+            ? 'Firebase is not configured for this build.'
+            : 'No settings copy was found in Firebase.',
+        );
+        return;
+      }
+
+      const restoredSettings = applyLoadedSettings(result.settings);
+      const restoredPresetIds = new Set(
+        restoredSettings.menuPresets.map((preset) => preset.id),
+      );
+
+      await appSettingsStore.save(restoredSettings);
+      setActivePresetSectionSelection(null);
+      setEditingMenuPresetId((current) => (
+        current && restoredPresetIds.has(current) ? current : null
+      ));
+      setOpenMenuPresetId((current) => (
+        current && restoredPresetIds.has(current) ? current : null
+      ));
+      setOpenQuickPresetNavSlotNumber(null);
+      setSettingsListIconPickerIndex(null);
+      setSettingsPresetIconPickerIndex(null);
+      setSettingsListSelectMode(false);
+      setSelectedSettingsListLabels(new Set());
+      setSettingsListReorderCancelNonce((current) => current + 1);
+
+      const savedAtLabel = result.savedAt > 0
+        ? ` · saved ${formatBackupTime(new Date(result.savedAt).toISOString())}`
+        : '';
+      const navbarItemCount = restoredSettings.quickPresetNavPresetIds.filter(Boolean).length;
+
+      setFirebaseSettingsStatus(
+        `Restored ${restoredSettings.menuPresets.length} presets, ${navbarItemCount} navbar items, and ${restoredSettings.listMenuTree.length} lists${savedAtLabel}.`,
+      );
+      triggerSubtleHaptic();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Firebase settings restore failed.';
+
+      setFirebaseSettingsStatus(`Restore failed: ${message}`);
+      Alert.alert('Restore failed', message);
+    } finally {
+      setFirebaseSettingsRestoreBusy(false);
+    }
   }, [applyLoadedSettings]);
+
+  const requestFirebaseSettingsRestore = useCallback(() => {
+    const confirmationMessage = 'This replaces local preset names, navbar order and icons, lists, tags, filters, colors, preferences, deleted-items state, and change history with the database copy. Active todos stay unchanged.';
+
+    if (Platform.OS === 'web') {
+      const webGlobal = globalThis as typeof globalThis & {
+        confirm?: (message?: string) => boolean;
+      };
+      const confirmed = webGlobal.confirm?.(
+        `Restore all settings from Firebase?\n\n${confirmationMessage}`,
+      ) === true;
+
+      if (confirmed) {
+        void restoreSettingsFromFirebase();
+      }
+      return;
+    }
+
+    Alert.alert(
+      'Restore all settings from Firebase?',
+      confirmationMessage,
+      [
+        { style: 'cancel', text: 'Cancel' },
+        {
+          onPress: () => {
+            void restoreSettingsFromFirebase();
+          },
+          style: 'destructive',
+          text: 'Restore settings',
+        },
+      ],
+    );
+  }, [restoreSettingsFromFirebase]);
 
   useEffect(() => {
     let alive = true;
@@ -6170,7 +6253,6 @@ export default function App() {
 
   const saveAppSettingsSnapshot = useCallback(async (settings: AppSettings) => {
     await appSettingsStore.save(settings);
-    queueFirebaseSettingsSave(settings).catch(() => undefined);
   }, []);
 
   const persistAppSettings = useCallback((
@@ -6182,6 +6264,37 @@ export default function App() {
 
     return saveAppSettingsSnapshot(createSettingsSnapshot(overrides)).catch(() => undefined);
   }, [createSettingsSnapshot, saveAppSettingsSnapshot, settingsLoaded]);
+
+  const backupSettingsToFirebase = useCallback(async () => {
+    if (firebaseSettingsBackupBusy) {
+      return;
+    }
+
+    setFirebaseSettingsBackupBusy(true);
+    setFirebaseSettingsStatus('Backing up all settings to Firebase...');
+
+    try {
+      const settings = createSettingsSnapshot();
+
+      await appSettingsStore.save(settings);
+      await queueFirebaseSettingsSave(settings);
+
+      const navbarItemCount = settings.quickPresetNavPresetIds.filter(Boolean).length;
+      const backedUpAt = formatBackupTime(new Date().toISOString());
+
+      setFirebaseSettingsStatus(
+        `Backed up ${settings.menuPresets.length} presets, ${navbarItemCount} navbar items, and ${settings.listMenuTree.length} lists · ${backedUpAt}.`,
+      );
+      triggerSubtleHaptic();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Firebase settings backup failed.';
+
+      setFirebaseSettingsStatus(`Backup failed: ${message}`);
+      Alert.alert('Backup failed', message);
+    } finally {
+      setFirebaseSettingsBackupBusy(false);
+    }
+  }, [createSettingsSnapshot, firebaseSettingsBackupBusy]);
 
   useEffect(() => {
     if (!googleAuth?.idToken) {
@@ -6217,19 +6330,11 @@ export default function App() {
       .then((result) => {
         if (!alive || result.status === 'disabled' || result.status === 'skipped') {
           initialSyncCompleted = true;
-          if (result.status === 'skipped') {
-            firebaseLastAppliedRemoteAtRef.current = Math.max(
-              firebaseLastAppliedRemoteAtRef.current,
-              result.remoteUpdatedAt,
-            );
-          }
           setFirebaseRemoteWritesEnabled(true);
           return;
         }
 
-        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt, {
-          preserveVisibleView: true,
-        });
+        applyFirebaseAppDataSnapshot(result.snapshot);
         initialSyncCompleted = true;
         setFirebaseRemoteWritesEnabled(true);
       })
@@ -6240,7 +6345,6 @@ export default function App() {
       .finally(() => {
         if (alive && initialSyncCompleted) {
           setFirebaseInitialSyncReady(true);
-          firebaseBackendPullReadyRef.current = true;
         }
       });
 
@@ -6254,43 +6358,6 @@ export default function App() {
     notificationLogEntries,
     notificationLogLoaded,
     settingsLoaded,
-  ]);
-
-  const pullFirebaseAppDataFromBackend = useCallback(() => {
-    if (
-      !firebaseBackendPullReadyRef.current ||
-      firebaseBackendPullInFlightRef.current
-    ) {
-      return;
-    }
-
-    const now = Date.now();
-    if (now - lastFirebaseBackendPullStartedAtRef.current < 1200) {
-      return;
-    }
-
-    lastFirebaseBackendPullStartedAtRef.current = now;
-    firebaseBackendPullInFlightRef.current = true;
-
-    loadFirebaseAppDataFromBackend()
-      .then((result) => {
-        if (
-          result.status !== 'loaded-remote' ||
-          result.remoteUpdatedAt <= firebaseLastAppliedRemoteAtRef.current
-        ) {
-          return;
-        }
-
-        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt, {
-          preserveVisibleView: true,
-        });
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        firebaseBackendPullInFlightRef.current = false;
-      });
-  }, [
-    applyFirebaseAppDataSnapshot,
   ]);
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {
@@ -14198,14 +14265,10 @@ export default function App() {
       triggerSubtleHaptic();
     }
 
-    if (!hasTodoEditTargets) {
-      requestAnimationFrame(pullFirebaseAppDataFromBackend);
-    }
   }, [
     closeListMenuState,
     clearNotificationTodoReveal,
     hasTodoEditTargets,
-    pullFirebaseAppDataFromBackend,
     removeMeaninglessPresetSelfListFilter,
     updateCurrentTodoTargetFilters,
   ]);
@@ -15642,9 +15705,11 @@ export default function App() {
     setSettingsHabitsExpanded(false);
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
+    setSettingsFirebaseBackupExpanded(false);
     setSettingsHistoryExpanded(false);
     setSettingsHistoryPreviewTarget(null);
     setSettingsListsExpanded(false);
+    setSettingsPresetPropertiesExpanded(false);
     setSettingsPresetsExpanded(false);
     setSettingsShortcutsExpanded(false);
     setSettingsWidgetExpanded(false);
@@ -20799,48 +20864,176 @@ export default function App() {
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <View style={styles.settingsRowTextWrap}>
+                    <Text style={styles.settingsSectionTitle}>Firebase settings backup</Text>
+                    <Text style={styles.settingsSectionSubtitle}>
+                      Local-first · manual backup and restore
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${settingsFirebaseBackupExpanded ? 'Collapse' : 'Expand'} Firebase settings backup section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsFirebaseBackupExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsFirebaseBackupExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsFirebaseBackupExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {settingsFirebaseBackupExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <View style={styles.settingsFirebaseSummaryRow}>
+                      <View style={styles.settingsFirebaseIconWrap}>
+                        <Ionicons color={THEME_ACCENT} name="cloud-done-outline" size={22} />
+                      </View>
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Manual database copy</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          Includes preset names and definitions, navbar order and icons, lists,
+                          tags, filters, colors, and preferences. No automatic settings reads or
+                          writes.
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.settingsBackupStatus}>{firebaseSettingsStatus}</Text>
+                    <Pressable
+                      accessibilityHint="Writes one complete settings snapshot to Firebase only when pressed"
+                      accessibilityLabel="Back up all settings to Firebase now"
+                      accessibilityRole="button"
+                      disabled={
+                        firebaseSettingsBackupBusy ||
+                        firebaseSettingsRestoreBusy ||
+                        !firebaseInitialSyncReady ||
+                        !isFirebaseConfigured()
+                      }
+                      onPress={backupSettingsToFirebase}
+                      style={({ pressed }) => [
+                        styles.settingsPrimaryButton,
+                        (
+                          firebaseSettingsBackupBusy ||
+                          firebaseSettingsRestoreBusy ||
+                          !firebaseInitialSyncReady ||
+                          !isFirebaseConfigured()
+                        ) && styles.settingsButtonDisabled,
+                        pressed && styles.settingsPrimaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsPrimaryButtonText}>
+                        {firebaseSettingsBackupBusy
+                          ? 'Backing up settings...'
+                          : 'Back up all settings now'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityHint="Replaces every local setting with the copy stored in Firebase"
+                      accessibilityLabel="Restore all settings from Firebase"
+                      accessibilityRole="button"
+                      disabled={
+                        firebaseSettingsBackupBusy ||
+                        firebaseSettingsRestoreBusy ||
+                        !firebaseInitialSyncReady ||
+                        !isFirebaseConfigured()
+                      }
+                      onPress={requestFirebaseSettingsRestore}
+                      style={({ pressed }) => [
+                        styles.settingsRestoreButton,
+                        (
+                          firebaseSettingsBackupBusy ||
+                          firebaseSettingsRestoreBusy ||
+                          !firebaseInitialSyncReady ||
+                          !isFirebaseConfigured()
+                        ) && styles.settingsButtonDisabled,
+                        pressed && styles.settingsSecondaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.settingsRestoreButtonText}>
+                        {firebaseSettingsRestoreBusy
+                          ? 'Restoring settings...'
+                          : 'Restore all settings from Firebase'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <View style={styles.settingsRowTextWrap}>
                     <Text style={styles.settingsSectionTitle}>Preset properties</Text>
                     <Text style={styles.settingsSectionSubtitle}>
                       {showPresetPropertiesAboveSearch ? 'Shown above Search' : 'Hidden above Search'}
                     </Text>
                   </View>
-                </View>
-
-                <View style={styles.settingsCard}>
                   <Pressable
-                    accessibilityHint="Controls the property filter panel above Search"
-                    accessibilityLabel="Show preset properties above Search"
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: showPresetPropertiesAboveSearch }}
-                    onPress={toggleShowPresetPropertiesAboveSearch}
+                    accessibilityLabel={`${settingsPresetPropertiesExpanded ? 'Collapse' : 'Expand'} Preset properties section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsPresetPropertiesExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsPresetPropertiesExpanded((current) => !current)}
                     style={({ pressed }) => [
-                      styles.settingsRow,
-                      pressed && styles.settingsOptionRowPressed,
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
                     ]}
                   >
-                    <View style={styles.settingsRowTextWrap}>
-                      <Text style={styles.settingsRowTitle}>Show above Search</Text>
-                      <Text style={styles.settingsRowSubtitle}>
-                        Show the active preset's tags, lists, dates, and reminders.
-                      </Text>
-                    </View>
-                    <View
+                    <Text
                       style={[
-                        styles.settingsStatusPill,
-                        showPresetPropertiesAboveSearch && styles.settingsStatusPillEnabled,
+                        styles.settingsSectionChevron,
+                        settingsPresetPropertiesExpanded && styles.settingsSectionChevronExpanded,
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.settingsStatusText,
-                          showPresetPropertiesAboveSearch && styles.settingsStatusTextEnabled,
-                        ]}
-                      >
-                        {showPresetPropertiesAboveSearch ? 'On' : 'Off'}
-                      </Text>
-                    </View>
+                      ›
+                    </Text>
                   </Pressable>
                 </View>
+
+                {settingsPresetPropertiesExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <Pressable
+                      accessibilityHint="Controls the property filter panel above Search"
+                      accessibilityLabel="Show preset properties above Search"
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: showPresetPropertiesAboveSearch }}
+                      onPress={toggleShowPresetPropertiesAboveSearch}
+                      style={({ pressed }) => [
+                        styles.settingsRow,
+                        pressed && styles.settingsOptionRowPressed,
+                      ]}
+                    >
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Show above Search</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          Show the active preset's tags, lists, dates, and reminders.
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.settingsStatusPill,
+                          showPresetPropertiesAboveSearch && styles.settingsStatusPillEnabled,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.settingsStatusText,
+                            showPresetPropertiesAboveSearch && styles.settingsStatusTextEnabled,
+                          ]}
+                        >
+                          {showPresetPropertiesAboveSearch ? 'On' : 'Off'}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
 
               <View style={styles.settingsSection}>
@@ -24538,6 +24731,20 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     letterSpacing: 0.1,
     marginTop: 12,
+  },
+  settingsFirebaseSummaryRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    minHeight: 62,
+  },
+  settingsFirebaseIconWrap: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 19,
+    height: 38,
+    justifyContent: 'center',
+    marginRight: 12,
+    width: 38,
   },
   appHeader: {
     alignItems: 'center',

@@ -14609,13 +14609,11 @@ export default function App() {
     ? activeTodoMenuId
       ? 'Editing item'
       : `${selectedTodoCount} selected ${selectedTodoCount === 1 ? 'item' : 'items'}`
-    : editingMenuPreset
-      ? `Saved list: ${editingMenuPreset.label}`
-      : openMenuPreset
-        ? `Saved list: ${openMenuPreset.label}`
-        : activeMenuPreset
-          ? `Preset: ${activeMenuPreset.label}`
-          : 'Current filters';
+    : editingMenuPreset || openMenuPreset
+      ? 'Saved list'
+      : activeMenuPreset
+        ? `Preset: ${activeMenuPreset.label}`
+        : 'Current filters';
   const listMenuOwnerIcon = hasTodoEditTargets ? 'checkbox-outline' : 'albums-outline';
   const saveListMenuPreset = useCallback(() => {
     if (editingMenuPreset) {

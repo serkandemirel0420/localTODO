@@ -10,6 +10,7 @@ export type AndroidWidgetItem = {
   dateKeys: string[];
   pinned: boolean;
   createdAt: number;
+  updatedAt: number;
 };
 
 type LocalTodoWidgetNativeModule = {
@@ -41,10 +42,12 @@ export const buildAndroidWidgetItems = (
         dateKeys,
         pinned: todo.pinned,
         createdAt: todo.createdAt,
+        updatedAt: todo.updatedAt,
       };
     })
     .sort((first, second) => (
       Number(second.pinned) - Number(first.pinned)
+      || second.updatedAt - first.updatedAt
       || second.createdAt - first.createdAt
     ))
 );

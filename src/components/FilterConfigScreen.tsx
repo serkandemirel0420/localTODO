@@ -860,7 +860,7 @@ const styles = StyleSheet.create({
   sectionCard: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E8E2DA',
-    borderRadius: 16,
+    borderRadius: 5,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
     paddingVertical: 3,
@@ -1015,7 +1015,7 @@ const styles = StyleSheet.create({
   showResultsButton: {
     alignItems: 'center',
     backgroundColor: THEME_ACCENT,
-    borderRadius: 16,
+    borderRadius: 4,
     justifyContent: 'center',
     minHeight: 54,
     paddingHorizontal: 16,

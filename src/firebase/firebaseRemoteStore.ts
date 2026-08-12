@@ -348,7 +348,9 @@ const loadFirebaseAppDataForUser = async (
     .filter((todo): todo is Todo => Boolean(todo))
     .filter((todo) => !isDevTestTodo(todo)) ?? [])
     .sort((first, second) =>
-      Number(second.pinned) - Number(first.pinned) || second.createdAt - first.createdAt
+      Number(second.pinned) - Number(first.pinned) ||
+      second.updatedAt - first.updatedAt ||
+      second.createdAt - first.createdAt
     );
   const notificationLogData = notificationLogSnapshot.data();
 
@@ -400,7 +402,9 @@ const localSnapshotHasUserData = (snapshot: FirebaseAppDataSnapshot) => (
 
 const sortTodos = (todos: Todo[]) => (
   todos.sort((first, second) =>
-    Number(second.pinned) - Number(first.pinned) || second.createdAt - first.createdAt
+    Number(second.pinned) - Number(first.pinned) ||
+    second.updatedAt - first.updatedAt ||
+    second.createdAt - first.createdAt
   )
 );
 
@@ -490,7 +494,11 @@ export const queueFirebaseTodoDelete = (id: string) => (
   })
 );
 
-export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => {
+export const queueFirebaseTodoDoneUpdate = (
+  id: string,
+  done: boolean,
+  updatedAt: number,
+) => {
   if (id.startsWith('dev-test-')) {
     return Promise.resolve();
   }
@@ -504,6 +512,8 @@ export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => {
       todosSnapshotDocRef(database, userId),
       new FieldPath('todos', todoKey, 'done'),
       done,
+      new FieldPath('todos', todoKey, 'updatedAt'),
+      updatedAt,
       'schemaVersion',
       FIREBASE_SCHEMA_VERSION,
     );
@@ -511,7 +521,11 @@ export const queueFirebaseTodoDoneUpdate = (id: string, done: boolean) => {
   });
 };
 
-export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filters']) => {
+export const queueFirebaseTodoFiltersUpdate = (
+  id: string,
+  filters: Todo['filters'],
+  updatedAt: number,
+) => {
   if (id.startsWith('dev-test-')) {
     return Promise.resolve();
   }
@@ -525,6 +539,8 @@ export const queueFirebaseTodoFiltersUpdate = (id: string, filters: Todo['filter
       todosSnapshotDocRef(database, userId),
       new FieldPath('todos', todoKey, 'filters'),
       toFirestoreJson(filters),
+      new FieldPath('todos', todoKey, 'updatedAt'),
+      updatedAt,
       'schemaVersion',
       FIREBASE_SCHEMA_VERSION,
     );

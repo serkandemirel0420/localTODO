@@ -216,7 +216,7 @@ const styles = StyleSheet.create({
   holdDetail: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E8E0D8',
-    borderRadius: 12,
+    borderRadius: 5,
     borderWidth: StyleSheet.hairlineWidth,
     maxWidth: 340,
     minWidth: 210,
@@ -246,7 +246,7 @@ const styles = StyleSheet.create({
   },
   item: {
     alignItems: 'center',
-    borderRadius: 10,
+    borderRadius: 4,
     height: 34,
     justifyContent: 'center',
     width: QUICK_PRESET_NAV_ITEM_WIDTH,

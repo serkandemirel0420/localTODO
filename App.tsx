@@ -113,6 +113,7 @@ import {
   pruneTodoFilters,
   formatListLabel,
   normalizeTodoText,
+  touchTodo,
   TODO_CONTENT_CHECKBOX_CHECKED,
   TODO_CONTENT_CHECKBOX_UNCHECKED,
   truncateTodoText,
@@ -157,6 +158,7 @@ import {
   DEV_TEST_MENU_PRESET_COUNT,
   DEV_TEST_TODO_COUNT,
   isDevTestMenuPreset,
+  isDevTestMenuPresetLabel,
   isDevTestTodo,
   mergeDevTestListMenuTree,
   mergeDevTestMenuPresets,
@@ -200,6 +202,8 @@ import {
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   collectListNodeLabels,
+  DEFAULT_EDITOR_CONTENT_FONT_SIZE,
+  DEFAULT_EDITOR_TITLE_FONT_SIZE,
   DEFAULT_FILTER_MENU_SHORTCUTS,
   DEFAULT_WIDGET_NEW_ITEM_LIST,
   DEFAULT_QUICK_PRESET_NAV_ICON_NAMES,
@@ -207,6 +211,12 @@ import {
   DEFAULT_LIST_MENU_TREE,
   findListMenuNode,
   FILTER_MENU_SHORTCUT_NONE_VALUE,
+  MAX_EDITOR_CONTENT_FONT_SIZE,
+  MAX_EDITOR_TITLE_FONT_SIZE,
+  MIN_EDITOR_CONTENT_FONT_SIZE,
+  MIN_EDITOR_TITLE_FONT_SIZE,
+  normalizeEditorContentFontSize,
+  normalizeEditorTitleFontSize,
   normalizeCustomTags,
   QUICK_PRESET_DEFAULTS_VERSION,
   QUICK_PRESET_NAV_MAX_SLOT_COUNT,
@@ -330,8 +340,12 @@ const historyEntryHasDevTestData = (entry: UndoHistoryEntry) => (
   countDevTestListMenuNodes(entry.snapshot.listMenuTree) > 0
 );
 
+const removeDevTestMenuPresetTags = (tags: unknown) =>
+  normalizeCustomTags(tags).filter((tag) => !isDevTestMenuPresetLabel(tag));
+
 const removeDevTestDataFromSettings = (settings: AppSettings): AppSettings => ({
   ...settings,
+  customTags: removeDevTestMenuPresetTags(settings.customTags),
   deletedTodos: settings.deletedTodos.filter((todo) => !isDevTestTodo(todo)),
   history: {
     redo: settings.history.redo.filter((entry) => !historyEntryHasDevTestData(entry)),
@@ -672,6 +686,7 @@ const formatHistoryTodoSettings = (record: HistoryTodoRecord) => {
     `Reminders: ${formatHistoryValues(filters.reminder)}`,
     `Filter tags: ${formatHistoryValues(filters.tag)}`,
     `Created: ${formatHistoryTimestamp(todo.createdAt)}`,
+    `Changed: ${formatHistoryTimestamp(todo.updatedAt)}`,
   ];
 
   if (record.status === 'deleted') {
@@ -1455,7 +1470,7 @@ const ANDROID_STATUS_BAR_INSET = Platform.OS === 'android'
   ? Math.max(StatusBar.currentHeight ?? 0, 24)
   : 0;
 const ANDROID_FULLSCREEN_TOP_MARGIN = Platform.OS === 'android' ? 12 : 0;
-const HORIZONTAL_PADDING = 18;
+const HORIZONTAL_PADDING = 14;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
 const FONT_SEMIBOLD = '600' as const;
@@ -1473,10 +1488,11 @@ const TODO_DETAIL_SELECTION_COLOR = '#C0C0C0';
 const TODO_DETAIL_CONTENT_VISIBLE_LINES = 6;
 const TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT = 165;
 const TODO_DETAIL_CONTENT_EXTRA_LINES = 5;
-const CARD_BORDER_RADIUS = 16;
-const CONTROL_BORDER_RADIUS = 14;
+const CARD_BORDER_RADIUS = 5;
+const CONTROL_BORDER_RADIUS = 4;
 const PULL_MAX = 178;
 const DOUBLE_TAP_DELAY = 300;
+const EDITOR_INPUT_SCROLL_GESTURE_THRESHOLD = 8;
 const EDGE_BACK_WIDTH = 28;
 const LIST_MENU_HEIGHT_RATIO = 0.5;
 const NAV_ACCENT = THEME_ACCENT;
@@ -2366,6 +2382,12 @@ type NavTab = 'calendar' | 'menu' | 'notifications' | 'search' | 'settings';
 
 type CreateDrawerPicker = 'date' | 'list' | 'priority' | 'tags';
 type CreateDrawerFocusedField = 'content' | 'title';
+type CreateEditorTouchState = {
+  field: CreateDrawerFocusedField;
+  moved: boolean;
+  pageX: number;
+  pageY: number;
+};
 type CreateCommandGroup =
   | 'Date'
   | 'Reminder'
@@ -2711,6 +2733,10 @@ const getCreateFiltersForSectionHeader = (
 };
 
 const canCreateFromSectionHeader = (sectionId: string, sectionLabel: string) => {
+  if (sectionId === 'group-pinned') {
+    return false;
+  }
+
   if (!sectionId.startsWith('group-status-')) {
     return true;
   }
@@ -3351,6 +3377,15 @@ const dateFilterValuesIncludeExactDay = (
 
 const filtersEqual = (first: TodoFilters, second: TodoFilters): boolean =>
   JSON.stringify(normalizeFilterValues(first)) === JSON.stringify(normalizeFilterValues(second));
+
+const todoMutableValuesEqual = (first: Todo, second: Todo): boolean => (
+  first.content === second.content &&
+  first.text === second.text &&
+  filterValueListsEqual(first.tags, second.tags) &&
+  first.pinned === second.pinned &&
+  first.done === second.done &&
+  filtersEqual(first.filters, second.filters)
+);
 
 const normalizePresetSelfListLabel = (label: string) => normalizeTodoText(label).toLocaleLowerCase();
 
@@ -4897,6 +4932,36 @@ function SettingsColorRow({
 
 const MemoizedSettingsColorRow = React.memo(SettingsColorRow);
 
+type SettingsSectionTitleButtonProps = {
+  expanded: boolean;
+  onPress: () => void;
+  subtitle: React.ReactNode;
+  title: string;
+};
+
+function SettingsSectionTitleButton({
+  expanded,
+  onPress,
+  subtitle,
+  title,
+}: SettingsSectionTitleButtonProps) {
+  return (
+    <Pressable
+      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.settingsSectionTitleButton,
+        pressed && styles.settingsSectionTitleButtonPressed,
+      ]}
+    >
+      <Text style={styles.settingsSectionTitle}>{title}</Text>
+      <Text style={styles.settingsSectionSubtitle}>{subtitle}</Text>
+    </Pressable>
+  );
+}
+
 type CreateCommandPaletteProps = {
   commands: CreateCommandItem[];
   inputRef: React.RefObject<TextInput | null>;
@@ -5297,9 +5362,14 @@ export default function App() {
   const createDrawerVisibleRef = useRef(createDrawerVisible);
   createDrawerVisibleRef.current = createDrawerVisible;
   const [createDrawerEditingTodoId, setCreateDrawerEditingTodoId] = useState<string | null>(null);
+  const createDrawerEditingTodoIdRef = useRef(createDrawerEditingTodoId);
+  createDrawerEditingTodoIdRef.current = createDrawerEditingTodoId;
   const [createDrawerExpanded, setCreateDrawerExpanded] = useState(false);
   const [createDrawerFocusedField, setCreateDrawerFocusedField] =
     useState<CreateDrawerFocusedField>('title');
+  const [createEditorRedirectFirstContentTap, setCreateEditorRedirectFirstContentTap] =
+    useState(false);
+  const [createEditorSoftInputEnabled, setCreateEditorSoftInputEnabled] = useState(true);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
@@ -5360,6 +5430,8 @@ export default function App() {
   });
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
+  const [filterListCreateModalVisible, setFilterListCreateModalVisible] = useState(false);
+  const [filterListCreateName, setFilterListCreateName] = useState('');
   const [presetSaveModalVisible, setPresetSaveModalVisible] = useState(false);
   const [presetSaveName, setPresetSaveName] = useState('');
   const [searchKeywordEditTarget, setSearchKeywordEditTarget] = useState<
@@ -5385,6 +5457,7 @@ export default function App() {
   );
   const [settingsColorsExpanded, setSettingsColorsExpanded] = useState(false);
   const [settingsDateLabelsExpanded, setSettingsDateLabelsExpanded] = useState(false);
+  const [settingsEditorTextExpanded, setSettingsEditorTextExpanded] = useState(false);
   const [settingsHabitsExpanded, setSettingsHabitsExpanded] = useState(false);
   const [settingsHistoryExpanded, setSettingsHistoryExpanded] = useState(false);
   const [settingsFirebaseBackupExpanded, setSettingsFirebaseBackupExpanded] = useState(false);
@@ -5418,6 +5491,12 @@ export default function App() {
   const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
   const [showOverdueMetaTags, setShowOverdueMetaTags] = useState(true);
   const [showPresetPropertiesAboveSearch, setShowPresetPropertiesAboveSearch] = useState(false);
+  const [editorContentFontSize, setEditorContentFontSize] = useState(
+    DEFAULT_EDITOR_CONTENT_FONT_SIZE,
+  );
+  const [editorTitleFontSize, setEditorTitleFontSize] = useState(
+    DEFAULT_EDITOR_TITLE_FONT_SIZE,
+  );
   const [googleDriveBackupEnabled, setGoogleDriveBackupEnabled] = useState(false);
   const [googleDriveBusy, setGoogleDriveBusy] = useState(false);
   const [googleDriveBackupStatus, setGoogleDriveBackupStatus] = useState('Not backed up');
@@ -5558,6 +5637,8 @@ export default function App() {
   const createCommandRestoreAfterPickerRef = useRef(false);
   const createContentInputRef = useRef<TextInput>(null);
   const createDraftContentSelectionRef = useRef<TextSelection>({ end: 0, start: 0 });
+  const createEditorKeyboardOpeningRef = useRef(false);
+  const createEditorTouchRef = useRef<CreateEditorTouchState | null>(null);
   const createDrawerHostRef = useRef<View>(null);
   const createDrawerFocusPendingRef = useRef(false);
   const createDrawerPickerRef = useRef<CreateDrawerPicker | null>(null);
@@ -5565,6 +5646,7 @@ export default function App() {
   const createDraftSelectionRef = useRef({ end: 0, start: 0 });
   const createDraftTextValueRef = useRef(createDraftText);
   const createInputFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filterListCreateInputRef = useRef<TextInput>(null);
   const presetSaveInputRef = useRef<TextInput>(null);
   const presetSearchKeywordInputRef = useRef<TextInput>(null);
   const listSearchKeywordTitleInputRef = useRef<TextInput>(null);
@@ -5667,13 +5749,15 @@ export default function App() {
   const quickPresetEmptyAreaFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quickPresetEmptyAreaFlashSuppressedUntilRef = useRef(0);
   const pendingSearchPresetScrollOffsetRef = useRef<number | null>(null);
+  const pendingQuickPresetScrollOffsetRef = useRef<number | null>(null);
   const pendingToggleAllSearchSectionsRef = useRef(false);
+  const pendingSearchReturnScrollOffsetRef = useRef<number | null>(null);
+  const searchReturnScrollOffsetRef = useRef<number | null>(null);
   const savedSearchScrollOffsetRef = useRef<number | null>(null);
   const searchScrollOffsetsByModeRef = useRef<Record<SearchMode, number | null>>({
     item: null,
     preset: null,
   });
-  const pendingQuickPresetScrollTargetRef = useRef<'search' | 'top' | null>(null);
   const itemSearchResultsCacheRef = useRef(new Map<string, string[]>());
   const previousSearchModeRef = useRef<SearchMode>('item');
   const skipNextTodoListOffsetEffectRef = useRef(false);
@@ -5964,6 +6048,8 @@ export default function App() {
     setRequiredFilters(appliedSettings.requiredFilters);
     setAvoidedFilters(appliedSettings.avoidedFilters);
     setDeletedTodos(appliedSettings.deletedTodos);
+    setEditorContentFontSize(appliedSettings.editorContentFontSize);
+    setEditorTitleFontSize(appliedSettings.editorTitleFontSize);
     setFilterConfigUiState(cloneFilterConfigUiState(appliedSettings.filterConfigUiState));
     setFilterColors(appliedSettings.filterColors);
     filterMenuShortcutsRef.current = cloneFilterMenuShortcuts(
@@ -6183,6 +6269,8 @@ export default function App() {
     collapsedTodoGroupIds: [...collapsedTodoGroupIds],
     customTags,
     deletedTodos,
+    editorContentFontSize,
+    editorTitleFontSize,
     filterConfigUiState,
     filterColors,
     filterMenuShortcuts,
@@ -6222,6 +6310,8 @@ export default function App() {
     customTags,
     dateLabelDisplayMode,
     deletedTodos,
+    editorContentFontSize,
+    editorTitleFontSize,
     filterConfigUiState,
     filterColors,
     filterMenuShortcuts,
@@ -6770,8 +6860,26 @@ export default function App() {
 
   const restoreUndoSnapshot = useCallback((snapshot: UndoSnapshot) => {
     const restoredCustomTags = normalizeCustomTags(snapshot.customTags);
-    const restoredTodos = snapshot.todos.map(cloneTodo);
-    const restoredDeletedTodos = cloneDeletedTodos(snapshot.deletedTodos);
+    const restoredAt = Date.now();
+    const currentTodosById = new Map(todosRef.current.map((todo) => [todo.id, todo]));
+    const currentDeletedTodosById = new Map(
+      deletedTodosRef.current.map((todo) => [todo.id, todo]),
+    );
+    const restoredTodos = snapshot.todos.map((snapshotTodo) => {
+      const todo = cloneTodo(snapshotTodo);
+      const currentTodo = currentTodosById.get(todo.id);
+
+      return currentTodo && todoMutableValuesEqual(currentTodo, todo)
+        ? { ...todo, updatedAt: currentTodo.updatedAt }
+        : touchTodo(todo, restoredAt);
+    });
+    const restoredDeletedTodos = cloneDeletedTodos(snapshot.deletedTodos).map((todo) => {
+      const currentTodo = currentDeletedTodosById.get(todo.id);
+
+      return currentTodo && todoMutableValuesEqual(currentTodo, todo)
+        ? { ...todo, updatedAt: currentTodo.updatedAt }
+        : touchTodo(todo, restoredAt);
+    });
     const restoredFilterColors = cloneFilterColors(snapshot.filterColors);
     const restoredFilterMenuShortcuts = cloneFilterMenuShortcuts(snapshot.filterMenuShortcuts);
     const restoredLastCreateTodoFilters = cloneTodoFilters(snapshot.lastCreateTodoFilters);
@@ -7243,20 +7351,22 @@ export default function App() {
 
       const nextRepeatingTodo = advanceRepeatingTodoAfterDone(currentTodo);
       if (!nextRepeatingTodo) {
-        const completedTodo = { ...currentTodo, done: true };
+        const completedTodo = touchTodo({ ...currentTodo, done: true });
         setTodos((current) => current.map((todo) => (
           todo.id === id ? completedTodo : todo
         )));
-        localTodoStore.updateDone(id, true).catch(() => undefined);
+        localTodoStore.updateDone(id, true, completedTodo.updatedAt).catch(() => undefined);
         syncTodoAlarm(completedTodo).catch(() => undefined);
         return;
       }
 
+      const updatedRepeatingTodo = touchTodo(nextRepeatingTodo);
+
       setTodos((current) => current.map((todo) => (
-        todo.id === id ? nextRepeatingTodo : todo
+        todo.id === id ? updatedRepeatingTodo : todo
       )));
-      localTodoStore.upsert(nextRepeatingTodo).catch(() => undefined);
-      syncTodoAlarm(nextRepeatingTodo).catch(() => undefined);
+      localTodoStore.upsert(updatedRepeatingTodo).catch(() => undefined);
+      syncTodoAlarm(updatedRepeatingTodo).catch(() => undefined);
     }, REPEATING_TODO_COMPLETION_FEEDBACK_MS);
 
     repeatingTodoCompletionTimersRef.current.set(id, timer);
@@ -7538,6 +7648,9 @@ export default function App() {
     setCreateDrawerEditingTodoId(todo.id);
     setCreateDrawerExpanded(false);
     setCreateDrawerFocusedField('title');
+    setCreateEditorRedirectFirstContentTap(true);
+    setCreateEditorSoftInputEnabled(false);
+    createEditorKeyboardOpeningRef.current = false;
     setCreateDrawerPicker(null);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
@@ -7555,7 +7668,7 @@ export default function App() {
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
     setCreateFromSettingsCueVisible(false);
     createDrawerVisibleRef.current = true;
-    createDrawerFocusPendingRef.current = true;
+    createDrawerFocusPendingRef.current = false;
     setCreateDrawerVisible(true);
   }, []);
 
@@ -7781,12 +7894,12 @@ export default function App() {
       borderBottomLeftRadius: menuPullAnim.interpolate({
         extrapolate: 'clamp',
         inputRange: [0, PULL_MAX],
-        outputRange: [18, 32],
+        outputRange: [CARD_BORDER_RADIUS, CARD_BORDER_RADIUS],
       }),
       borderBottomRightRadius: menuPullAnim.interpolate({
         extrapolate: 'clamp',
         inputRange: [0, PULL_MAX],
-        outputRange: [18, 32],
+        outputRange: [CARD_BORDER_RADIUS, CARD_BORDER_RADIUS],
       }),
       transform: [
         { translateY: menuPullAnim },
@@ -7825,6 +7938,23 @@ export default function App() {
     setNavTab((current) => (current === 'calendar' ? null : current));
     triggerSubtleHaptic();
   }, [flushFilterConfigUndoBatch]);
+
+  const closeFilterListCreateModal = useCallback(() => {
+    filterListCreateInputRef.current?.blur();
+    Keyboard.dismiss();
+    setFilterListCreateModalVisible(false);
+    setFilterListCreateName('');
+  }, []);
+
+  const focusFilterListCreateInput = useCallback(() => {
+    filterListCreateInputRef.current?.focus();
+  }, []);
+
+  const openFilterListCreateModal = useCallback(() => {
+    setFilterListCreateName('');
+    setFilterListCreateModalVisible(true);
+    triggerSubtleHaptic();
+  }, []);
 
   const openFilterConfigModal = useCallback(() => {
     Keyboard.dismiss();
@@ -7904,6 +8034,9 @@ export default function App() {
     createInputFocusTimerRef.current = setTimeout(() => {
       createInputFocusTimerRef.current = null;
       createInputRef.current?.focus();
+      requestAnimationFrame(() => {
+        createInputRef.current?.setNativeProps({ selection: createDraftSelectionRef.current });
+      });
     }, 0);
   }, []);
 
@@ -7912,9 +8045,46 @@ export default function App() {
       return undefined;
     }
 
-    const frame = requestAnimationFrame(() => createInputRef.current?.focus());
+    if (
+      !createDrawerFocusPendingRef.current ||
+      (createDrawerEditingTodoId && !createEditorSoftInputEnabled)
+    ) {
+      return undefined;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const input = createDrawerFocusedField === 'content'
+        ? createContentInputRef.current
+        : createInputRef.current;
+      const selection = createDrawerFocusedField === 'content'
+        ? createDraftContentSelectionRef.current
+        : createDraftSelectionRef.current;
+
+      input?.focus();
+      requestAnimationFrame(() => {
+        input?.setNativeProps({ selection });
+      });
+    });
     return () => cancelAnimationFrame(frame);
-  }, [createDrawerPicker, createDrawerVisible]);
+  }, [
+    createDrawerEditingTodoId,
+    createDrawerFocusedField,
+    createDrawerPicker,
+    createDrawerVisible,
+    createEditorSoftInputEnabled,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!createDrawerVisible || !createDrawerEditingTodoId) {
+      return undefined;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      createDraftContentSelectionRef.current = { end: 0, start: 0 };
+      createContentInputRef.current?.setSelection(0, 0);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [createDrawerEditingTodoId, createDrawerVisible]);
 
   useEffect(() => () => {
     if (createInputFocusTimerRef.current) {
@@ -7952,6 +8122,8 @@ export default function App() {
       : getRememberedCreateDraftFilters(listMenuTree, filters);
     const nextTags = normalizedFilters.tag;
     setCreateDrawerEditingTodoId(null);
+    setCreateEditorRedirectFirstContentTap(false);
+    setCreateEditorSoftInputEnabled(true);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerFocusedField('title');
@@ -8263,6 +8435,11 @@ export default function App() {
       return true;
     }
 
+    if (filterListCreateModalVisible) {
+      closeFilterListCreateModal();
+      return true;
+    }
+
     if (presetSaveModalVisible) {
       closePresetSaveModal();
       return true;
@@ -8316,6 +8493,7 @@ export default function App() {
     activeTodoDetailId,
     backToCreateDrawerInput,
     closeCreateDrawer,
+    closeFilterListCreateModal,
     closeListMenu,
     closeGoogleDriveBackupPicker,
     closeSearchKeywordModal,
@@ -8339,6 +8517,7 @@ export default function App() {
     restoreCreateCommandFocusAfterPicker,
     closeFilterConfigModal,
     filterConfigModalVisible,
+    filterListCreateModalVisible,
     settingsModalVisible,
     submenuOpen,
     todoSelectMode,
@@ -8533,6 +8712,29 @@ export default function App() {
     searchMode,
     todos,
   ]);
+  const itemSearchIsPresetScoped = useMemo(() => (
+    openMenuPresetId !== null ||
+    menuPresets.some((preset) => menuPresetMatchesState(
+      preset,
+      selectedFilters,
+      requiredFilters,
+      avoidedFilters,
+      effectiveSortMode,
+      effectiveGroupMode,
+      listOrderMode,
+      metaTagVisibility,
+    ))
+  ), [
+    avoidedFilters,
+    effectiveGroupMode,
+    effectiveSortMode,
+    listOrderMode,
+    menuPresets,
+    metaTagVisibility,
+    openMenuPresetId,
+    requiredFilters,
+    selectedFilters,
+  ]);
 
   const filteredTodoOverride = useMemo<Todo[] | null>(() => {
     if (notificationTodoRevealId) {
@@ -8546,12 +8748,27 @@ export default function App() {
       return [...(searchMatchedTodoIds ?? new Set<string>())]
         .map((id) => todosById.get(id))
         .filter((todo): todo is Todo => Boolean(todo))
-        .filter((todo) => !pendingDeleteIds.has(todo.id));
+        .filter((todo) => !pendingDeleteIds.has(todo.id))
+        .filter((todo) => (
+          !itemSearchIsPresetScoped ||
+          (
+            (!hideDoneTodosForCurrentView || !todo.done) &&
+            todoMatchesPreparedFilters(
+              todo,
+              activePresetBaseFilterMatch,
+              dateStatusNow,
+            )
+          )
+        ));
     }
 
     return null;
   }, [
     notificationTodoRevealId,
+    activePresetBaseFilterMatch,
+    dateStatusNow,
+    hideDoneTodosForCurrentView,
+    itemSearchIsPresetScoped,
     pendingDeleteIds,
     searchMatchedTodoIds,
     searchMode,
@@ -8609,6 +8826,7 @@ export default function App() {
     exitTodoSelectMode();
     searchInputRef.current?.blur();
     setCreateDrawerEditingTodoId(null);
+    setCreateEditorSoftInputEnabled(true);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -8789,6 +9007,7 @@ export default function App() {
     exitTodoSelectMode();
     searchInputRef.current?.blur();
     setCreateDrawerEditingTodoId(null);
+    setCreateEditorSoftInputEnabled(true);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
     setCreateDrawerPicker(null);
@@ -8847,6 +9066,7 @@ export default function App() {
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
       const keyboardInset = Math.max(0, event.endCoordinates.height);
 
+      createEditorKeyboardOpeningRef.current = false;
       if (Platform.OS === 'ios') {
         Keyboard.scheduleLayoutAnimation(event);
       }
@@ -8860,6 +9080,17 @@ export default function App() {
         Keyboard.scheduleLayoutAnimation(event);
       }
       setKeyboardOverlayInset(0);
+      if (createEditorKeyboardOpeningRef.current) {
+        return;
+      }
+      if (
+        createDrawerVisibleRef.current &&
+        createDrawerEditingTodoIdRef.current !== null
+      ) {
+        createDrawerFocusPendingRef.current = false;
+        createEditorTouchRef.current = null;
+        setCreateEditorSoftInputEnabled(false);
+      }
     });
 
     return () => {
@@ -8956,13 +9187,14 @@ export default function App() {
       );
 
       if (hasChanges) {
+        const changedTodo = touchTodo(updatedTodo);
         recordUndo('Edit todo');
         setTodos((current) => current.map((todo) => (
-          todo.id === updatedTodo.id ? updatedTodo : todo
+          todo.id === changedTodo.id ? changedTodo : todo
         )));
-        localTodoStore.upsert(updatedTodo).catch(() => undefined);
-        syncTodoAlarm(updatedTodo).catch(() => undefined);
-        highlightEditedTodos([updatedTodo.id]);
+        localTodoStore.upsert(changedTodo).catch(() => undefined);
+        syncTodoAlarm(changedTodo).catch(() => undefined);
+        highlightEditedTodos([changedTodo.id]);
       }
 
       createDrawerVisibleRef.current = false;
@@ -9039,12 +9271,90 @@ export default function App() {
   }, [createDraftContent]);
 
   const handleCreateDraftContentFocus = useCallback(() => {
-    const topSelection = { end: 0, start: 0 };
     setCreateDrawerFocusedField('content');
-    createDraftContentSelectionRef.current = topSelection;
-    requestAnimationFrame(() => {
-      createContentInputRef.current?.setSelection(0, 0);
-    });
+  }, []);
+
+  const handleCreateEditorTouchStart = useCallback((
+    field: CreateDrawerFocusedField,
+    event: GestureResponderEvent,
+  ) => {
+    if (!createDrawerEditingTodoId || createEditorSoftInputEnabled) {
+      createEditorTouchRef.current = null;
+      return;
+    }
+
+    createEditorTouchRef.current = {
+      field,
+      moved: false,
+      pageX: event.nativeEvent.pageX,
+      pageY: event.nativeEvent.pageY,
+    };
+  }, [createDrawerEditingTodoId, createEditorSoftInputEnabled]);
+
+  const handleCreateEditorTouchMove = useCallback((event: GestureResponderEvent) => {
+    const touch = createEditorTouchRef.current;
+    if (!touch || touch.moved) {
+      return;
+    }
+
+    const deltaX = event.nativeEvent.pageX - touch.pageX;
+    const deltaY = event.nativeEvent.pageY - touch.pageY;
+    if (Math.hypot(deltaX, deltaY) >= EDITOR_INPUT_SCROLL_GESTURE_THRESHOLD) {
+      touch.moved = true;
+    }
+  }, []);
+
+  const handleCreateEditorTouchEnd = useCallback((field: CreateDrawerFocusedField) => {
+    const touch = createEditorTouchRef.current;
+    createEditorTouchRef.current = null;
+
+    if (
+      !touch ||
+      touch.field !== field ||
+      touch.moved ||
+      !createDrawerEditingTodoId ||
+      createEditorSoftInputEnabled
+    ) {
+      return;
+    }
+
+    const shouldRedirectContentToTitle =
+      field === 'content' && createEditorRedirectFirstContentTap;
+    const focusedField = shouldRedirectContentToTitle ? 'title' : field;
+    const input = field === 'content'
+      ? createContentInputRef.current
+      : createInputRef.current;
+    createEditorKeyboardOpeningRef.current = true;
+    input?.blur();
+    createDrawerFocusPendingRef.current = true;
+    setCreateEditorRedirectFirstContentTap(false);
+    setCreateDrawerFocusedField(focusedField);
+    setCreateEditorSoftInputEnabled(true);
+  }, [
+    createDrawerEditingTodoId,
+    createEditorRedirectFirstContentTap,
+    createEditorSoftInputEnabled,
+  ]);
+
+  const handleCreateEditorFirstContentTap = useCallback(() => {
+    if (!createDrawerEditingTodoId || !createEditorRedirectFirstContentTap) {
+      return;
+    }
+
+    createEditorTouchRef.current = null;
+    createEditorKeyboardOpeningRef.current = true;
+    createInputRef.current?.blur();
+    createDrawerFocusPendingRef.current = true;
+    setCreateEditorRedirectFirstContentTap(false);
+    setCreateDrawerFocusedField('title');
+    setCreateEditorSoftInputEnabled(true);
+  }, [
+    createDrawerEditingTodoId,
+    createEditorRedirectFirstContentTap,
+  ]);
+
+  const cancelCreateEditorTouch = useCallback(() => {
+    createEditorTouchRef.current = null;
   }, []);
 
   const toggleCreateDraftContentCheckbox = useCallback(() => {
@@ -9190,6 +9500,24 @@ export default function App() {
     : 'List: No list';
   const createDrawerListPickerOpen = createDrawerPicker === 'list';
   const createDrawerUsesFullScreen = createDrawerExpanded || createCommandPaletteVisible;
+  const createDrawerTitleTextStyle = createDrawerExpanded
+    ? {
+        fontSize: editorTitleFontSize + 6,
+        lineHeight: editorTitleFontSize + 15,
+      }
+    : {
+        fontSize: editorTitleFontSize,
+        lineHeight: editorTitleFontSize + 7,
+      };
+  const createDrawerContentTextStyle = createDrawerExpanded
+    ? {
+        fontSize: editorContentFontSize + 3,
+        lineHeight: editorContentFontSize + 14,
+      }
+    : {
+        fontSize: editorContentFontSize,
+        lineHeight: editorContentFontSize + 7,
+      };
   const createDrawerListPickerHalfSheet =
     createDrawerListPickerOpen && !createDrawerExpanded && keyboardOverlayInset === 0;
   const createDrawerListPickerSheetHeight = Math.round(windowHeight * LIST_MENU_HEIGHT_RATIO);
@@ -9269,16 +9597,17 @@ export default function App() {
       return;
     }
 
-    const restoredTodo: Todo = {
+    const restoredTodo: Todo = touchTodo({
       id: deletedTodo.id,
-        content: deletedTodo.content,
-        text: deletedTodo.text,
-        tags: normalizeTodoTags(deletedTodo.tags),
-        pinned: deletedTodo.pinned,
+      content: deletedTodo.content,
+      text: deletedTodo.text,
+      tags: normalizeTodoTags(deletedTodo.tags),
+      pinned: deletedTodo.pinned,
       done: deletedTodo.done,
       createdAt: deletedTodo.createdAt,
+      updatedAt: deletedTodo.updatedAt,
       filters: cloneTodoFilters(deletedTodo.filters),
-    };
+    });
 
     recordUndo('Restore deleted todo');
     setTodos((current) => (
@@ -9325,6 +9654,7 @@ export default function App() {
       todosRef.current.some(isDevTestTodo) ||
       deletedTodosRef.current.some(isDevTestTodo) ||
       menuPresetsRef.current.some(isDevTestMenuPreset) ||
+      customTagsRef.current.some(isDevTestMenuPresetLabel) ||
       countDevTestListMenuNodes(listMenuTreeRef.current) > 0 ||
       undoHistory.some(historyEntryHasDevTestData) ||
       redoHistory.some(historyEntryHasDevTestData);
@@ -9337,6 +9667,7 @@ export default function App() {
     const nextMenuPresets = menuPresetsRef.current.filter(
       (preset) => !isDevTestMenuPreset(preset),
     );
+    const nextCustomTags = removeDevTestMenuPresetTags(customTagsRef.current);
     const nextDeletedTodos = deletedTodosRef.current.filter(
       (todo) => !isDevTestTodo(todo),
     );
@@ -9349,15 +9680,18 @@ export default function App() {
 
     listMenuTreeRef.current = nextListMenuTree;
     menuPresetsRef.current = nextMenuPresets;
+    customTagsRef.current = nextCustomTags;
     deletedTodosRef.current = nextDeletedTodos;
     setListMenuTree(nextListMenuTree);
     setMenuPresets(nextMenuPresets);
+    setCustomTags(nextCustomTags);
     setDeletedTodos(nextDeletedTodos);
     setUndoHistory(nextUndoHistory);
     setRedoHistory(nextRedoHistory);
     clearHeaderUndoButton();
     clearUndoToast();
     void persistAppSettings({
+      customTags: nextCustomTags,
       deletedTodos: nextDeletedTodos,
       history: {
         redo: nextRedoHistory,
@@ -9445,31 +9779,23 @@ export default function App() {
       return;
     }
 
-    const nextTodo = repeatedNextTodo ?? (updatedTodo ? { ...updatedTodo, done } : null);
+    const nextTodo = touchTodo({ ...updatedTodo, done });
 
     if (!options.skipUndo) {
       recordUndo(done ? 'Complete todo' : 'Reopen todo');
     }
     setTodos((current) =>
       current.map((todo) => (
-        todo.id === id && nextTodo ? nextTodo : todo
+        todo.id === id ? nextTodo : todo
       )),
     );
-    if (done && nextTodo?.done && hideDoneTodosForCurrentView) {
+    if (done && nextTodo.done && hideDoneTodosForCurrentView) {
       setActiveTodoMenuId((current) => (current === id ? null : current));
       setActiveTodoDetailId((current) => (current === id ? null : current));
     }
-    if (nextTodo) {
-      highlightEditedTodos([id]);
-      if (repeatedNextTodo) {
-        localTodoStore.upsert(repeatedNextTodo).catch(() => undefined);
-      } else {
-        localTodoStore.updateDone(id, done).catch(() => undefined);
-      }
-      syncTodoAlarm(nextTodo).catch(() => undefined);
-    } else if (done) {
-      cancelTodoAlarm(id).catch(() => undefined);
-    }
+    highlightEditedTodos([id]);
+    localTodoStore.updateDone(id, done, nextTodo.updatedAt).catch(() => undefined);
+    syncTodoAlarm(nextTodo).catch(() => undefined);
   }, [
     hideDoneTodosForCurrentView,
     highlightEditedTodos,
@@ -9535,6 +9861,7 @@ export default function App() {
     }
 
     const updatedById = new Map<string, Todo>();
+    const updatedAt = Date.now();
     todosRef.current.forEach((todo) => {
       if (!targetIds.has(todo.id)) {
         return;
@@ -9557,7 +9884,10 @@ export default function App() {
         !filtersEqual(todo.filters, nextFilters) ||
         !filterValueListsEqual(normalizeTodoTags(todo.tags), nextTags)
       ) {
-        updatedById.set(todo.id, { ...todo, filters: nextFilters, tags: nextTags });
+        updatedById.set(
+          todo.id,
+          touchTodo({ ...todo, filters: nextFilters, tags: nextTags }, updatedAt),
+        );
       }
     });
 
@@ -9585,9 +9915,10 @@ export default function App() {
     }
 
     const updatedById = new Map<string, Todo>();
+    const updatedAt = Date.now();
     todosRef.current.forEach((todo) => {
       if (targetIds.has(todo.id) && todo.pinned !== pinned) {
-        updatedById.set(todo.id, { ...todo, pinned });
+        updatedById.set(todo.id, touchTodo({ ...todo, pinned }, updatedAt));
       }
     });
 
@@ -10499,6 +10830,18 @@ export default function App() {
     () => buildVisibleListMenuItems(orderedListMenuTree, false),
     [orderedListMenuTree],
   );
+  const filterListCreateLabel = useMemo(
+    () => formatListLabel(filterListCreateName),
+    [filterListCreateName],
+  );
+  const filterListCreateDuplicate = useMemo(() => {
+    const labelKey = filterListCreateLabel.toLocaleLowerCase();
+
+    return Boolean(labelKey) && collectListNodeLabels(listMenuTree).some(
+      (label) => label.toLocaleLowerCase() === labelKey,
+    );
+  }, [filterListCreateLabel, listMenuTree]);
+  const filterListCreateDisabled = !filterListCreateLabel || filterListCreateDuplicate;
   const todoListOrderedListMenuTree = useMemo(
     () => (
       listOrderMode === 'alphabetical'
@@ -11205,12 +11548,12 @@ export default function App() {
     }
 
     const todoId = activeTodoDetail.id;
-    const updatedTodo: Todo = {
+    const updatedTodo: Todo = touchTodo({
       ...activeTodoDetail,
       content: activeTodoDetailDraftContentForSave,
       tags: activeTodoDetailDraftTagsForSave,
       text: activeTodoDetailDraftTextForSave,
-    };
+    });
     recordUndo('Edit todo');
     setTodos((current) =>
       current.map((todo) => (
@@ -11220,6 +11563,7 @@ export default function App() {
               content: updatedTodo.content,
               tags: updatedTodo.tags,
               text: updatedTodo.text,
+              updatedAt: updatedTodo.updatedAt,
             }
           : todo
       )),
@@ -12010,7 +12354,6 @@ export default function App() {
 
     if (hasTodoEditTargets) {
       return [
-        ...(pinActionRow ? [pinActionRow] : []),
         {
           count: menuFilters.list.length || undefined,
           id: 'main-lists',
@@ -12048,6 +12391,7 @@ export default function App() {
           label: 'Delete selected',
           type: 'deleteAction',
         },
+        ...(pinActionRow ? [pinActionRow] : []),
       ];
     }
 
@@ -12200,31 +12544,55 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [todoListOneHandedOffset, todoListRestingOffset]);
 
-  useEffect(() => {
-    const pendingScrollTarget = pendingQuickPresetScrollTargetRef.current;
-    if (!pendingScrollTarget) {
-      return undefined;
+  useLayoutEffect(() => {
+    const preservedOffset = pendingQuickPresetScrollOffsetRef.current;
+    if (preservedOffset === null) {
+      return;
     }
 
-    const frame = requestAnimationFrame(() => {
-      const nextOffset = pendingScrollTarget === 'search' ? todoListSearchOffset : 0;
-      pendingQuickPresetScrollTargetRef.current = null;
-      scrollOffsetY.current = nextOffset;
-      actualScrollOffsetY.current = nextOffset;
+    pendingQuickPresetScrollOffsetRef.current = null;
+    const restoreScrollOffset = () => {
       todoListRef.current?.scrollToOffset({
         animated: false,
-        offset: nextOffset,
+        offset: preservedOffset,
       });
-    });
+      scrollOffsetY.current = preservedOffset;
+      actualScrollOffsetY.current = preservedOffset;
+    };
 
-    return () => cancelAnimationFrame(frame);
-  }, [
-    appTodoListData.length,
-    openQuickPresetNavSlotNumber,
-    quickPresetScreenSwipeEnabled,
-    todoListOneHandedOffset,
-    todoListSearchOffset,
-  ]);
+    requestAnimationFrame(() => {
+      restoreScrollOffset();
+      requestAnimationFrame(restoreScrollOffset);
+    });
+  }, [appTodoListData.length, openQuickPresetNavSlotNumber]);
+
+  useLayoutEffect(() => {
+    const preservedOffset = pendingSearchReturnScrollOffsetRef.current;
+    if (navTab !== null || preservedOffset === null) {
+      return;
+    }
+
+    pendingSearchReturnScrollOffsetRef.current = null;
+    const restoreScrollOffset = () => {
+      todoListRef.current?.scrollToOffset({
+        animated: false,
+        offset: preservedOffset,
+      });
+      scrollOffsetY.current = preservedOffset;
+      actualScrollOffsetY.current = preservedOffset;
+    };
+
+    requestAnimationFrame(() => {
+      restoreScrollOffset();
+      requestAnimationFrame(restoreScrollOffset);
+    });
+  }, [appTodoListData.length, navTab]);
+
+  useEffect(() => {
+    if (navTab !== 'search' && pendingSearchReturnScrollOffsetRef.current === null) {
+      searchReturnScrollOffsetRef.current = null;
+    }
+  }, [navTab]);
 
   useLayoutEffect(() => {
     if (navTab !== 'search' || previousSearchModeRef.current === searchMode) {
@@ -12280,17 +12648,11 @@ export default function App() {
 
   const scrollTodoListToHeaderTop = useCallback((
     options: {
-      ensureAfterDataUpdate?: boolean;
       target?: 'search' | 'top';
     } = {},
   ) => {
     const target = options.target ?? 'top';
     const nextOffset = target === 'search' ? todoListSearchOffset : 0;
-
-    if (options.ensureAfterDataUpdate) {
-      pendingQuickPresetScrollTargetRef.current = target;
-      return;
-    }
 
     scrollOffsetY.current = nextOffset;
     actualScrollOffsetY.current = nextOffset;
@@ -12755,6 +13117,57 @@ export default function App() {
     menuMode,
     recordFilterConfigUndo,
     updateCurrentTodoTargetFilters,
+  ]);
+
+  const commitFilterListCreate = useCallback((rawName: string) => {
+    const label = formatListLabel(rawName);
+    const currentListMenuTree = listMenuTreeRef.current;
+    const labelKey = label.toLocaleLowerCase();
+    const duplicate = Boolean(labelKey) && collectListNodeLabels(currentListMenuTree).some(
+      (itemLabel) => itemLabel.toLocaleLowerCase() === labelKey,
+    );
+
+    if (!label || duplicate) {
+      return;
+    }
+
+    const nextListMenuTree = [{ label }, ...currentListMenuTree];
+    const visibleItems = buildVisibleListMenuItems(
+      listOrderModeRef.current === 'alphabetical'
+        ? sortListMenuTree(nextListMenuTree)
+        : nextListMenuTree,
+      false,
+    );
+    const targetIndex = visibleItems.findIndex((item) => item.label === label);
+
+    listMenuTreeRef.current = nextListMenuTree;
+    setListMenuTree(nextListMenuTree);
+    persistListMenuTree(nextListMenuTree);
+    toggleListMenuItem({
+      depth: 0,
+      id: label,
+      isSubsection: false,
+      label,
+    });
+    recordFilterConfigUndo('Add list');
+    closeFilterListCreateModal();
+
+    if (targetIndex >= 0) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          listMenuRef.current?.scrollToIndex({
+            animated: true,
+            index: targetIndex,
+            viewPosition: 0.58,
+          });
+        });
+      });
+    }
+  }, [
+    closeFilterListCreateModal,
+    persistListMenuTree,
+    recordFilterConfigUndo,
+    toggleListMenuItem,
   ]);
 
   const removeListMenuItem = useCallback((item: VisibleListMenuItem) => {
@@ -13290,6 +13703,28 @@ export default function App() {
     setShowOverdueMetaTags((current) => !current);
     triggerSubtleHaptic();
   }, [recordUndo]);
+
+  const adjustEditorTitleFontSize = useCallback((delta: number) => {
+    const nextSize = normalizeEditorTitleFontSize(editorTitleFontSize + delta);
+    if (nextSize === editorTitleFontSize) {
+      return;
+    }
+
+    setEditorTitleFontSize(nextSize);
+    void persistAppSettings({ editorTitleFontSize: nextSize });
+    triggerSubtleHaptic();
+  }, [editorTitleFontSize, persistAppSettings]);
+
+  const adjustEditorContentFontSize = useCallback((delta: number) => {
+    const nextSize = normalizeEditorContentFontSize(editorContentFontSize + delta);
+    if (nextSize === editorContentFontSize) {
+      return;
+    }
+
+    setEditorContentFontSize(nextSize);
+    void persistAppSettings({ editorContentFontSize: nextSize });
+    triggerSubtleHaptic();
+  }, [editorContentFontSize, persistAppSettings]);
 
   const toggleShowPresetPropertiesAboveSearch = useCallback(() => {
     const nextVisible = !showPresetPropertiesAboveSearch;
@@ -13838,11 +14273,16 @@ export default function App() {
     const nextMenuPresets = menuPresetsRef.current.map((preset) => (
       renameListLabelInPreset(preset, oldLabel, newLabel)
     ));
-    const nextDeletedTodos = deletedTodosRef.current.map((todo) => (
-      renameListLabelInTodo(todo, oldLabel, newLabel)
-    ));
+    const updatedAt = Date.now();
+    const nextDeletedTodos = deletedTodosRef.current.map((todo) => {
+      const nextTodo = renameListLabelInTodo(todo, oldLabel, newLabel);
+      return nextTodo === todo ? todo : touchTodo(nextTodo, updatedAt);
+    });
     const currentTodos = todosRef.current;
-    const nextTodos = currentTodos.map((todo) => renameListLabelInTodo(todo, oldLabel, newLabel));
+    const nextTodos = currentTodos.map((todo) => {
+      const nextTodo = renameListLabelInTodo(todo, oldLabel, newLabel);
+      return nextTodo === todo ? todo : touchTodo(nextTodo, updatedAt);
+    });
     const changedTodos = nextTodos.filter((todo, index) => (
       todo !== currentTodos[index] && !pendingDeleteIdsRef.current.has(todo.id)
     ));
@@ -14682,13 +15122,11 @@ export default function App() {
       (openMenuPresetHasChanges && openMenuPreset) ||
       canSaveCurrentMenuPreset,
   );
-  const showListMenuOwnerBadge = Boolean(
-    hasTodoEditTargets || (!editingMenuPreset && !openMenuPreset),
-  );
+  const showListMenuOwnerBadge = hasTodoEditTargets
+    ? !activeTodoMenuId
+    : !editingMenuPreset && !openMenuPreset;
   const listMenuOwnerLabel = hasTodoEditTargets
-    ? activeTodoMenuId
-      ? 'Editing item'
-      : `${selectedTodoCount} selected ${selectedTodoCount === 1 ? 'item' : 'items'}`
+    ? `${selectedTodoCount} selected ${selectedTodoCount === 1 ? 'item' : 'items'}`
     : activeMenuPreset
       ? `Preset: ${activeMenuPreset.label}`
       : 'Current filters';
@@ -14731,7 +15169,6 @@ export default function App() {
     preset: MenuPreset | null,
     slotNumber: number,
     timestamp: number,
-    options: { scrollTarget?: 'search' | 'top' } = {},
   ) => {
     if (!preset) {
       return;
@@ -14749,6 +15186,7 @@ export default function App() {
       : { presetId: preset.id, timestamp };
     triggerSubtleHaptic();
     flushFilterConfigUndoBatch();
+    pendingQuickPresetScrollOffsetRef.current = actualScrollOffsetY.current;
     setFilterConfigModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
@@ -14757,12 +15195,6 @@ export default function App() {
       haptic: false,
     });
     setOpenQuickPresetNavSlotNumber(slotNumber);
-    if (options.scrollTarget) {
-      scrollTodoListToHeaderTop({
-        ensureAfterDataUpdate: true,
-        target: options.scrollTarget,
-      });
-    }
 
     requestAnimationFrame(() => {
       searchInputRef.current?.blur();
@@ -14771,7 +15203,6 @@ export default function App() {
   }, [
     applyMenuPreset,
     flushFilterConfigUndoBatch,
-    scrollTodoListToHeaderTop,
   ]);
 
   const handleQuickPresetNavPress = useCallback((
@@ -14847,13 +15278,10 @@ export default function App() {
       return;
     }
 
-    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now(), {
-      scrollTarget: quickPresetScreenSwipeEnabled ? 'search' : 'top',
-    });
+    applyQuickPresetNavPreset(targetItem.preset, targetItem.slotNumber, Date.now());
   }, [
     applyQuickPresetNavPreset,
     currentQuickPresetSwipeItemIndex,
-    quickPresetScreenSwipeEnabled,
     quickPresetNavItems,
   ]);
 
@@ -14997,6 +15425,7 @@ export default function App() {
   ]);
 
   const applyTagUpdateToTodos = useCallback((updater: (tags: string[]) => string[]) => {
+    const updatedAt = Date.now();
     setCreateDraftTags((current) => normalizeTodoTags(updater(current)));
     setActiveTodoDetailDraftTags((current) => normalizeTodoTags(updater(current)));
     setTodos((current) => {
@@ -15007,7 +15436,7 @@ export default function App() {
           return todo;
         }
 
-        const updatedTodo = { ...todo, tags };
+        const updatedTodo = touchTodo({ ...todo, tags }, updatedAt);
         if (!pendingDeleteIds.has(todo.id)) {
           updatedTodos.push(updatedTodo);
         }
@@ -15023,7 +15452,9 @@ export default function App() {
     });
     setDeletedTodos((current) => current.map((todo) => {
       const tags = normalizeTodoTags(updater(todo.tags));
-      return filterValueListsEqual(tags, todo.tags) ? todo : { ...todo, tags };
+      return filterValueListsEqual(tags, todo.tags)
+        ? todo
+        : touchTodo({ ...todo, tags }, updatedAt);
     }));
   }, [highlightEditedTodos, pendingDeleteIds]);
 
@@ -15475,11 +15906,16 @@ export default function App() {
     const nextMenuPresets = menuPresetsRef.current.map((preset) => (
       removeListLabelsFromPreset(preset, removedLabels)
     ));
-    const nextDeletedTodos = deletedTodosRef.current.map((todo) => (
-      removeListLabelsFromTodo(todo, removedLabels)
-    ));
+    const updatedAt = Date.now();
+    const nextDeletedTodos = deletedTodosRef.current.map((todo) => {
+      const nextTodo = removeListLabelsFromTodo(todo, removedLabels);
+      return nextTodo === todo ? todo : touchTodo(nextTodo, updatedAt);
+    });
     const currentTodos = todosRef.current;
-    const nextTodos = currentTodos.map((todo) => removeListLabelsFromTodo(todo, removedLabels));
+    const nextTodos = currentTodos.map((todo) => {
+      const nextTodo = removeListLabelsFromTodo(todo, removedLabels);
+      return nextTodo === todo ? todo : touchTodo(nextTodo, updatedAt);
+    });
     const changedTodos = nextTodos.filter((todo, index) => (
       todo !== currentTodos[index] && !pendingDeleteIdsRef.current.has(todo.id)
     ));
@@ -15702,6 +16138,7 @@ export default function App() {
     exitTodoSelectMode();
     setSettingsColorsExpanded(false);
     setSettingsDateLabelsExpanded(false);
+    setSettingsEditorTextExpanded(false);
     setSettingsHabitsExpanded(false);
     setSettingsDeletedExpanded(false);
     setSettingsDoneExpanded(false);
@@ -15786,6 +16223,12 @@ export default function App() {
     scrollTodoListToHeaderTop({ target: 'search' });
   }, [scrollTodoListToHeaderTop, todoListSearchOffset]);
 
+  const rememberSearchReturnScrollOffset = useCallback(() => {
+    if (navTab !== 'search' && searchReturnScrollOffsetRef.current === null) {
+      searchReturnScrollOffsetRef.current = actualScrollOffsetY.current;
+    }
+  }, [navTab]);
+
   const focusHeaderSearchInput = useCallback(() => {
     setSearchMode('item');
     searchInputRef.current?.blur();
@@ -15802,6 +16245,7 @@ export default function App() {
     focusInput?: boolean;
     mode?: SearchMode;
   }) => {
+    rememberSearchReturnScrollOffset();
     clearNotificationTodoReveal();
     setSearchMode(options?.mode ?? 'item');
     setNavTab('search');
@@ -15814,9 +16258,20 @@ export default function App() {
       Keyboard.dismiss();
     }
     triggerSubtleHaptic();
-  }, [clearNotificationTodoReveal, closeListMenuState, focusHeaderSearchInput, restoreSearchScroll]);
+  }, [
+    clearNotificationTodoReveal,
+    closeListMenuState,
+    focusHeaderSearchInput,
+    rememberSearchReturnScrollOffset,
+    restoreSearchScroll,
+  ]);
 
   const showTodoItems = useCallback((options: { haptic?: boolean } = {}) => {
+    if (navTab === 'search') {
+      pendingSearchReturnScrollOffsetRef.current = searchReturnScrollOffsetRef.current;
+      searchReturnScrollOffsetRef.current = null;
+    }
+
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     closeListMenuState();
@@ -15836,6 +16291,7 @@ export default function App() {
     closeListMenuState,
     exitTodoSelectMode,
     flushFilterConfigUndoBatch,
+    navTab,
   ]);
 
   const anchorActivePresetForFilterConfig = useCallback(() => {
@@ -16414,6 +16870,8 @@ export default function App() {
       customTags,
       dateLabelDisplayMode,
       deletedTodos,
+      editorContentFontSize,
+      editorTitleFontSize,
       filterConfigUiState,
       filterColors,
       filterMenuShortcuts,
@@ -16450,6 +16908,8 @@ export default function App() {
     customTags,
     dateLabelDisplayMode,
     deletedTodos,
+    editorContentFontSize,
+    editorTitleFontSize,
     filterConfigUiState,
     filterColors,
     filterMenuShortcuts,
@@ -16517,12 +16977,14 @@ export default function App() {
     const restoredTodos = payload.todos.map(cloneTodo);
     const restoredDeletedTodos = cloneDeletedTodos(payload.settings.deletedTodos);
     const restoredMenuPresets = cloneMenuPresets(payload.settings.menuPresets);
-    const restoredCustomTags = payload.settings.presetLabelTagsSeeded
-      ? normalizeCustomTags(payload.settings.customTags)
-      : addPresetLabelTagsToCustomTags(
-          payload.settings.customTags,
-          restoredMenuPresets,
-        );
+    const restoredCustomTags = removeDevTestMenuPresetTags(
+      payload.settings.presetLabelTagsSeeded
+        ? payload.settings.customTags
+        : addPresetLabelTagsToCustomTags(
+            payload.settings.customTags,
+            restoredMenuPresets,
+          ),
+    );
     const restoredSelectedFilters = normalizeTodoFilters(payload.settings.selectedFilters);
     const restoredRequiredFilters = pruneTodoFilters(
       payload.settings.requiredFilters,
@@ -16558,6 +17020,8 @@ export default function App() {
       customTags: restoredCustomTags,
       dateLabelDisplayMode: payload.settings.dateLabelDisplayMode,
       deletedTodos: restoredDeletedTodos,
+      editorContentFontSize: payload.settings.editorContentFontSize,
+      editorTitleFontSize: payload.settings.editorTitleFontSize,
       filterConfigUiState: restoredFilterConfigUiState,
       filterColors: restoredFilterColors,
       filterMenuShortcuts: restoredFilterMenuShortcuts,
@@ -16620,6 +17084,8 @@ export default function App() {
 
     setTodos(restoredTodos);
     setDeletedTodos(restoredDeletedTodos);
+    setEditorContentFontSize(payload.settings.editorContentFontSize);
+    setEditorTitleFontSize(payload.settings.editorTitleFontSize);
     setCustomTags(restoredCustomTags);
     setPresetLabelTagsSeeded(true);
     setSelectedFilters(restoredSelectedFilters);
@@ -17113,6 +17579,21 @@ export default function App() {
     const { pageX, pageY, timestamp } = event.nativeEvent;
     const start = listTouchStartRef.current;
     const elapsed = timestamp - start.timestamp;
+    const moved = Math.hypot(pageX - start.pageX, pageY - start.pageY);
+    const startedOnListContent =
+      Math.abs(start.timestamp - todoListContentTouchStartRef.current) < 48;
+
+    if (
+      navTab === 'search' &&
+      !todoSectionGapTouchRef.current &&
+      !todoSelectMode &&
+      moved <= 8 &&
+      elapsed <= 360 &&
+      !startedOnListContent
+    ) {
+      showTodoItems();
+      return;
+    }
 
     if (
       todoSectionGapTouchRef.current ||
@@ -17122,10 +17603,6 @@ export default function App() {
       handleListFrameTouchEnd(event);
       return;
     }
-
-    const moved = Math.hypot(pageX - start.pageX, pageY - start.pageY);
-    const startedOnListContent =
-      Math.abs(start.timestamp - todoListContentTouchStartRef.current) < 48;
 
     if (moved <= 8 && elapsed <= 360 && !startedOnListContent) {
       focusNavbarPresetsFromSectionGap();
@@ -17137,6 +17614,8 @@ export default function App() {
     canFocusNavbarPresetsFromSectionGap,
     focusNavbarPresetsFromSectionGap,
     handleListFrameTouchEnd,
+    navTab,
+    showTodoItems,
     todoSelectMode,
   ]);
   const renderVisibleTodoRowGap = useCallback((
@@ -17230,7 +17709,11 @@ export default function App() {
         const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
-          <View key={headerLayoutKey} collapsable={false}>
+          <View
+            key={headerLayoutKey}
+            collapsable={false}
+            onTouchStart={markTodoListContentTouchStart}
+          >
             <View
               collapsable={false}
               style={[
@@ -17484,7 +17967,11 @@ export default function App() {
         const headerLayoutKey = `${item.id}:${item.isCollapsed ? 'collapsed' : 'expanded'}`;
 
         return (
-          <View key={headerLayoutKey} collapsable={false}>
+          <View
+            key={headerLayoutKey}
+            collapsable={false}
+            onTouchStart={markTodoListContentTouchStart}
+          >
             <View
               collapsable={false}
               style={[
@@ -17913,6 +18400,7 @@ export default function App() {
       hideCreateFromSettingsCue,
       hidePresetTodoSectionAddButton,
       metaTagVisibility,
+      markTodoListContentTouchStart,
       markTodoRowTouchStart,
       newlyCreatedTodoHighlightId,
       openPresetSearchKeywordPrompt,
@@ -17966,8 +18454,12 @@ export default function App() {
     [deleteNotificationLogEntry, openNotificationLogEntry, todosById],
   );
 
+  const activePresetIsVisibleSearchScope =
+    navTab === 'search' && searchMode === 'item' && itemSearchIsPresetScoped;
   const activePresetSectionPreset =
-    navTab === null && !hasTodoEditTargets && !todoSelectMode
+    (navTab === null || activePresetIsVisibleSearchScope) &&
+    !hasTodoEditTargets &&
+    !todoSelectMode
       ? openMenuPreset ?? focusedQuickPresetNavItem?.preset ?? activeMenuPreset
       : null;
   const activePresetSections = useMemo(
@@ -18000,6 +18492,31 @@ export default function App() {
     });
   }, [activePresetAvailableSectionIds, activePresetSectionPreset]);
   const activePresetPropertyPreset = activePresetSectionPreset;
+  const activePresetIsSearchScope = Boolean(
+    activePresetIsVisibleSearchScope && activePresetPropertyPreset,
+  );
+  const activePresetSearchScopeTodoCount = useMemo(() => {
+    if (!activePresetIsSearchScope) {
+      return 0;
+    }
+
+    return todos.filter((todo) => (
+      !pendingDeleteIds.has(todo.id) &&
+      (!hideDoneTodosForCurrentView || !todo.done) &&
+      todoMatchesPreparedFilters(
+        todo,
+        activePresetBaseFilterMatch,
+        dateStatusNow,
+      )
+    )).length;
+  }, [
+    activePresetBaseFilterMatch,
+    activePresetIsSearchScope,
+    dateStatusNow,
+    hideDoneTodosForCurrentView,
+    pendingDeleteIds,
+    todos,
+  ]);
   const activePresetPropertySourceTodos = useMemo(() => {
     if (!showPresetPropertiesAboveSearch || !activePresetPropertyPreset) {
       return [];
@@ -18199,18 +18716,40 @@ export default function App() {
       property.value,
     );
   };
+  const activePresetHeaderItemCount = activePresetIsSearchScope && !searchQuery
+    ? activePresetSearchScopeTodoCount
+    : sortedTodos.length;
   const activePresetHeaderPreview = showPresetPropertiesAboveSearch && activePresetPropertyPreset ? (
     <View
       onTouchStart={markTodoListContentTouchStart}
       style={styles.activePresetPreviewSlot}
     >
-      <View style={styles.activePresetPreviewCard}>
+      <View
+        style={[
+          styles.activePresetPreviewCard,
+          activePresetIsSearchScope && styles.activePresetPreviewCardSelected,
+        ]}
+      >
         <View style={styles.activePresetPreviewHeading}>
           <Text numberOfLines={1} style={styles.activePresetPreviewTitle}>
             {appHeaderTitle}
           </Text>
+          {activePresetIsSearchScope ? (
+            <View
+              accessible
+              accessibilityLabel={`Search limited to ${activePresetPropertyPreset.label}`}
+              accessibilityRole="text"
+              accessibilityState={{ selected: true }}
+              style={styles.activePresetSearchScopeBadge}
+            >
+              <Ionicons color={NAV_ACCENT} name="checkmark-circle" size={13} />
+              <Text style={styles.activePresetSearchScopeText}>This preset only</Text>
+            </View>
+          ) : null}
           <Text style={styles.activePresetPreviewCount}>
-            {sortedTodos.length === 1 ? '1 item' : `${sortedTodos.length} items`}
+            {activePresetHeaderItemCount === 1
+              ? '1 item'
+              : `${activePresetHeaderItemCount} items`}
           </Text>
         </View>
         <View style={styles.activePresetPropertyList}>
@@ -18709,6 +19248,7 @@ export default function App() {
                               return;
                             }
 
+                            rememberSearchReturnScrollOffset();
                             clearNotificationTodoReveal();
                             setSearchMode('item');
                             setNavTab('search');
@@ -18981,6 +19521,15 @@ export default function App() {
                     >
                       <View style={styles.menuDragHandle} accessibilityRole="adjustable">
                         <View style={styles.menuDragPill} />
+                        {activeTodoMenuId ? (
+                          <View
+                            accessibilityLabel="Editing item"
+                            accessibilityRole="image"
+                            style={styles.listMenuEditingItemIcon}
+                          >
+                            <Ionicons color={THEME_TEXT_SECONDARY} name="pencil" size={13} />
+                          </View>
+                        ) : null}
                         {showListMenuOwnerBadge ? (
                           <View
                             style={[
@@ -19050,6 +19599,33 @@ export default function App() {
                             }
                             ListFooterComponent={
                               <>
+                                {menuMode === 'lists' || menuMode === 'presetLists' ? (
+                                  <Pressable
+                                    accessibilityHint="Opens a dialog and selects the new list after creation"
+                                    accessibilityLabel="Create new list"
+                                    accessibilityRole="button"
+                                    onPress={openFilterListCreateModal}
+                                    style={({ pressed }) => [
+                                      styles.listMenuCreateListButton,
+                                      pressed && styles.listMenuCreateListButtonPressed,
+                                    ]}
+                                  >
+                                    <View style={styles.listMenuCreateListIcon}>
+                                      <Ionicons color={THEME_ACCENT} name="add" size={20} />
+                                    </View>
+                                    <View style={styles.listMenuCreateListTextWrap}>
+                                      <Text style={styles.listMenuCreateListTitle}>Create new list</Text>
+                                      <Text style={styles.listMenuCreateListSubtitle}>
+                                        Add it here and select it
+                                      </Text>
+                                    </View>
+                                    <Ionicons
+                                      color={THEME_TEXT_TERTIARY}
+                                      name="chevron-forward"
+                                      size={17}
+                                    />
+                                  </Pressable>
+                                ) : null}
                                 {activeTodoMenuSummary ? (
                                   <View style={styles.listMenuTodoSummary}>
                                     <Text style={styles.listMenuTodoSummaryLabel}>Item summary</Text>
@@ -20485,6 +21061,7 @@ export default function App() {
                     >
                       {!createCommandPaletteVisible ? (
                         <TextInput
+                          key={createDrawerEditingTodoId ?? 'new-todo-title'}
                           ref={createInputRef}
                           autoCapitalize="sentences"
                           autoCorrect
@@ -20495,15 +21072,20 @@ export default function App() {
                             createDraftSelectionRef.current = event.nativeEvent.selection;
                           }}
                           onSubmitEditing={submitCreateTodo}
+                          onTouchCancel={cancelCreateEditorTouch}
+                          onTouchEnd={() => handleCreateEditorTouchEnd('title')}
+                          onTouchMove={handleCreateEditorTouchMove}
+                          onTouchStart={(event) => handleCreateEditorTouchStart('title', event)}
                           placeholder="Title"
                           placeholderTextColor="#D1D3D6"
                           returnKeyType="done"
-                          selectionColor="#2F6F62"
+                          selectionColor={TODO_DETAIL_SELECTION_COLOR}
                           scrollEnabled={false}
-                          showSoftInputOnFocus
+                          showSoftInputOnFocus={createEditorSoftInputEnabled}
                           style={[
                             styles.createDrawerTitleInput,
                             !createDrawerExpanded && styles.createDrawerTitleInputPrompt,
+                            createDrawerTitleTextStyle,
                           ]}
                           submitBehavior="submit"
                           textAlignVertical="top"
@@ -20522,32 +21104,54 @@ export default function App() {
                       />
                     ) : null}
                     {!createCommandPaletteVisible ? (
-                      <TextInput
-                        key={createDrawerEditingTodoId ?? 'new-todo-content'}
-                        ref={createContentInputRef}
-                        autoCapitalize="sentences"
-                        autoCorrect
-                        multiline
-                        onChangeText={handleCreateDraftContentChange}
-                        onFocus={handleCreateDraftContentFocus}
-                        onSelectionChange={(event) => {
-                          createDraftContentSelectionRef.current = event.nativeEvent.selection;
-                        }}
-                        placeholder="Content"
-                        placeholderTextColor="#B5ADA5"
-                        selectionColor="#2F6F62"
-                        scrollEnabled
+                      <View
                         style={[
-                          styles.createDrawerContentInput,
-                          createDrawerExpanded
-                            ? styles.createDrawerContentInputExpanded
-                            : styles.createDrawerContentInputPrompt,
-                          createDrawerUsesTallEditLayout &&
-                            styles.createDrawerContentInputExpanded,
+                          styles.createDrawerContentInputShell,
+                          (createDrawerExpanded || createDrawerUsesTallEditLayout) &&
+                            styles.createDrawerContentInputShellExpanded,
                         ]}
-                        textAlignVertical="top"
-                        value={createDraftContent}
-                      />
+                      >
+                        <TextInput
+                          key={createDrawerEditingTodoId ?? 'new-todo-content'}
+                          ref={createContentInputRef}
+                          autoCapitalize="sentences"
+                          autoCorrect
+                          multiline
+                          onChangeText={handleCreateDraftContentChange}
+                          onFocus={handleCreateDraftContentFocus}
+                          onSelectionChange={(event) => {
+                            createDraftContentSelectionRef.current = event.nativeEvent.selection;
+                          }}
+                          onTouchCancel={cancelCreateEditorTouch}
+                          onTouchEnd={() => handleCreateEditorTouchEnd('content')}
+                          onTouchMove={handleCreateEditorTouchMove}
+                          onTouchStart={(event) => handleCreateEditorTouchStart('content', event)}
+                          placeholder="Content"
+                          placeholderTextColor="#B5ADA5"
+                          selectionColor={TODO_DETAIL_SELECTION_COLOR}
+                          scrollEnabled
+                          showSoftInputOnFocus={createEditorSoftInputEnabled}
+                          style={[
+                            styles.createDrawerContentInput,
+                            createDrawerExpanded
+                              ? styles.createDrawerContentInputExpanded
+                              : styles.createDrawerContentInputPrompt,
+                            createDrawerUsesTallEditLayout &&
+                              styles.createDrawerContentInputExpanded,
+                            createDrawerContentTextStyle,
+                          ]}
+                          textAlignVertical="top"
+                          value={createDraftContent}
+                        />
+                        {createDrawerEditingTodoId && createEditorRedirectFirstContentTap ? (
+                          <Pressable
+                            accessibilityLabel="Focus title and open keyboard"
+                            accessibilityRole="button"
+                            onPress={handleCreateEditorFirstContentTap}
+                            style={styles.createDrawerFirstContentTapTarget}
+                          />
+                        ) : null}
+                      </View>
                     ) : null}
                   </View>
                 )}
@@ -20863,12 +21467,12 @@ export default function App() {
             >
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Firebase settings backup</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      Local-first · manual backup and restore
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsFirebaseBackupExpanded}
+                    onPress={() => setSettingsFirebaseBackupExpanded((current) => !current)}
+                    subtitle="Local-first · manual backup and restore"
+                    title="Firebase settings backup"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsFirebaseBackupExpanded ? 'Collapse' : 'Expand'} Firebase settings backup section`}
                     accessibilityRole="button"
@@ -20969,12 +21573,142 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Preset properties</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {showPresetPropertiesAboveSearch ? 'Shown above Search' : 'Hidden above Search'}
+                  <SettingsSectionTitleButton
+                    expanded={settingsEditorTextExpanded}
+                    onPress={() => setSettingsEditorTextExpanded((current) => !current)}
+                    subtitle={<>Title {editorTitleFontSize} · Content {editorContentFontSize}</>}
+                    title="Editor text size"
+                  />
+                  <Pressable
+                    accessibilityLabel={`${settingsEditorTextExpanded ? 'Collapse' : 'Expand'} Editor text size section`}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: settingsEditorTextExpanded }}
+                    hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
+                    onPress={() => setSettingsEditorTextExpanded((current) => !current)}
+                    style={({ pressed }) => [
+                      styles.settingsSectionChevronButton,
+                      pressed && styles.settingsSectionChevronButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.settingsSectionChevron,
+                        settingsEditorTextExpanded && styles.settingsSectionChevronExpanded,
+                      ]}
+                    >
+                      ›
                     </Text>
+                  </Pressable>
+                </View>
+
+                {settingsEditorTextExpanded ? (
+                  <View style={styles.settingsCard}>
+                    <View style={styles.settingsRow}>
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Title</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          Todo title while creating or editing.
+                        </Text>
+                      </View>
+                      <View style={styles.settingsFontSizeControl}>
+                        <Pressable
+                          accessibilityLabel="Decrease editor title text size"
+                          accessibilityRole="button"
+                          accessibilityState={{
+                            disabled: editorTitleFontSize <= MIN_EDITOR_TITLE_FONT_SIZE,
+                          }}
+                          disabled={editorTitleFontSize <= MIN_EDITOR_TITLE_FONT_SIZE}
+                          hitSlop={6}
+                          onPress={() => adjustEditorTitleFontSize(-1)}
+                          style={({ pressed }) => [
+                            styles.settingsFontSizeButton,
+                            editorTitleFontSize <= MIN_EDITOR_TITLE_FONT_SIZE &&
+                              styles.settingsFontSizeButtonDisabled,
+                            pressed && styles.settingsFontSizeButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color={THEME_ACCENT} name="remove" size={18} />
+                        </Pressable>
+                        <Text style={styles.settingsFontSizeValue}>{editorTitleFontSize}</Text>
+                        <Pressable
+                          accessibilityLabel="Increase editor title text size"
+                          accessibilityRole="button"
+                          accessibilityState={{
+                            disabled: editorTitleFontSize >= MAX_EDITOR_TITLE_FONT_SIZE,
+                          }}
+                          disabled={editorTitleFontSize >= MAX_EDITOR_TITLE_FONT_SIZE}
+                          hitSlop={6}
+                          onPress={() => adjustEditorTitleFontSize(1)}
+                          style={({ pressed }) => [
+                            styles.settingsFontSizeButton,
+                            editorTitleFontSize >= MAX_EDITOR_TITLE_FONT_SIZE &&
+                              styles.settingsFontSizeButtonDisabled,
+                            pressed && styles.settingsFontSizeButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color={THEME_ACCENT} name="add" size={18} />
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={styles.settingsOptionRow}>
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Content</Text>
+                        <Text style={styles.settingsRowSubtitle}>
+                          Notes, lists, and checkboxes in the editor.
+                        </Text>
+                      </View>
+                      <View style={styles.settingsFontSizeControl}>
+                        <Pressable
+                          accessibilityLabel="Decrease editor content text size"
+                          accessibilityRole="button"
+                          accessibilityState={{
+                            disabled: editorContentFontSize <= MIN_EDITOR_CONTENT_FONT_SIZE,
+                          }}
+                          disabled={editorContentFontSize <= MIN_EDITOR_CONTENT_FONT_SIZE}
+                          hitSlop={6}
+                          onPress={() => adjustEditorContentFontSize(-1)}
+                          style={({ pressed }) => [
+                            styles.settingsFontSizeButton,
+                            editorContentFontSize <= MIN_EDITOR_CONTENT_FONT_SIZE &&
+                              styles.settingsFontSizeButtonDisabled,
+                            pressed && styles.settingsFontSizeButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color={THEME_ACCENT} name="remove" size={18} />
+                        </Pressable>
+                        <Text style={styles.settingsFontSizeValue}>{editorContentFontSize}</Text>
+                        <Pressable
+                          accessibilityLabel="Increase editor content text size"
+                          accessibilityRole="button"
+                          accessibilityState={{
+                            disabled: editorContentFontSize >= MAX_EDITOR_CONTENT_FONT_SIZE,
+                          }}
+                          disabled={editorContentFontSize >= MAX_EDITOR_CONTENT_FONT_SIZE}
+                          hitSlop={6}
+                          onPress={() => adjustEditorContentFontSize(1)}
+                          style={({ pressed }) => [
+                            styles.settingsFontSizeButton,
+                            editorContentFontSize >= MAX_EDITOR_CONTENT_FONT_SIZE &&
+                              styles.settingsFontSizeButtonDisabled,
+                            pressed && styles.settingsFontSizeButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color={THEME_ACCENT} name="add" size={18} />
+                        </Pressable>
+                      </View>
+                    </View>
                   </View>
+                ) : null}
+              </View>
+
+              <View style={styles.settingsSection}>
+                <View style={styles.settingsSectionHeader}>
+                  <SettingsSectionTitleButton
+                    expanded={settingsPresetPropertiesExpanded}
+                    onPress={() => setSettingsPresetPropertiesExpanded((current) => !current)}
+                    subtitle={showPresetPropertiesAboveSearch ? 'Shown above Search' : 'Hidden above Search'}
+                    title="Preset properties"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsPresetPropertiesExpanded ? 'Collapse' : 'Expand'} Preset properties section`}
                     accessibilityRole="button"
@@ -21038,12 +21772,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Change history</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {undoHistoryCount} to undo · {redoHistoryCount} to redo
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsHistoryExpanded}
+                    onPress={() => setSettingsHistoryExpanded((current) => !current)}
+                    subtitle={<>{undoHistoryCount} to undo · {redoHistoryCount} to redo</>}
+                    title="Change history"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsHistoryExpanded ? 'Collapse' : 'Expand'} Change history section`}
                     accessibilityRole="button"
@@ -21237,14 +21971,18 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Habit notifications</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
+                  <SettingsSectionTitleButton
+                    expanded={settingsHabitsExpanded}
+                    onPress={() => setSettingsHabitsExpanded((current) => !current)}
+                    subtitle={
+                      <>
                       {habitNotificationsPaused ? 'All paused' : 'Active'}
                       {' · '}
                       {habitQuietHoursEnabled ? 'Quiet 00:00-07:00' : 'Quiet hours off'}
-                    </Text>
-                  </View>
+                      </>
+                    }
+                    title="Habit notifications"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsHabitsExpanded ? 'Collapse' : 'Expand'} Habit notifications section`}
                     accessibilityRole="button"
@@ -21325,14 +22063,18 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Date labels</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
+                  <SettingsSectionTitleButton
+                    expanded={settingsDateLabelsExpanded}
+                    onPress={() => setSettingsDateLabelsExpanded((current) => !current)}
+                    subtitle={
+                      <>
                       {DATE_LABEL_DISPLAY_MODE_SUMMARIES[dateLabelDisplayMode]}
                       {' · '}
                       {showOverdueMetaTags ? 'Overdue count' : 'No overdue count'}
-                    </Text>
-                  </View>
+                      </>
+                    }
+                    title="Date labels"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsDateLabelsExpanded ? 'Collapse' : 'Expand'} Date labels section`}
                     accessibilityRole="button"
@@ -21408,12 +22150,12 @@ export default function App() {
                 </View>
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                    <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Done items</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {hideDoneTodos ? 'Hidden from lists' : 'Visible in lists'}
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsDoneExpanded}
+                    onPress={() => setSettingsDoneExpanded((current) => !current)}
+                    subtitle={hideDoneTodos ? 'Hidden from lists' : 'Visible in lists'}
+                    title="Done items"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsDoneExpanded ? 'Collapse' : 'Expand'} Done items section`}
                     accessibilityRole="button"
@@ -21473,12 +22215,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Deleted items</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {deletedTodos.length} {deletedTodos.length === 1 ? 'item' : 'items'}
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsDeletedExpanded}
+                    onPress={() => setSettingsDeletedExpanded((current) => !current)}
+                    subtitle={<>{deletedTodos.length} {deletedTodos.length === 1 ? 'item' : 'items'}</>}
+                    title="Deleted items"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsDeletedExpanded ? 'Collapse' : 'Expand'} Deleted items section`}
                     accessibilityRole="button"
@@ -21558,12 +22300,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Navbar</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {quickPresetNavItems.length} in navbar
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsPresetsExpanded}
+                    onPress={() => setSettingsPresetsExpanded((current) => !current)}
+                    subtitle={<>{quickPresetNavItems.length} in navbar</>}
+                    title="Navbar"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsPresetsExpanded ? 'Collapse' : 'Expand'} Navbar section`}
                     accessibilityRole="button"
@@ -21640,12 +22382,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Shortcuts</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {enabledFilterMenuShortcutOptions.length} in item menu
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsShortcutsExpanded}
+                    onPress={() => setSettingsShortcutsExpanded((current) => !current)}
+                    subtitle={<>{enabledFilterMenuShortcutOptions.length} in item menu</>}
+                    title="Shortcuts"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsShortcutsExpanded ? 'Collapse' : 'Expand'} Shortcuts section`}
                     accessibilityRole="button"
@@ -21711,12 +22453,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>New item widget</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      Creates in {widgetNewItemDestinationList}
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsWidgetExpanded}
+                    onPress={() => setSettingsWidgetExpanded((current) => !current)}
+                    subtitle={<>Creates in {widgetNewItemDestinationList}</>}
+                    title="New item widget"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsWidgetExpanded ? 'Collapse' : 'Expand'} New item widget section`}
                     accessibilityRole="button"
@@ -21775,12 +22517,14 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>List</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {listMenuTree.length} {listMenuTree.length === 1 ? 'list' : 'lists'} · Item categories
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsListsExpanded}
+                    onPress={() => setSettingsListsExpanded((current) => !current)}
+                    subtitle={
+                      <>{listMenuTree.length} {listMenuTree.length === 1 ? 'list' : 'lists'} · Item categories</>
+                    }
+                    title="List"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsListsExpanded ? 'Collapse' : 'Expand'} List section`}
                     accessibilityRole="button"
@@ -21966,12 +22710,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Tags</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {customTags.length} {customTags.length === 1 ? 'tag' : 'tags'}
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsTagsExpanded}
+                    onPress={() => setSettingsTagsExpanded((current) => !current)}
+                    subtitle={<>{customTags.length} {customTags.length === 1 ? 'tag' : 'tags'}</>}
+                    title="Tags"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsTagsExpanded ? 'Collapse' : 'Expand'} Tags section`}
                     accessibilityRole="button"
@@ -22084,12 +22828,12 @@ export default function App() {
 
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
-                  <View style={styles.settingsRowTextWrap}>
-                    <Text style={styles.settingsSectionTitle}>Colors</Text>
-                    <Text style={styles.settingsSectionSubtitle}>
-                      {settingsColorItemCount} items · Navbar icons, backgrounds, priority
-                    </Text>
-                  </View>
+                  <SettingsSectionTitleButton
+                    expanded={settingsColorsExpanded}
+                    onPress={() => setSettingsColorsExpanded((current) => !current)}
+                    subtitle={<>{settingsColorItemCount} items · Navbar icons, backgrounds, priority</>}
+                    title="Colors"
+                  />
                   <Pressable
                     accessibilityLabel={`${settingsColorsExpanded ? 'Collapse' : 'Expand'} Colors section`}
                     accessibilityRole="button"
@@ -22516,6 +23260,104 @@ export default function App() {
         </Modal>
         <Modal
           animationType="fade"
+          onRequestClose={closeFilterListCreateModal}
+          onShow={focusFilterListCreateInput}
+          presentationStyle="overFullScreen"
+          transparent
+          visible={filterListCreateModalVisible}
+        >
+          <View style={styles.presetSaveModalBackdrop}>
+            <Pressable
+              accessibilityLabel="Dismiss create list dialog"
+              accessibilityRole="button"
+              onPress={closeFilterListCreateModal}
+              style={StyleSheet.absoluteFill}
+            />
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              pointerEvents="box-none"
+              style={styles.presetSaveModalCenter}
+            >
+              <View
+                accessibilityViewIsModal
+                style={[styles.presetSaveModalCard, styles.filterListCreateModalCard]}
+              >
+                <View style={styles.filterListCreateModalHeader}>
+                  <View style={styles.filterListCreateModalIcon}>
+                    <Ionicons color={THEME_ACCENT} name="list-outline" size={21} />
+                  </View>
+                  <View style={styles.filterListCreateModalHeaderText}>
+                    <Text style={styles.presetSaveModalTitle}>Create a new list</Text>
+                    <Text style={styles.filterListCreateModalEyebrow}>LISTS</Text>
+                  </View>
+                </View>
+                <Text style={styles.presetSaveModalMessage}>
+                  It will be selected in this menu, which stays open so you can adjust it.
+                </Text>
+                <TextInput
+                  ref={filterListCreateInputRef}
+                  accessibilityLabel="New list name"
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  autoFocus
+                  maxLength={80}
+                  onChangeText={setFilterListCreateName}
+                  onPressIn={focusFilterListCreateInput}
+                  onSubmitEditing={(event) => {
+                    commitFilterListCreate(event.nativeEvent.text || filterListCreateName);
+                  }}
+                  placeholder="List name"
+                  placeholderTextColor="#A69D94"
+                  returnKeyType="done"
+                  showSoftInputOnFocus
+                  style={styles.presetSaveModalInput}
+                  submitBehavior="submit"
+                  value={filterListCreateName}
+                />
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={[
+                    styles.filterListCreateModalHint,
+                    filterListCreateDuplicate && styles.filterListCreateModalError,
+                  ]}
+                >
+                  {filterListCreateDuplicate
+                    ? 'A list with this name already exists.'
+                    : 'The new list will appear selected behind this dialog.'}
+                </Text>
+                <View style={styles.presetSaveModalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={closeFilterListCreateModal}
+                    style={({ pressed }) => [
+                      styles.presetSaveModalButton,
+                      styles.presetSaveModalButtonSecondary,
+                      pressed && styles.presetSaveModalButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.presetSaveModalButtonSecondaryText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: filterListCreateDisabled }}
+                    disabled={filterListCreateDisabled}
+                    onPress={() => commitFilterListCreate(filterListCreateName)}
+                    style={({ pressed }) => [
+                      styles.presetSaveModalButton,
+                      styles.presetSaveModalButtonPrimary,
+                      filterListCreateDisabled && styles.settingsButtonDisabled,
+                      pressed && styles.presetSaveModalButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.presetSaveModalButtonPrimaryText}>Create</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
+        <Modal
+          animationType="fade"
           onRequestClose={closePresetSaveModal}
           onShow={focusPresetSaveInput}
           transparent
@@ -22822,7 +23664,7 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     backgroundColor: '#FFFFFF',
     borderColor: '#E4DDD4',
-    borderRadius: 18,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
     shadowColor: '#000000',
@@ -23009,7 +23851,7 @@ const styles = StyleSheet.create({
   deletedTodoDetailRestoreButton: {
     alignItems: 'center',
     backgroundColor: THEME_ACCENT_SOFT,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flex: 1,
     justifyContent: 'center',
     minHeight: 48,
@@ -23027,7 +23869,7 @@ const styles = StyleSheet.create({
   deletedTodoDetailDeleteButton: {
     alignItems: 'center',
     backgroundColor: '#F8EDEA',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flex: 1,
     justifyContent: 'center',
     minHeight: 48,
@@ -23056,13 +23898,57 @@ const styles = StyleSheet.create({
   },
   presetSaveModalCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E4DDD4',
     paddingHorizontal: 18,
     paddingTop: 20,
     paddingBottom: 16,
     width: '100%',
+  },
+  filterListCreateModalCard: {
+    alignSelf: 'center',
+    maxWidth: 380,
+    paddingBottom: 15,
+  },
+  filterListCreateModalHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  filterListCreateModalIcon: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#CADDD5',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  filterListCreateModalHeaderText: {
+    flex: 1,
+    marginLeft: 12,
+    minWidth: 0,
+  },
+  filterListCreateModalEyebrow: {
+    color: THEME_ACCENT,
+    fontSize: 10,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 1.1,
+    lineHeight: 13,
+    marginTop: 1,
+  },
+  filterListCreateModalHint: {
+    color: THEME_TEXT_TERTIARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 17,
+    marginTop: 7,
+    minHeight: 17,
+    paddingHorizontal: 2,
+  },
+  filterListCreateModalError: {
+    color: THEME_DANGER,
   },
   presetSaveModalTitle: {
     color: THEME_TEXT,
@@ -23085,7 +23971,7 @@ const styles = StyleSheet.create({
   },
   presetSaveModalInput: {
     minHeight: 46,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     backgroundColor: THEME_BG,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E8E2DA',
@@ -23121,11 +24007,11 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   googleDrivePickerSwipeShell: {
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     overflow: 'hidden',
   },
   googleDrivePickerSwipeContainer: {
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     overflow: 'hidden',
   },
   googleDrivePickerSwipeChildren: {
@@ -23150,7 +24036,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_BG,
     borderColor: '#E8E2DA',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 10,
@@ -23220,7 +24106,7 @@ const styles = StyleSheet.create({
   },
   presetSaveModalButton: {
     minHeight: 42,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
@@ -23284,7 +24170,7 @@ const styles = StyleSheet.create({
   settingsTitle: {
     color: THEME_TEXT,
     fontSize: 24,
-    fontWeight: FONT_SEMIBOLD,
+    fontWeight: FONT_REGULAR,
     lineHeight: 30,
     letterSpacing: 0,
   },
@@ -23335,6 +24221,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 2,
   },
+  settingsSectionTitleButton: {
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 50,
+    minWidth: 0,
+    paddingRight: 12,
+  },
+  settingsSectionTitleButtonPressed: {
+    opacity: 0.68,
+  },
   settingsSectionChevronButton: {
     alignItems: 'center',
     borderRadius: 21,
@@ -23351,7 +24248,7 @@ const styles = StyleSheet.create({
   settingsSectionTitle: {
     color: THEME_TEXT,
     fontSize: 16,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_REGULAR,
     lineHeight: 21,
     letterSpacing: 0.1,
   },
@@ -23374,7 +24271,7 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '90deg' }],
   },
   settingsCard: {
-    borderRadius: 16,
+    borderRadius: CARD_BORDER_RADIUS,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E4DED6',
@@ -23407,7 +24304,7 @@ const styles = StyleSheet.create({
   },
   settingsHistoryRow: {
     alignItems: 'flex-start',
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     gap: 10,
     marginHorizontal: -8,
@@ -23487,7 +24384,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderColor: '#DFE5F4',
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     flexShrink: 0,
     gap: 4,
@@ -23517,8 +24414,8 @@ const styles = StyleSheet.create({
   settingsHistoryPreviewSheet: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E7E0D8',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    borderTopLeftRadius: CARD_BORDER_RADIUS,
+    borderTopRightRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     maxHeight: '86%',
     paddingBottom: 16,
@@ -23567,7 +24464,7 @@ const styles = StyleSheet.create({
   settingsHistoryPreviewVersionCard: {
     backgroundColor: '#FBFAF8',
     borderColor: '#EEE7DE',
-    borderRadius: 12,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 12,
     paddingVertical: 12,
@@ -23614,7 +24511,7 @@ const styles = StyleSheet.create({
   settingsHistoryTodoPreviewCard: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E9E2DA',
-    borderRadius: 14,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 11,
     paddingVertical: 11,
@@ -23649,7 +24546,7 @@ const styles = StyleSheet.create({
   settingsHistoryTodoPreviewStatusPill: {
     backgroundColor: '#F4F6F9',
     borderColor: '#E3E7EE',
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -23678,7 +24575,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     backgroundColor: THEME_CARD,
     borderColor: THEME_BORDER,
-    borderRadius: 12,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     minHeight: 62,
@@ -23743,7 +24640,7 @@ const styles = StyleSheet.create({
   settingsHistoryTodoPreviewMissingBody: {
     alignItems: 'center',
     borderColor: '#E9E2DA',
-    borderRadius: 12,
+    borderRadius: CARD_BORDER_RADIUS,
     borderStyle: 'dashed',
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
@@ -23766,7 +24663,7 @@ const styles = StyleSheet.create({
   },
   settingsHistoryPreviewButton: {
     alignItems: 'center',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flex: 1,
     justifyContent: 'center',
     minHeight: 46,
@@ -23851,7 +24748,7 @@ const styles = StyleSheet.create({
   settingsSegmentButton: {
     flex: 1,
     minHeight: 34,
-    borderRadius: 8,
+    borderRadius: 3,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -24015,7 +24912,7 @@ const styles = StyleSheet.create({
   settingsListSelectionButton: {
     alignItems: 'center',
     backgroundColor: '#F3EEE7',
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     gap: 5,
     justifyContent: 'center',
@@ -24041,7 +24938,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-end',
     backgroundColor: THEME_ACCENT_SOFT,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     gap: 6,
     justifyContent: 'center',
@@ -24148,7 +25045,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_CARD,
     borderColor: THEME_BORDER,
-    borderRadius: 999,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexShrink: 0,
     justifyContent: 'center',
@@ -24266,7 +25163,7 @@ const styles = StyleSheet.create({
   settingsListIconChoiceEmpty: {
     backgroundColor: THEME_CARD,
     borderColor: THEME_TEXT,
-    borderRadius: 5,
+    borderRadius: 3,
     borderWidth: StyleSheet.hairlineWidth,
     height: 12,
     width: 12,
@@ -24284,7 +25181,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     backgroundColor: THEME_ACCENT_SOFT,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     gap: 8,
     minHeight: 38,
@@ -24307,7 +25204,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: '#F7F3EE',
     borderColor: '#E8E2DA',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 6,
@@ -24394,7 +25291,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#F7F3EE',
     borderColor: '#E8E2DA',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     height: 34,
     justifyContent: 'center',
@@ -24408,7 +25305,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#F7F3EE',
     borderColor: '#E8E2DA',
-    borderRadius: 13,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
     maxWidth: 148,
@@ -24512,7 +25409,7 @@ const styles = StyleSheet.create({
   settingsColorSwatch: {
     width: 16,
     height: 16,
-    borderRadius: 5,
+    borderRadius: 3,
   },
   settingsColorSwatchNoColor: {
     alignItems: 'center',
@@ -24561,7 +25458,7 @@ const styles = StyleSheet.create({
   settingsRowTitle: {
     color: THEME_TEXT,
     fontSize: 16,
-    fontWeight: FONT_MEDIUM,
+    fontWeight: FONT_REGULAR,
     lineHeight: 21,
     letterSpacing: 0.1,
   },
@@ -24575,7 +25472,7 @@ const styles = StyleSheet.create({
   },
   settingsStatusPill: {
     minWidth: 48,
-    borderRadius: 13,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     backgroundColor: '#F3EEE7',
     paddingHorizontal: 10,
@@ -24633,7 +25530,7 @@ const styles = StyleSheet.create({
   },
   settingsShortcutRow: {
     alignItems: 'center',
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 48,
@@ -24665,6 +25562,38 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     letterSpacing: 0.1,
   },
+  settingsFontSizeControl: {
+    alignItems: 'center',
+    backgroundColor: '#F4F6F8',
+    borderColor: '#E1E5EA',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 2,
+    paddingHorizontal: 3,
+    paddingVertical: 3,
+  },
+  settingsFontSizeButton: {
+    alignItems: 'center',
+    borderRadius: 3,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  settingsFontSizeButtonPressed: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  settingsFontSizeButtonDisabled: {
+    opacity: 0.3,
+  },
+  settingsFontSizeValue: {
+    color: THEME_TEXT,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    minWidth: 28,
+    textAlign: 'center',
+  },
   settingsWidgetListRow: {
     marginTop: 10,
     minHeight: 46,
@@ -24676,7 +25605,7 @@ const styles = StyleSheet.create({
   },
   settingsPrimaryButton: {
     minHeight: 50,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: THEME_ACCENT,
@@ -24696,7 +25625,7 @@ const styles = StyleSheet.create({
   },
   settingsRestoreButton: {
     minHeight: 48,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F3EEE7',
@@ -24866,6 +25795,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     width: '100%',
   },
+  activePresetPreviewCardSelected: {
+    borderColor: NAV_ACCENT,
+    borderWidth: 1,
+  },
   activePresetPreviewHeading: {
     alignItems: 'flex-start',
     flexDirection: 'row',
@@ -24879,6 +25812,23 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
     lineHeight: 21,
     minWidth: 0,
+  },
+  activePresetSearchScopeBadge: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 4,
+    minHeight: 22,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  activePresetSearchScopeText: {
+    color: NAV_ACCENT,
+    fontSize: 11,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 15,
   },
   activePresetPreviewCount: {
     color: THEME_TEXT_SECONDARY,
@@ -24896,7 +25846,7 @@ const styles = StyleSheet.create({
   activePresetPropertyChip: {
     alignItems: 'center',
     alignSelf: 'stretch',
-    borderRadius: 8,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 4,
@@ -24925,7 +25875,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_ACCENT_SOFT,
     borderColor: '#C8D6FF',
-    borderRadius: 8,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
     minHeight: 30,
@@ -24963,7 +25913,7 @@ const styles = StyleSheet.create({
   activePresetSectionChip: {
     alignItems: 'center',
     alignSelf: 'stretch',
-    borderRadius: 8,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 4,
@@ -25020,7 +25970,7 @@ const styles = StyleSheet.create({
   todoUndoButton: {
     alignItems: 'center',
     backgroundColor: NAV_ACCENT,
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     gap: 7,
     minHeight: 42,
@@ -25114,10 +26064,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: 16,
     shadowColor: '#000000',
-    shadowOpacity: 0.045,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
+    shadowOpacity: 0.025,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   searchInput: {
     flex: 1,
@@ -25133,7 +26083,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_BG,
     borderColor: THEME_BORDER,
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     marginLeft: 8,
@@ -25142,7 +26092,7 @@ const styles = StyleSheet.create({
   },
   searchModeToggleButton: {
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 3,
     height: 28,
     justifyContent: 'center',
     width: 30,
@@ -25170,7 +26120,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FCEDEC',
     borderColor: '#F3D3D0',
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 7,
@@ -25213,11 +26163,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   notificationLogSwipeShell: {
-    borderRadius: 8,
+    borderRadius: CARD_BORDER_RADIUS,
     overflow: 'hidden',
   },
   notificationLogSwipeContainer: {
-    borderRadius: 8,
+    borderRadius: CARD_BORDER_RADIUS,
     overflow: 'hidden',
   },
   notificationLogSwipeChildren: {
@@ -25242,7 +26192,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_CARD,
     borderColor: THEME_BORDER,
-    borderRadius: 8,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 12,
@@ -25339,8 +26289,8 @@ const styles = StyleSheet.create({
     top: 0,
   },
   createDrawer: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: CARD_BORDER_RADIUS,
+    borderTopRightRadius: CARD_BORDER_RADIUS,
     backgroundColor: '#FFFFFF',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: '#E4DDD4',
@@ -25353,8 +26303,8 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   createDrawerPrompt: {
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    borderTopLeftRadius: CARD_BORDER_RADIUS,
+    borderTopRightRadius: CARD_BORDER_RADIUS,
     paddingBottom: Platform.OS === 'android' ? 12 : 10,
   },
   createDrawerExpanded: {
@@ -25425,6 +26375,17 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 6,
   },
+  createDrawerContentInputShell: {
+    position: 'relative',
+  },
+  createDrawerContentInputShellExpanded: {
+    flex: 1,
+    minHeight: 0,
+  },
+  createDrawerFirstContentTapTarget: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
   createDrawerContentInputExpanded: {
     flex: 1,
     maxHeight: '100%',
@@ -25446,7 +26407,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#F1F4FA',
     borderColor: '#E1E6F0',
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     height: 40,
     justifyContent: 'center',
@@ -25465,7 +26426,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#F1F4FA',
     borderColor: '#E1E6F0',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 8,
@@ -25496,7 +26457,7 @@ const styles = StyleSheet.create({
   createCommandPaletteShortcut: {
     alignItems: 'center',
     borderColor: '#E1E6F0',
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 5,
@@ -25528,7 +26489,7 @@ const styles = StyleSheet.create({
   createCommandPaletteSpaceKey: {
     backgroundColor: '#FFFFFF',
     borderColor: '#D9DEE8',
-    borderRadius: 7,
+    borderRadius: 3,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 7,
     paddingVertical: 4,
@@ -25551,7 +26512,7 @@ const styles = StyleSheet.create({
   createCommandPaletteRow: {
     alignItems: 'center',
     borderColor: 'transparent',
-    borderRadius: 14,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 10,
@@ -25568,7 +26529,7 @@ const styles = StyleSheet.create({
   createCommandPaletteRowIcon: {
     alignItems: 'center',
     backgroundColor: '#F0F2F6',
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     height: 34,
     justifyContent: 'center',
     width: 34,
@@ -25649,7 +26610,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 46,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     paddingHorizontal: 12,
   },
   createDrawerPickerRowMain: {
@@ -25683,7 +26644,7 @@ const styles = StyleSheet.create({
   createDrawerPickerCloseButton: {
     alignItems: 'center',
     backgroundColor: '#F1F3F5',
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     justifyContent: 'center',
     minHeight: 46,
     width: '100%',
@@ -25716,7 +26677,7 @@ const styles = StyleSheet.create({
   createDrawerToolbarButton: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -25782,7 +26743,7 @@ const styles = StyleSheet.create({
   },
   listMenuOwnerBadge: {
     alignItems: 'center',
-    borderRadius: 999,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     gap: 5,
     marginTop: 10,
@@ -25811,9 +26772,18 @@ const styles = StyleSheet.create({
   listMenuOwnerBadgeTextItems: {
     color: '#7A4E1D',
   },
+  listMenuEditingItemIcon: {
+    alignItems: 'center',
+    height: 34,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 4,
+    top: 3,
+    width: 34,
+  },
   listMenuHeaderSaveButton: {
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: CONTROL_BORDER_RADIUS,
     height: 34,
     justifyContent: 'center',
     position: 'absolute',
@@ -25823,7 +26793,7 @@ const styles = StyleSheet.create({
   },
   listMenuFooterButton: {
     minHeight: 50,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#E8E2DA',
     alignItems: 'center',
@@ -25831,10 +26801,55 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: 16,
   },
+  listMenuCreateListButton: {
+    alignItems: 'center',
+    backgroundColor: '#F4F8F6',
+    borderColor: '#CFE0D8',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginHorizontal: 4,
+    marginTop: 10,
+    minHeight: 58,
+    paddingHorizontal: 12,
+  },
+  listMenuCreateListButtonPressed: {
+    backgroundColor: THEME_ACCENT_SOFT,
+    transform: [{ scale: 0.99 }],
+  },
+  listMenuCreateListIcon: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D8E6E0',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  listMenuCreateListTextWrap: {
+    flex: 1,
+    marginLeft: 11,
+    minWidth: 0,
+  },
+  listMenuCreateListTitle: {
+    color: THEME_TEXT,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 19,
+  },
+  listMenuCreateListSubtitle: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 12,
+    fontWeight: FONT_REGULAR,
+    lineHeight: 16,
+    marginTop: 1,
+  },
   listMenuTodoSummary: {
     backgroundColor: '#F8F9FB',
     borderColor: '#E7E9ED',
-    borderRadius: 12,
+    borderRadius: CARD_BORDER_RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
     marginHorizontal: 4,
     marginTop: 8,
@@ -25866,7 +26881,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomColor: '#F2EBE3',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
     height: LIST_MENU_ROW_HEIGHT,
     justifyContent: 'space-between',
@@ -25904,7 +26919,7 @@ const styles = StyleSheet.create({
   },
   listMenuRow: {
     height: LIST_MENU_ROW_HEIGHT,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#F2EBE3',
     alignItems: 'center',
@@ -26045,12 +27060,12 @@ const styles = StyleSheet.create({
   },
   listMenuPresetSwipeShell: {
     height: LIST_MENU_ROW_HEIGHT,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     overflow: 'visible',
   },
   listMenuPresetSwipeContainer: {
     height: LIST_MENU_ROW_HEIGHT,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     overflow: 'visible',
   },
   listMenuPresetSwipeChildren: {
@@ -26058,7 +27073,7 @@ const styles = StyleSheet.create({
   },
   listMenuPresetRow: {
     height: LIST_MENU_ROW_HEIGHT,
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#F2EBE3',
     alignItems: 'center',
@@ -26086,14 +27101,14 @@ const styles = StyleSheet.create({
   },
   listMenuPresetIconAction: {
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     height: 34,
     justifyContent: 'center',
     width: 34,
   },
   listMenuPresetActionButton: {
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: CONTROL_BORDER_RADIUS,
     minHeight: 34,
     justifyContent: 'center',
     paddingHorizontal: 4,
@@ -26109,8 +27124,8 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     alignItems: 'center',
     backgroundColor: '#CF413A',
-    borderTopRightRadius: 12,
-    borderBottomRightRadius: 12,
+    borderTopRightRadius: CONTROL_BORDER_RADIUS,
+    borderBottomRightRadius: CONTROL_BORDER_RADIUS,
   },
   listMenuPresetSwipeDelete: {
     width: PRESET_SWIPE_DELETE_WIDTH,
@@ -26155,7 +27170,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     maxWidth: '52%',
     height: 36,
-    borderRadius: 10,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -26167,7 +27182,7 @@ const styles = StyleSheet.create({
   listMenuClearButton: {
     width: 34,
     height: 34,
-    borderRadius: 8,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -26191,7 +27206,7 @@ const styles = StyleSheet.create({
   listMenuArrowButton: {
     width: 34,
     height: 34,
-    borderRadius: 8,
+    borderRadius: CONTROL_BORDER_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
   },

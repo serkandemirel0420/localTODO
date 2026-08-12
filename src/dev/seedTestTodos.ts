@@ -31,6 +31,14 @@ export const DEV_TEST_MENU_PRESET_ID_PREFIX = 'dev-test-preset-';
 export const DEV_TEST_LIST_KEYWORD = 'dev-test-list';
 export const DEV_TEST_MENU_PRESET_COUNT = 5;
 
+export const DEV_TEST_MENU_PRESET_LABELS = {
+  allExceptBacklog: 'Dev: All except backlog',
+  datedNonRepeating: 'Dev: Dated non-repeating',
+  ideasCreatedOrder: 'Dev: Ideas created order',
+  readingCreatedOrder: 'Dev: Reading created order',
+  repeatingDates: 'Dev: Repeating dates',
+} as const;
+
 const DEV_TEST_LIST_MENU_TREE: StoredListMenuNode[] = [
   {
     label: 'Ideas',
@@ -147,6 +155,13 @@ const DEV_TEST_REMINDER_TIMES = [
 const emptyFilters = (): TodoFilters => cloneTodoFilters();
 
 const getLabelKey = (label: string) => label.trim().toLocaleLowerCase();
+
+const DEV_TEST_MENU_PRESET_LABEL_KEYS = new Set(
+  Object.values(DEV_TEST_MENU_PRESET_LABELS).map(getLabelKey),
+);
+
+export const isDevTestMenuPresetLabel = (label: string) =>
+  DEV_TEST_MENU_PRESET_LABEL_KEYS.has(getLabelKey(label));
 
 const collectTreeLabels = (nodes: StoredListMenuNode[]) => {
   const labels: string[] = [];
@@ -373,7 +388,7 @@ export const createDevTestMenuPresets = (
   return [
     makeDevTestMenuPreset({
       id: 'ideas-created-order',
-      label: 'Dev: Ideas created order',
+      label: DEV_TEST_MENU_PRESET_LABELS.ideasCreatedOrder,
       filters: { ...emptyFilters(), list: [ideasList] },
       createdAt: now - 5_000,
       todoGroupMode: 'none',
@@ -381,7 +396,7 @@ export const createDevTestMenuPresets = (
     }),
     makeDevTestMenuPreset({
       id: 'repeating-dates',
-      label: 'Dev: Repeating dates',
+      label: DEV_TEST_MENU_PRESET_LABELS.repeatingDates,
       filters: {
         ...emptyFilters(),
         reminder: [REPEATING_ITEMS_FILTER_VALUE],
@@ -429,7 +444,7 @@ export const createDevTestMenuPresets = (
     }),
     makeDevTestMenuPreset({
       id: 'dated-non-repeating',
-      label: 'Dev: Dated non-repeating',
+      label: DEV_TEST_MENU_PRESET_LABELS.datedNonRepeating,
       filters: {
         ...emptyFilters(),
         date: [DATED_DATE_LABEL],
@@ -442,7 +457,7 @@ export const createDevTestMenuPresets = (
     }),
     makeDevTestMenuPreset({
       id: 'all-except-backlog',
-      label: 'Dev: All except backlog',
+      label: DEV_TEST_MENU_PRESET_LABELS.allExceptBacklog,
       filters: emptyFilters(),
       avoidedFilters: { ...emptyFilters(), list: [backlogList, archiveList, somedayList] },
       createdAt: now - 2_000,
@@ -451,7 +466,7 @@ export const createDevTestMenuPresets = (
     }),
     makeDevTestMenuPreset({
       id: 'reading-created-order',
-      label: 'Dev: Reading created order',
+      label: DEV_TEST_MENU_PRESET_LABELS.readingCreatedOrder,
       filters: { ...emptyFilters(), list: [readingList] },
       createdAt: now - 1_000,
       todoGroupMode: 'none',

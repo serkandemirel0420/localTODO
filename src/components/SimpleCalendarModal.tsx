@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 5,
     elevation: 10,
     overflow: 'hidden',
     paddingBottom: 20,

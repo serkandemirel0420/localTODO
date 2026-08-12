@@ -32,6 +32,8 @@ import {
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   ensureQuickPresetDefaults,
+  normalizeEditorContentFontSize,
+  normalizeEditorTitleFontSize,
   normalizeFilterMenuShortcuts,
   normalizeFilterConfigUiState,
   normalizeQuickPresetNavIconNames,
@@ -106,6 +108,8 @@ export type BackupSettings = {
   customTags: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
+  editorContentFontSize: number;
+  editorTitleFontSize: number;
   filterConfigUiState: FilterConfigUiState;
   filterColors: FilterColorSettings;
   filterMenuShortcuts: FilterMenuShortcut[];
@@ -632,6 +636,8 @@ export const createBackupPayload = (
       customTags: normalizeTodoTags(settings.customTags),
       dateLabelDisplayMode: settings.dateLabelDisplayMode,
       deletedTodos: cloneDeletedTodos(settings.deletedTodos),
+      editorContentFontSize: normalizeEditorContentFontSize(settings.editorContentFontSize),
+      editorTitleFontSize: normalizeEditorTitleFontSize(settings.editorTitleFontSize),
       filterConfigUiState: cloneFilterConfigUiState(settings.filterConfigUiState),
       filterColors: cloneFilterColors(settings.filterColors),
       filterMenuShortcuts: cloneFilterMenuShortcuts(settings.filterMenuShortcuts),
@@ -694,6 +700,8 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       customTags: normalizeTodoTags(settings.customTags),
       dateLabelDisplayMode: normalizeDateLabelDisplayMode(settings.dateLabelDisplayMode),
       deletedTodos: normalizeDeletedTodos(settings.deletedTodos),
+      editorContentFontSize: normalizeEditorContentFontSize(settings.editorContentFontSize),
+      editorTitleFontSize: normalizeEditorTitleFontSize(settings.editorTitleFontSize),
       filterConfigUiState: normalizeFilterConfigUiState(settings.filterConfigUiState),
       filterColors: normalizeFilterColors(settings.filterColors),
       filterMenuShortcuts: normalizeFilterMenuShortcuts(settings.filterMenuShortcuts),

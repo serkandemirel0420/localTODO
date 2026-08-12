@@ -48,7 +48,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 46,
-    borderRadius: 12,
+    borderRadius: 4,
     paddingHorizontal: 12,
   },
   rowSelected: {

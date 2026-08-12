@@ -21,6 +21,7 @@ export type Todo = {
   pinned: boolean;
   done: boolean;
   createdAt: number;
+  updatedAt: number;
   filters: TodoFilters;
 };
 
@@ -274,6 +275,7 @@ export const makeTodo = (
   pinned,
   done: false,
   createdAt,
+  updatedAt: createdAt,
   filters: normalizeTodoFilters(filters, createdAt),
 });
 
@@ -291,6 +293,7 @@ export const isTodo = (value: unknown): value is Todo => {
     (typeof todo.pinned === 'undefined' || typeof todo.pinned === 'boolean') &&
     typeof todo.done === 'boolean' &&
     typeof todo.createdAt === 'number' &&
+    typeof todo.updatedAt === 'number' &&
     typeof todo.filters === 'object' &&
     todo.filters !== null
   );
@@ -311,6 +314,10 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     return null;
   }
 
+  const updatedAt = typeof todo.updatedAt === 'number' && Number.isFinite(todo.updatedAt)
+    ? Math.max(todo.createdAt, todo.updatedAt)
+    : todo.createdAt;
+
   return {
     id: todo.id,
     content: typeof todo.content === 'string' ? normalizeTodoContent(todo.content) : '',
@@ -319,9 +326,15 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     pinned: todo.pinned === true,
     done: todo.done,
     createdAt: todo.createdAt,
+    updatedAt,
     filters: normalizeTodoFilters(todo.filters, todo.createdAt),
   };
 };
+
+export const touchTodo = <T extends Todo>(todo: T, updatedAt = Date.now()): T => ({
+  ...todo,
+  updatedAt: Math.max(updatedAt, todo.updatedAt + 1),
+});
 
 export const cloneTodo = (todo: Todo): Todo => ({
   ...todo,

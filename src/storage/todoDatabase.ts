@@ -29,6 +29,7 @@ const getDatabase = () => {
           done INTEGER NOT NULL,
           pinned INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL DEFAULT 0,
           filters_json TEXT NOT NULL
         );
 
@@ -37,6 +38,9 @@ const getDatabase = () => {
       `);
 
       await ensureTodoSearchColumns(database);
+      await database.execAsync(
+        'CREATE INDEX IF NOT EXISTS idx_todos_updated_at ON todos(updated_at DESC);',
+      );
 
       todoSearchTableAvailable = await ensureTodoSearchTable(database);
       if (todoSearchTableAvailable) {
@@ -101,6 +105,12 @@ const ensureTodoSearchColumns = async (database: SQLite.SQLiteDatabase) => {
     await database.execAsync('ALTER TABLE todos ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;');
   }
 
+  if (!columnNames.has('updated_at')) {
+    await database.execAsync('ALTER TABLE todos ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;');
+  }
+
+  await database.runAsync('UPDATE todos SET updated_at = created_at WHERE updated_at = 0');
+
   const rows = await database.getAllAsync<{
     content: string;
     content_search: string;
@@ -155,6 +165,7 @@ const rowToTodo = (row: {
   pinned: number;
   done: number;
   created_at: number;
+  updated_at: number;
   filters_json: string;
 }): Todo | null => {
   let filters: unknown = {};
@@ -173,6 +184,7 @@ const rowToTodo = (row: {
     pinned: Boolean(row.pinned),
     done: Boolean(row.done),
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
     filters,
   });
 };
@@ -295,11 +307,12 @@ export const loadTodosFromDatabase = async (): Promise<Todo[]> => {
     pinned: number;
     done: number;
     created_at: number;
+    updated_at: number;
     filters_json: string;
   }>(
-    `SELECT id, content, tags_json, text, pinned, done, created_at, filters_json
+    `SELECT id, content, tags_json, text, pinned, done, created_at, updated_at, filters_json
      FROM todos
-     ORDER BY pinned DESC, created_at DESC`,
+     ORDER BY pinned DESC, updated_at DESC, created_at DESC`,
   );
 
   return rows
@@ -336,12 +349,13 @@ export const searchTodosInDatabase = async (query: string): Promise<Todo[]> => {
     pinned: number;
     done: number;
     created_at: number;
+    updated_at: number;
     filters_json: string;
   }>(
-    `SELECT todos.id, todos.content, todos.tags_json, todos.text, todos.pinned, todos.done, todos.created_at, todos.filters_json
+    `SELECT todos.id, todos.content, todos.tags_json, todos.text, todos.pinned, todos.done, todos.created_at, todos.updated_at, todos.filters_json
      FROM todos
      WHERE ${whereClause}
-     ORDER BY todos.pinned DESC, todos.created_at DESC`,
+     ORDER BY todos.pinned DESC, todos.updated_at DESC, todos.created_at DESC`,
     params,
   );
 
@@ -368,8 +382,8 @@ const replaceAllTodos = async (
       const textSearch = normalizeSearchText(todo.text);
 
       await database.runAsync(
-        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, filters_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           todo.id,
           todo.content,
@@ -381,6 +395,7 @@ const replaceAllTodos = async (
           todo.done ? 1 : 0,
           todo.pinned ? 1 : 0,
           todo.createdAt,
+          todo.updatedAt,
           JSON.stringify(todo.filters),
         ],
       );
@@ -411,8 +426,8 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
 
   await database.withTransactionAsync(async () => {
     await database.runAsync(
-      `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, filters_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          content = excluded.content,
          content_search = excluded.content_search,
@@ -423,6 +438,7 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
          done = excluded.done,
          pinned = excluded.pinned,
          created_at = excluded.created_at,
+         updated_at = excluded.updated_at,
          filters_json = excluded.filters_json`,
       [
         todo.id,
@@ -435,6 +451,7 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
         todo.done ? 1 : 0,
         todo.pinned ? 1 : 0,
         todo.createdAt,
+        todo.updatedAt,
         JSON.stringify(todo.filters),
       ],
     );
@@ -455,8 +472,8 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
       const textSearch = normalizeSearchText(todo.text);
 
       await database.runAsync(
-        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, filters_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            content = excluded.content,
            content_search = excluded.content_search,
@@ -467,6 +484,7 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
            done = excluded.done,
            pinned = excluded.pinned,
            created_at = excluded.created_at,
+           updated_at = excluded.updated_at,
            filters_json = excluded.filters_json`,
         [
           todo.id,
@@ -479,6 +497,7 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
           todo.done ? 1 : 0,
           todo.pinned ? 1 : 0,
           todo.createdAt,
+          todo.updatedAt,
           JSON.stringify(todo.filters),
         ],
       );
@@ -489,19 +508,27 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
   });
 };
 
-export const updateTodoDoneInDatabase = async (id: string, done: boolean) => {
+export const updateTodoDoneInDatabase = async (
+  id: string,
+  done: boolean,
+  updatedAt: number,
+) => {
   const database = await getDatabase();
-  await database.runAsync('UPDATE todos SET done = ? WHERE id = ?', [done ? 1 : 0, id]);
+  await database.runAsync(
+    'UPDATE todos SET done = ?, updated_at = ? WHERE id = ?',
+    [done ? 1 : 0, updatedAt, id],
+  );
 };
 
 export const updateTodoFiltersInDatabase = async (
   id: string,
   filters: Todo['filters'],
+  updatedAt: number,
 ) => {
   const database = await getDatabase();
   await database.runAsync(
-    'UPDATE todos SET filters_json = ? WHERE id = ?',
-    [JSON.stringify(filters), id],
+    'UPDATE todos SET filters_json = ?, updated_at = ? WHERE id = ?',
+    [JSON.stringify(filters), updatedAt, id],
   );
 };
 

@@ -30,6 +30,7 @@ private data class WidgetTodoItem(
   val dateKeys: Set<String>,
   val pinned: Boolean,
   val createdAt: Long,
+  val updatedAt: Long,
 )
 
 private object LocalTodoWidgetStore {
@@ -66,6 +67,10 @@ private object LocalTodoWidgetStore {
         put(
           "createdAt",
           if (readableItem.hasKey("createdAt")) readableItem.getDouble("createdAt").toLong() else 0L,
+        )
+        put(
+          "updatedAt",
+          if (readableItem.hasKey("updatedAt")) readableItem.getDouble("updatedAt").toLong() else 0L,
         )
       })
     }
@@ -111,6 +116,7 @@ private object LocalTodoWidgetStore {
               dateKeys = dateKeys,
               pinned = item.optBoolean("pinned", false),
               createdAt = item.optLong("createdAt", 0L),
+              updatedAt = item.optLong("updatedAt", item.optLong("createdAt", 0L)),
             ),
           )
         }
@@ -161,6 +167,7 @@ private object LocalTodoWidgetUpdater {
       .filter { item -> item.dateKeys.contains(todayKey) }
       .sortedWith(
         compareByDescending<WidgetTodoItem> { it.pinned }
+          .thenByDescending { it.updatedAt }
           .thenByDescending { it.createdAt },
       )
 

@@ -208,7 +208,8 @@ Each todo has:
 - `content`: longer notes.
 - `pinned`: whether the todo is pinned above normal rows where supported.
 - `done`: completed state.
-- `createdAt`: creation timestamp used for sorting and date anchoring.
+- `createdAt`: immutable creation timestamp used for date anchoring.
+- `updatedAt`: latest item-change timestamp used by Newest/Oldest sorting.
 - `filters`: date/list/priority/reminder values.
 
 Todo filters are normalized on load and write. Date values can be frozen
@@ -345,8 +346,8 @@ encoded reminder time. It must stay separate in:
 
 Sort modes:
 
-- Newest.
-- Oldest.
+- Newest (most recently changed first, with creation time as the initial value).
+- Oldest (least recently changed first).
 - A to Z.
 - Priority.
 - Date.

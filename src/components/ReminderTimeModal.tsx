@@ -137,7 +137,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 5,
     elevation: 10,
     overflow: 'hidden',
     paddingBottom: 8,
@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   actionButton: {
-    borderRadius: 8,
+    borderRadius: 4,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },

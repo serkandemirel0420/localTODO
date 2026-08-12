@@ -617,11 +617,47 @@ export const DEFAULT_FILTER_CONFIG_UI_STATE: FilterConfigUiState = {
 
 export type { DateLabelDisplayMode };
 
+export const DEFAULT_EDITOR_TITLE_FONT_SIZE = 23;
+export const MIN_EDITOR_TITLE_FONT_SIZE = 16;
+export const MAX_EDITOR_TITLE_FONT_SIZE = 34;
+export const DEFAULT_EDITOR_CONTENT_FONT_SIZE = 20;
+export const MIN_EDITOR_CONTENT_FONT_SIZE = 14;
+export const MAX_EDITOR_CONTENT_FONT_SIZE = 29;
+
+const normalizeEditorFontSize = (
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)));
+};
+
+export const normalizeEditorTitleFontSize = (value: unknown) => normalizeEditorFontSize(
+  value,
+  DEFAULT_EDITOR_TITLE_FONT_SIZE,
+  MIN_EDITOR_TITLE_FONT_SIZE,
+  MAX_EDITOR_TITLE_FONT_SIZE,
+);
+
+export const normalizeEditorContentFontSize = (value: unknown) => normalizeEditorFontSize(
+  value,
+  DEFAULT_EDITOR_CONTENT_FONT_SIZE,
+  MIN_EDITOR_CONTENT_FONT_SIZE,
+  MAX_EDITOR_CONTENT_FONT_SIZE,
+);
+
 export type AppSettings = {
   collapsedTodoGroupIds: string[];
   customTags: string[];
   dateLabelDisplayMode: DateLabelDisplayMode;
   deletedTodos: DeletedTodo[];
+  editorContentFontSize: number;
+  editorTitleFontSize: number;
   filterConfigUiState: FilterConfigUiState;
   filterColors: FilterColorSettings;
   filterMenuShortcuts: FilterMenuShortcut[];
@@ -823,6 +859,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   customTags: [],
   dateLabelDisplayMode: 'exact',
   deletedTodos: [],
+  editorContentFontSize: DEFAULT_EDITOR_CONTENT_FONT_SIZE,
+  editorTitleFontSize: DEFAULT_EDITOR_TITLE_FONT_SIZE,
   filterConfigUiState: DEFAULT_FILTER_CONFIG_UI_STATE,
   filterColors: cloneFilterColors(),
   filterMenuShortcuts: cloneFilterMenuShortcuts(DEFAULT_FILTER_MENU_SHORTCUTS),
@@ -1551,6 +1589,8 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
     customTags: normalizeCustomTags(value.customTags),
     dateLabelDisplayMode: normalizeDateLabelDisplayMode(value.dateLabelDisplayMode),
     deletedTodos: normalizeDeletedTodos(value.deletedTodos),
+    editorContentFontSize: normalizeEditorContentFontSize(value.editorContentFontSize),
+    editorTitleFontSize: normalizeEditorTitleFontSize(value.editorTitleFontSize),
     filterConfigUiState: normalizeFilterConfigUiState(value.filterConfigUiState),
     filterColors: normalizeFilterColors(value.filterColors),
     filterMenuShortcuts: normalizeFilterMenuShortcuts(value.filterMenuShortcuts),

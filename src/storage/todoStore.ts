@@ -24,8 +24,8 @@ export type TodoStore = {
   replaceAll: (todos: Todo[]) => Promise<void>;
   replaceAllLocal: (todos: Todo[]) => Promise<void>;
   search: (query: string) => Promise<Todo[]>;
-  updateDone: (id: string, done: boolean) => Promise<void>;
-  updateFilters: (id: string, filters: Todo['filters']) => Promise<void>;
+  updateDone: (id: string, done: boolean, updatedAt: number) => Promise<void>;
+  updateFilters: (id: string, filters: Todo['filters'], updatedAt: number) => Promise<void>;
   upsert: (todo: Todo) => Promise<void>;
   upsertMany: (todos: Todo[]) => Promise<void>;
 };
@@ -42,13 +42,13 @@ export const localTodoStore: TodoStore = {
   },
   replaceAllLocal: replaceAllTodosInDatabase,
   search: searchTodosInDatabase,
-  async updateDone(id, done) {
-    await updateTodoDoneInDatabase(id, done);
-    queueFirebaseTodoDoneUpdate(id, done).catch(() => undefined);
+  async updateDone(id, done, updatedAt) {
+    await updateTodoDoneInDatabase(id, done, updatedAt);
+    queueFirebaseTodoDoneUpdate(id, done, updatedAt).catch(() => undefined);
   },
-  async updateFilters(id, filters) {
-    await updateTodoFiltersInDatabase(id, filters);
-    queueFirebaseTodoFiltersUpdate(id, filters).catch(() => undefined);
+  async updateFilters(id, filters, updatedAt) {
+    await updateTodoFiltersInDatabase(id, filters, updatedAt);
+    queueFirebaseTodoFiltersUpdate(id, filters, updatedAt).catch(() => undefined);
   },
   async upsert(todo) {
     await upsertTodoInDatabase(todo);

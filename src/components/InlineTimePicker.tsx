@@ -269,7 +269,7 @@ export function InlineTimePicker({ value, onChange }: InlineTimePickerProps) {
 const styles = StyleSheet.create({
   root: {
     backgroundColor: '#FAF8F5',
-    borderRadius: 12,
+    borderRadius: 5,
     marginBottom: 4,
     marginHorizontal: 12,
     marginTop: 4,
@@ -277,7 +277,7 @@ const styles = StyleSheet.create({
   },
   selectionBand: {
     backgroundColor: '#EAF0FF',
-    borderRadius: 12,
+    borderRadius: 4,
     height: ITEM_HEIGHT,
     left: 34,
     position: 'absolute',

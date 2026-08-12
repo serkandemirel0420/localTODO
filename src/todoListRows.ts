@@ -33,6 +33,8 @@ const TODO_GROUPED_ROW_BATCH_SIZE = 8;
 const TODO_CONTENT_ROW_ESTIMATE = 22;
 
 const NOT_SECTIONED_LABEL = 'Not Sectioned';
+const PINNED_SECTION_ID = 'group-pinned';
+const PINNED_SECTION_LABEL = 'Pinned';
 
 export type TodoListRow =
   | {
@@ -321,6 +323,35 @@ const appendSectionRows = (
   });
 };
 
+const splitPinnedTodos = (todos: Todo[]) => {
+  const pinnedTodos: Todo[] = [];
+  const unpinnedTodos: Todo[] = [];
+
+  todos.forEach((todo) => {
+    (todo.pinned ? pinnedTodos : unpinnedTodos).push(todo);
+  });
+
+  return { pinnedTodos, unpinnedTodos };
+};
+
+const prependPinnedSection = (
+  pinnedTodos: Todo[],
+  rows: TodoListRow[],
+): TodoListRow[] => {
+  if (pinnedTodos.length === 0) {
+    return rows;
+  }
+
+  const pinnedRows: TodoListRow[] = [];
+  appendSectionRows(
+    pinnedRows,
+    PINNED_SECTION_ID,
+    PINNED_SECTION_LABEL,
+    pinnedTodos,
+  );
+  return [...pinnedRows, ...rows];
+};
+
 const getFilterRank = (values: string[], orderedLabels: string[]) =>
   values.reduce((bestRank, value) => {
     const rank = orderedLabels.indexOf(value);
@@ -375,6 +406,7 @@ const getDateGroupKey = (rawLabel: string, displayLabel: string) => (
 );
 
 const compareTodosByFallback = (first: Todo, second: Todo) =>
+  second.updatedAt - first.updatedAt ||
   second.createdAt - first.createdAt ||
   first.text.localeCompare(second.text) ||
   first.id.localeCompare(second.id);
@@ -406,6 +438,7 @@ export const compareTodosBySortMode = (
 
   if (sortMode === 'oldest') {
     return (
+      first.updatedAt - second.updatedAt ||
       first.createdAt - second.createdAt ||
       first.text.localeCompare(second.text) ||
       first.id.localeCompare(second.id)
@@ -718,31 +751,41 @@ export const buildTodoListRows = (
   seedListGroupLabels: string[] = [],
   now = new Date(),
 ): TodoListRow[] => {
+  const { pinnedTodos, unpinnedTodos } = splitPinnedTodos(todos);
   const subsectionContext = useSubsectionLayout
     ? getListSubsectionContext(listMenuTree, selectedListFilters)
     : null;
 
   if (subsectionContext) {
-    return buildSubsectionRows(todos, subsectionContext);
+    return prependPinnedSection(
+      pinnedTodos,
+      buildSubsectionRows(unpinnedTodos, subsectionContext),
+    );
   }
 
   if (groupMode === 'none') {
-    return todos.map((todo) => ({
-      id: todo.id,
-      todo,
-      type: 'todo',
-    }));
+    return prependPinnedSection(
+      pinnedTodos,
+      unpinnedTodos.map((todo) => ({
+        id: todo.id,
+        todo,
+        type: 'todo',
+      })),
+    );
   }
 
-  return buildGroupedSectionRows(
-    todos,
-    groupMode,
-    sortMode,
-    orderedListLabels,
-    listMenuTree,
-    dateLabelDisplayMode,
-    seedListGroupLabels,
-    now,
+  return prependPinnedSection(
+    pinnedTodos,
+    buildGroupedSectionRows(
+      unpinnedTodos,
+      groupMode,
+      sortMode,
+      orderedListLabels,
+      listMenuTree,
+      dateLabelDisplayMode,
+      seedListGroupLabels,
+      now,
+    ),
   );
 };
 

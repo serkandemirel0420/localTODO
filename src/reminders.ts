@@ -8,8 +8,23 @@ export const REPEATING_ITEMS_FILTER_VALUE = 'filter:repeating-items';
 const LEGACY_NOT_REPEATING_ITEMS_FILTER_VALUE = 'filter:not-repeating-items';
 
 export type RepeatPreset = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
-export const HABIT_INTERVAL_HOUR_OPTIONS = [1, 2, 3, 4, 6, 8, 12] as const;
-export type HabitIntervalHours = typeof HABIT_INTERVAL_HOUR_OPTIONS[number];
+export type HabitInterval =
+  | '1h' | '2h' | '3h' | '4h' | '5h' | '6h'
+  | '7h' | '8h' | '9h' | '10h' | '11h' | '12h'
+  | '1d' | '2d' | '3d' | '4d' | '5d' | '6d' | '7d'
+  | '1w' | '2w'
+  | '1m';
+
+export const HABIT_INTERVAL_VALUES: readonly HabitInterval[] = [
+  '1h', '2h', '3h', '4h', '5h', '6h',
+  '7h', '8h', '9h', '10h', '11h', '12h',
+  '1d', '2d', '3d', '4d', '5d', '6d', '7d',
+  '1w', '2w',
+  '1m',
+];
+
+/** Kept for compatibility with the existing reminder API; values now include day/week/month units. */
+export type HabitIntervalHours = HabitInterval;
 
 export type ReminderTime = {
   hours: number;
@@ -17,13 +32,13 @@ export type ReminderTime = {
 };
 
 export type TodoReminder = {
-  habitHours?: HabitIntervalHours | null;
+  habitHours?: HabitInterval | null;
   time: ReminderTime | null;
   repeat: RepeatPreset;
 };
 
 export type HabitIntervalOption = {
-  hours: HabitIntervalHours | null;
+  hours: HabitInterval | null;
   label: string;
 };
 
@@ -67,7 +82,8 @@ export const DEFAULT_REMINDER_TIME: ReminderTime = {
   minutes: 0,
 };
 
-export const DEFAULT_HABIT_INTERVAL_HOURS: HabitIntervalHours = 4;
+export const DEFAULT_HABIT_INTERVAL: HabitInterval = '4h';
+export const DEFAULT_HABIT_INTERVAL_HOURS = DEFAULT_HABIT_INTERVAL;
 
 export const DEFAULT_TODO_REMINDER: TodoReminder = {
   habitHours: null,
@@ -99,31 +115,49 @@ const normalizeReminderTime = (time: ReminderTime | null): ReminderTime | null =
   return { hours, minutes };
 };
 
-export const formatHabitIntervalLabel = (hours: HabitIntervalHours): string => (
-  hours === 1 ? 'Every hour' : `Every ${hours} hours`
-);
+export type HabitIntervalParts = {
+  amount: number;
+  unit: 'h' | 'd' | 'w' | 'm';
+};
 
-export const formatHabitIntervalShortLabel = (hours: HabitIntervalHours): string =>
-  `${hours}h`;
+export const getHabitIntervalParts = (interval: HabitInterval): HabitIntervalParts => ({
+  amount: Number.parseInt(interval, 10),
+  unit: interval.slice(-1) as HabitIntervalParts['unit'],
+});
+
+export const formatHabitIntervalLabel = (interval: HabitInterval): string => {
+  const { amount, unit } = getHabitIntervalParts(interval);
+  const unitLabel = unit === 'h'
+    ? 'hour'
+    : unit === 'd'
+      ? 'day'
+      : unit === 'w'
+        ? 'week'
+        : 'month';
+
+  return `Every ${amount === 1 ? '' : `${amount} `}${unitLabel}${amount === 1 ? '' : 's'}`;
+};
+
+export const formatHabitIntervalShortLabel = (interval: HabitInterval): string => interval;
 
 export const HABIT_INTERVAL_OPTIONS: HabitIntervalOption[] = [
   { hours: null, label: 'None' },
-  ...HABIT_INTERVAL_HOUR_OPTIONS.map((hours) => ({
+  ...HABIT_INTERVAL_VALUES.map((hours) => ({
     hours,
     label: formatHabitIntervalLabel(hours),
   })),
 ];
 
-const normalizeHabitIntervalHours = (
+const normalizeHabitInterval = (
   value: TodoReminder['habitHours'],
-): HabitIntervalHours | null => (
-  HABIT_INTERVAL_HOUR_OPTIONS.find((hours) => hours === value) ?? null
+): HabitInterval | null => (
+  HABIT_INTERVAL_VALUES.find((interval) => interval === value) ?? null
 );
 
 export const normalizeTodoReminder = (reminder: TodoReminder): TodoReminder => {
   const time = normalizeReminderTime(reminder.time);
   const repeat = isRepeatPreset(reminder.repeat) ? reminder.repeat : 'none';
-  const habitHours = normalizeHabitIntervalHours(reminder.habitHours);
+  const habitHours = normalizeHabitInterval(reminder.habitHours);
 
   return {
     habitHours,
@@ -147,13 +181,10 @@ const parseTimePart = (value: string): ReminderTime | null => {
   return { hours, minutes };
 };
 
-const parseHabitPart = (value: string): HabitIntervalHours | null => {
-  const match = /^(\d+)$/.exec(value);
-  if (!match) {
-    return null;
-  }
-
-  return normalizeHabitIntervalHours(Number(match[1]) as HabitIntervalHours);
+const parseHabitPart = (value: string): HabitInterval | null => {
+  const legacyHours = /^(\d+)$/.exec(value);
+  const candidate = legacyHours ? `${legacyHours[1]}h` : value;
+  return HABIT_INTERVAL_VALUES.find((interval) => interval === candidate) ?? null;
 };
 
 export const reminderTimeToDate = (time: ReminderTime): Date => {
@@ -218,7 +249,7 @@ export const decodeTodoReminder = (values: string[]): TodoReminder => {
   const time = firstSegment ? parseTimePart(firstSegment) : null;
 
   let repeat: RepeatPreset = 'none';
-  let habitHours: HabitIntervalHours | null = null;
+  let habitHours: HabitInterval | null = null;
   const repeatSegments = time ? segments.slice(1) : segments;
   repeatSegments.forEach((segment) => {
     if (segment.startsWith(REPEAT_PREFIX)) {

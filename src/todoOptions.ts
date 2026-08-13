@@ -21,7 +21,7 @@ export const DATE_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS,
 ];
 
-/** Date drawer list: date choices + Reminder + Repeating. */
+/** Date drawer list: date choices + Habit + Reminder + Repeating. */
 export const DATE_PICKER_MENU_ITEMS: string[] = [
   ...DATE_FILTER_PRESETS,
   HABIT_PICKER_LABEL,

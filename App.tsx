@@ -1448,13 +1448,6 @@ const menuSectionCanClear = (
   }
 
   if (menuMode === 'group') {
-    if (activeListDisplay.listLabel) {
-      const node = findListMenuNode(listMenuTree, activeListDisplay.listLabel);
-      return activeListDisplay.isSubsectionView
-        ? node?.subsectionGroupMode !== undefined
-        : node?.groupMode !== undefined;
-    }
-
     return groupMode !== 'none';
   }
 
@@ -2606,9 +2599,7 @@ const getDoubleSpaceCommandCursorPosition = (
 
 const CREATE_DRAWER_NO_LIST_PICKER_VALUE = '__create_drawer_no_list__';
 const CREATE_DRAWER_NO_LIST_LABEL = '--';
-const CREATE_DRAWER_DATE_PICKER_MENU_ITEMS = DATE_PICKER_MENU_ITEMS.filter(
-  (label) => label !== HABIT_PICKER_LABEL,
-);
+const CREATE_DRAWER_DATE_PICKER_MENU_ITEMS = DATE_PICKER_MENU_ITEMS;
 
 const LIST_SUBSECTION_NOT_SECTIONED_LABEL = 'Not Sectioned';
 const CREATE_SECTION_DEFAULT_REPEAT: RepeatPreset = 'daily';
@@ -5417,6 +5408,7 @@ export default function App() {
   const [redoHistory, setRedoHistory] = useState<UndoHistoryEntry[]>([]);
   const [undoToastEntryId, setUndoToastEntryId] = useState<number | null>(null);
   const [headerUndoEntryId, setHeaderUndoEntryId] = useState<number | null>(null);
+  const [filterConfigUndoPending, setFilterConfigUndoPending] = useState(false);
   const [repeatingTodoCompletionFeedbackIds, setRepeatingTodoCompletionFeedbackIds] =
     useState<Set<string>>(() => new Set());
   const [activeTodoDetailId, setActiveTodoDetailId] = useState<string | null>(null);
@@ -6780,6 +6772,13 @@ export default function App() {
     recordUndoSnapshot(label, captureUndoSnapshot(), options);
   }, [captureUndoSnapshot, recordUndoSnapshot]);
 
+  const discardFilterConfigUndoBatch = useCallback(() => {
+    filterConfigUndoSnapshotRef.current = null;
+    filterConfigUndoPendingRef.current = false;
+    filterConfigUndoLabelRef.current = 'Change filters';
+    setFilterConfigUndoPending(false);
+  }, []);
+
   const beginFilterConfigUndoBatch = useCallback(() => {
     if (filterConfigUndoSnapshotRef.current) {
       return;
@@ -6788,31 +6787,35 @@ export default function App() {
     filterConfigUndoSnapshotRef.current = captureUndoSnapshot();
     filterConfigUndoPendingRef.current = false;
     filterConfigUndoLabelRef.current = 'Change filters';
+    setFilterConfigUndoPending(false);
   }, [captureUndoSnapshot]);
 
   const recordFilterConfigUndo = useCallback((label: string) => {
+    if (!filterConfigUndoSnapshotRef.current && listMenuOpenRef.current) {
+      filterConfigUndoSnapshotRef.current = captureUndoSnapshot();
+    }
+
     if (filterConfigUndoSnapshotRef.current) {
       filterConfigUndoPendingRef.current = true;
       filterConfigUndoLabelRef.current = label;
+      setFilterConfigUndoPending(true);
       return;
     }
 
     recordUndo(label);
-  }, [recordUndo]);
+  }, [captureUndoSnapshot, recordUndo]);
 
   const flushFilterConfigUndoBatch = useCallback(() => {
     const snapshot = filterConfigUndoSnapshotRef.current;
     const shouldRecordUndo = filterConfigUndoPendingRef.current;
     const label = filterConfigUndoLabelRef.current;
 
-    filterConfigUndoSnapshotRef.current = null;
-    filterConfigUndoPendingRef.current = false;
-    filterConfigUndoLabelRef.current = 'Change filters';
+    discardFilterConfigUndoBatch();
 
     if (snapshot && shouldRecordUndo) {
       recordUndoSnapshot(label, snapshot);
     }
-  }, [recordUndoSnapshot]);
+  }, [discardFilterConfigUndoBatch, recordUndoSnapshot]);
 
   useLayoutEffect(() => {
     if (listMenuOpen) {
@@ -7009,6 +7012,20 @@ export default function App() {
     createSettingsSnapshot,
     saveAppSettingsSnapshot,
   ]);
+
+  const undoPendingFilterConfigChanges = useCallback(() => {
+    const snapshot = filterConfigUndoSnapshotRef.current;
+
+    if (!snapshot || !filterConfigUndoPendingRef.current) {
+      return;
+    }
+
+    restoreUndoSnapshot(snapshot);
+    filterConfigUndoPendingRef.current = false;
+    filterConfigUndoLabelRef.current = 'Change filters';
+    setFilterConfigUndoPending(false);
+    triggerSubtleHaptic();
+  }, [restoreUndoSnapshot]);
 
   const applyUndoHistoryEntry = useCallback((entry: UndoHistoryEntry) => {
     const entryIndex = undoHistory.findIndex((item) => item.id === entry.id);
@@ -14092,11 +14109,11 @@ export default function App() {
 
       recordFilterConfigUndo('Clear group');
       if (display.listLabel) {
-        setListMenuTree((current) => clearListNodeDisplaySettings(
+        setListMenuTree((current) => updateListNodeDisplaySettings(
           current,
           display.listLabel!,
           display.isSubsectionView,
-          'group',
+          { groupMode: 'none' },
         ));
       } else {
         setTodoGroupMode('none');
@@ -15120,7 +15137,11 @@ export default function App() {
   const canSaveListMenuPreset = Boolean(
     editingMenuPresetHasChanges ||
       (openMenuPresetHasChanges && openMenuPreset) ||
+      (filterConfigUndoPending && (editingMenuPreset || openMenuPreset)) ||
       canSaveCurrentMenuPreset,
+  );
+  const canUndoListMenuPreset = Boolean(
+    filterConfigUndoPending && !hasTodoEditTargets,
   );
   const showListMenuOwnerBadge = hasTodoEditTargets
     ? !activeTodoMenuId
@@ -15132,12 +15153,16 @@ export default function App() {
       : 'Current filters';
   const listMenuOwnerIcon = hasTodoEditTargets ? 'checkbox-outline' : 'albums-outline';
   const saveListMenuPreset = useCallback(() => {
-    if (editingMenuPreset) {
+    if (filterConfigUndoPending) {
+      discardFilterConfigUndoBatch();
+    }
+
+    if (editingMenuPreset && (editingMenuPresetHasChanges || filterConfigUndoPending)) {
       updateEditingMenuPreset();
       return;
     }
 
-    if (openMenuPresetHasChanges && openMenuPreset) {
+    if (openMenuPreset && (openMenuPresetHasChanges || filterConfigUndoPending)) {
       saveOpenMenuPreset(openMenuPreset.id);
       return;
     }
@@ -15147,7 +15172,10 @@ export default function App() {
     }
   }, [
     canSaveCurrentMenuPreset,
+    discardFilterConfigUndoBatch,
     editingMenuPreset,
+    editingMenuPresetHasChanges,
+    filterConfigUndoPending,
     openMenuPreset,
     openMenuPresetHasChanges,
     openSavePresetPrompt,
@@ -19555,6 +19583,21 @@ export default function App() {
                             </Text>
                           </View>
                         ) : null}
+                        {canUndoListMenuPreset ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Undo ${filterConfigUndoLabelRef.current}`}
+                            hitSlop={LIST_MENU_ICON_HIT_SLOP}
+                            onPress={undoPendingFilterConfigChanges}
+                            style={({ pressed }) => [
+                              styles.listMenuHeaderUndoButton,
+                              canSaveListMenuPreset && styles.listMenuHeaderUndoButtonWithSave,
+                              pressed && styles.listMenuArrowButtonPressed,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="arrow-undo" size={19} />
+                          </Pressable>
+                        ) : null}
                         {canSaveListMenuPreset ? (
                           <Pressable
                             accessibilityRole="button"
@@ -21104,13 +21147,43 @@ export default function App() {
                       />
                     ) : null}
                     {!createCommandPaletteVisible ? (
-                      <View
-                        style={[
-                          styles.createDrawerContentInputShell,
-                          (createDrawerExpanded || createDrawerUsesTallEditLayout) &&
-                            styles.createDrawerContentInputShellExpanded,
-                        ]}
-                      >
+                      createDrawerEditingTodoId && createEditorRedirectFirstContentTap ? (
+                        <ScrollView
+                          contentContainerStyle={[
+                            styles.createDrawerInitialContentScrollContent,
+                            !createDrawerExpanded &&
+                              styles.createDrawerInitialContentScrollContentPrompt,
+                          ]}
+                          nestedScrollEnabled
+                          showsVerticalScrollIndicator={false}
+                          style={[
+                            styles.createDrawerInitialContentScroll,
+                            createDrawerExpanded
+                              ? styles.createDrawerContentInputExpanded
+                              : styles.createDrawerInitialContentScrollPrompt,
+                            createDrawerUsesTallEditLayout &&
+                              styles.createDrawerContentInputExpanded,
+                          ]}
+                        >
+                          <Pressable
+                            accessibilityLabel="Focus title and open keyboard"
+                            accessibilityRole="button"
+                            onPress={handleCreateEditorFirstContentTap}
+                            style={styles.createDrawerInitialContentTapTarget}
+                          >
+                            <Text
+                              style={[
+                                styles.createDrawerInitialContentText,
+                                createDrawerContentTextStyle,
+                                !createDraftContent &&
+                                  styles.createDrawerInitialContentPlaceholder,
+                              ]}
+                            >
+                              {createDraftContent || 'Content'}
+                            </Text>
+                          </Pressable>
+                        </ScrollView>
+                      ) : (
                         <TextInput
                           key={createDrawerEditingTodoId ?? 'new-todo-content'}
                           ref={createContentInputRef}
@@ -21143,15 +21216,7 @@ export default function App() {
                           textAlignVertical="top"
                           value={createDraftContent}
                         />
-                        {createDrawerEditingTodoId && createEditorRedirectFirstContentTap ? (
-                          <Pressable
-                            accessibilityLabel="Focus title and open keyboard"
-                            accessibilityRole="button"
-                            onPress={handleCreateEditorFirstContentTap}
-                            style={styles.createDrawerFirstContentTapTarget}
-                          />
-                        ) : null}
-                      </View>
+                      )
                     ) : null}
                   </View>
                 )}
@@ -26375,17 +26440,6 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 6,
   },
-  createDrawerContentInputShell: {
-    position: 'relative',
-  },
-  createDrawerContentInputShellExpanded: {
-    flex: 1,
-    minHeight: 0,
-  },
-  createDrawerFirstContentTapTarget: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 1,
-  },
   createDrawerContentInputExpanded: {
     flex: 1,
     maxHeight: '100%',
@@ -26396,6 +26450,32 @@ const styles = StyleSheet.create({
     maxHeight: 92,
     minHeight: 76,
     paddingTop: 4,
+  },
+  createDrawerInitialContentScroll: {
+    maxHeight: 172,
+    minHeight: 118,
+  },
+  createDrawerInitialContentScrollPrompt: {
+    maxHeight: 92,
+    minHeight: 76,
+  },
+  createDrawerInitialContentScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 6,
+    paddingTop: 8,
+  },
+  createDrawerInitialContentScrollContentPrompt: {
+    paddingTop: 4,
+  },
+  createDrawerInitialContentTapTarget: {
+    flexGrow: 1,
+  },
+  createDrawerInitialContentText: {
+    color: '#3A332E',
+    fontWeight: FONT_REGULAR,
+  },
+  createDrawerInitialContentPlaceholder: {
+    color: '#B5ADA5',
   },
   createCommandPalette: {
     ...StyleSheet.absoluteFillObject,
@@ -26790,6 +26870,19 @@ const styles = StyleSheet.create({
     right: 4,
     top: 3,
     width: 34,
+  },
+  listMenuHeaderUndoButton: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    height: 34,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 4,
+    top: 3,
+    width: 34,
+  },
+  listMenuHeaderUndoButtonWithSave: {
+    right: 40,
   },
   listMenuFooterButton: {
     minHeight: 50,

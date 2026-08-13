@@ -9,18 +9,19 @@ import {
 } from 'react-native';
 
 import {
-  DEFAULT_HABIT_INTERVAL_HOURS,
-  HABIT_INTERVAL_OPTIONS,
-  type HabitIntervalHours,
+  DEFAULT_HABIT_INTERVAL,
+  formatHabitIntervalShortLabel,
+  HABIT_INTERVAL_VALUES,
+  type HabitInterval,
 } from '../reminders';
 
 const ACCENT = '#4C78FF';
 
 type HabitReminderModalProps = {
   visible: boolean;
-  value: HabitIntervalHours | null;
+  value: HabitInterval | null;
   onClose: () => void;
-  onConfirm: (value: HabitIntervalHours | null) => void;
+  onConfirm: (value: HabitInterval | null) => void;
 };
 
 export function HabitReminderModal({
@@ -29,8 +30,8 @@ export function HabitReminderModal({
   onClose,
   onConfirm,
 }: HabitReminderModalProps) {
-  const [draft, setDraft] = useState<HabitIntervalHours | null>(
-    value ?? DEFAULT_HABIT_INTERVAL_HOURS,
+  const [draft, setDraft] = useState<HabitInterval | null>(
+    value ?? DEFAULT_HABIT_INTERVAL,
   );
 
   useEffect(() => {
@@ -38,7 +39,7 @@ export function HabitReminderModal({
       return;
     }
 
-    setDraft(value ?? DEFAULT_HABIT_INTERVAL_HOURS);
+    setDraft(value ?? DEFAULT_HABIT_INTERVAL);
   }, [value, visible]);
 
   return (
@@ -58,26 +59,48 @@ export function HabitReminderModal({
         <View style={styles.card}>
           <Text style={styles.title}>Habit</Text>
 
-          {HABIT_INTERVAL_OPTIONS.map((option) => {
-            const selected = draft === option.hours;
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: draft === null }}
+            onPress={() => setDraft(null)}
+            style={({ pressed }) => [styles.noneRow, pressed && styles.pressed]}
+          >
+            <Text style={[styles.rowLabel, draft === null && styles.rowLabelSelected]}>
+              None
+            </Text>
+            {draft === null ? (
+              <Ionicons color={ACCENT} name="checkmark" size={20} />
+            ) : null}
+          </Pressable>
 
-            return (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                key={option.hours ?? 'none'}
-                onPress={() => setDraft(option.hours)}
-                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-              >
-                <Text style={[styles.rowLabel, selected && styles.rowLabelSelected]}>
-                  {option.label}
-                </Text>
-                {selected ? (
-                  <Ionicons color={ACCENT} name="checkmark" size={20} />
-                ) : null}
-              </Pressable>
-            );
-          })}
+          <View style={styles.intervalGrid}>
+            {HABIT_INTERVAL_VALUES.map((interval) => {
+              const selected = draft === interval;
+
+              return (
+                <View key={interval} style={styles.intervalCell}>
+                  <Pressable
+                    accessibilityLabel={`Habit interval ${interval}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => setDraft(interval)}
+                    style={({ pressed }) => [
+                      styles.intervalButton,
+                      selected && styles.intervalButtonSelected,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={[
+                      styles.intervalLabel,
+                      selected && styles.rowLabelSelected,
+                    ]}>
+                      {formatHabitIntervalShortLabel(interval)}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
 
           <View style={styles.actions}>
             <Pressable
@@ -129,12 +152,34 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     paddingHorizontal: 20,
   },
-  row: {
+  noneRow: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 48,
     paddingHorizontal: 20,
+  },
+  intervalGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  intervalCell: {
+    padding: 4,
+    width: '25%',
+  },
+  intervalButton: {
+    alignItems: 'center',
+    borderColor: '#E4DED7',
+    borderRadius: 4,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  intervalButtonSelected: {
+    backgroundColor: '#EEF3FF',
+    borderColor: ACCENT,
   },
   pressed: {
     backgroundColor: '#F5F2ED',
@@ -146,6 +191,11 @@ const styles = StyleSheet.create({
   },
   rowLabelSelected: {
     color: ACCENT,
+    fontWeight: '500',
+  },
+  intervalLabel: {
+    color: '#1F1B17',
+    fontSize: 16,
     fontWeight: '500',
   },
   actions: {

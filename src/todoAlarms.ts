@@ -14,6 +14,7 @@ import {
   formatHabitIntervalLabel,
   formatReminderClockLabel,
   formatRepeatLabel,
+  getHabitIntervalParts,
   type HabitIntervalHours,
   type ReminderTime,
   type RepeatPreset,
@@ -154,8 +155,8 @@ const ensureTodoAlarmSchedulingReady = async () => {
 const getTodoAlarmIdentifier = (todoId: string) =>
   `${TODO_ALARM_IDENTIFIER_PREFIX}${todoId}`;
 
-const getHabitAlarmIdentifier = (todoId: string, hour: number) =>
-  `${getTodoAlarmIdentifier(todoId)}${HABIT_ALARM_IDENTIFIER_PART}${hour}`;
+const getHabitAlarmIdentifier = (todoId: string, intervalKey: number | string) =>
+  `${getTodoAlarmIdentifier(todoId)}${HABIT_ALARM_IDENTIFIER_PART}${intervalKey}`;
 
 const getTodoIdFromAlarmIdentifier = (identifier: string) => {
   if (!identifier.startsWith(TODO_ALARM_IDENTIFIER_PREFIX)) {
@@ -468,10 +469,15 @@ const createHabitClockTrigger = (
 });
 
 export const getHabitNotificationHours = (
-  habitHours: HabitIntervalHours,
+  habitInterval: HabitIntervalHours,
   createdAt: number,
   quietHoursEnabled = true,
 ): number[] => {
+  const { amount, unit } = getHabitIntervalParts(habitInterval);
+  if (unit !== 'h') {
+    return [];
+  }
+
   const createdDate = new Date(createdAt);
   const firstWholeHour = (createdDate.getHours() + 1) % 24;
 
@@ -484,8 +490,56 @@ export const getHabitNotificationHours = (
       return false;
     }
 
-    return (hour - firstWholeHour + 24) % habitHours === 0;
+    return (hour - firstWholeHour + 24) % amount === 0;
   });
+};
+
+const createLongHabitTrigger = (
+  habitInterval: HabitIntervalHours,
+  createdAt: number,
+): Notifications.SchedulableNotificationTriggerInput | null => {
+  const { amount, unit } = getHabitIntervalParts(habitInterval);
+  if (unit === 'h') {
+    return null;
+  }
+
+  const anchor = new Date(createdAt);
+  if (unit === 'd' && amount === 1) {
+    return {
+      channelId: TODO_ALARM_CHANNEL_ID,
+      hour: anchor.getHours(),
+      minute: anchor.getMinutes(),
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+    };
+  }
+
+  if (unit === 'w' && amount === 1) {
+    return {
+      channelId: TODO_ALARM_CHANNEL_ID,
+      hour: anchor.getHours(),
+      minute: anchor.getMinutes(),
+      type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+      weekday: anchor.getDay() + 1,
+    };
+  }
+
+  if (unit === 'm') {
+    return {
+      channelId: TODO_ALARM_CHANNEL_ID,
+      day: anchor.getDate(),
+      hour: anchor.getHours(),
+      minute: anchor.getMinutes(),
+      type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
+    };
+  }
+
+  const secondsPerUnit = unit === 'd' ? 86_400 : 604_800;
+  return {
+    channelId: TODO_ALARM_CHANNEL_ID,
+    repeats: true,
+    seconds: amount * secondsPerUnit,
+    type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+  };
 };
 
 const createTodoAlarmTrigger = (
@@ -574,15 +628,25 @@ const createTodoAlarmRequests = (
       return [];
     }
 
-    return getHabitNotificationHours(
-      reminder.habitHours,
-      todo.createdAt,
-      todoAlarmSettings.habitQuietHoursEnabled,
-    ).map((hour) => ({
+    const { unit } = getHabitIntervalParts(reminder.habitHours);
+    if (unit === 'h') {
+      return getHabitNotificationHours(
+        reminder.habitHours,
+        todo.createdAt,
+        todoAlarmSettings.habitQuietHoursEnabled,
+      ).map((hour) => ({
+        content,
+        identifier: getHabitAlarmIdentifier(todo.id, hour),
+        trigger: createHabitClockTrigger(hour),
+      }));
+    }
+
+    const trigger = createLongHabitTrigger(reminder.habitHours, todo.createdAt);
+    return trigger ? [{
       content,
-      identifier: getHabitAlarmIdentifier(todo.id, hour),
-      trigger: createHabitClockTrigger(hour),
-    }));
+      identifier: getHabitAlarmIdentifier(todo.id, reminder.habitHours),
+      trigger,
+    }] : [];
   }
 
   const trigger = createTodoAlarmTrigger(todo, now);

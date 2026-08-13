@@ -35,6 +35,12 @@
       </intent-filter>
       <meta-data android:name="android.appwidget.provider" android:resource="@xml/new_item_widget_info"/>
     </receiver>
+    <receiver android:name=".LatestItemWidgetProvider" android:exported="false" android:label="@string/widget_latest_item_name">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/latest_item_widget_info"/>
+    </receiver>
     <receiver android:name=".TodayWidgetProvider" android:exported="false" android:label="@string/widget_today_name">
       <intent-filter>
         <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>

@@ -5420,6 +5420,7 @@ export default function App() {
     end: 0,
     start: 0,
   });
+  const [latestWidgetModalTodoId, setLatestWidgetModalTodoId] = useState<string | null>(null);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [filterConfigModalVisible, setFilterConfigModalVisible] = useState(false);
   const [filterListCreateModalVisible, setFilterListCreateModalVisible] = useState(false);
@@ -5681,6 +5682,8 @@ export default function App() {
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
   const pendingTodoAlarmOpenIdRef = useRef<string | null>(null);
   const pendingWidgetNewItemOpenRef = useRef(false);
+  const pendingWidgetLatestModalTodoIdRef = useRef<string | null>(null);
+  const latestWidgetEditorReturnTodoIdRef = useRef<string | null>(null);
   const pendingWidgetTodayOpenRef = useRef(false);
   const didReadInitialWidgetUrlRef = useRef(false);
   const lastHandledWidgetUrlRef = useRef({ timestamp: 0, url: '' });
@@ -5797,6 +5800,28 @@ export default function App() {
     () => buildAndroidWidgetItems(todos, pendingDeleteIds, dateStatusNow),
     [dateStatusNow, pendingDeleteIds, todos],
   );
+  const latestWidgetTodos = useMemo(
+    () => todos
+      .filter((todo) => !todo.done && !pendingDeleteIds.has(todo.id))
+      .sort((first, second) => (
+        second.createdAt - first.createdAt
+        || second.updatedAt - first.updatedAt
+      )),
+    [pendingDeleteIds, todos],
+  );
+  const latestWidgetModalIndex = latestWidgetModalTodoId === null
+    ? -1
+    : latestWidgetTodos.findIndex((todo) => todo.id === latestWidgetModalTodoId);
+  const latestWidgetModalTodo = latestWidgetModalIndex >= 0
+    ? latestWidgetTodos[latestWidgetModalIndex]
+    : null;
+  useEffect(() => {
+    if (latestWidgetModalTodoId === null || latestWidgetModalIndex >= 0) {
+      return;
+    }
+
+    setLatestWidgetModalTodoId(latestWidgetTodos[0]?.id ?? null);
+  }, [latestWidgetModalIndex, latestWidgetModalTodoId, latestWidgetTodos]);
   const activeTodoCount = Math.max(0, todos.length - pendingDeleteIds.size);
   const undoHistoryCount = undoHistory.length;
   const redoHistoryCount = redoHistory.length;
@@ -7648,6 +7673,7 @@ export default function App() {
   }, []);
 
   const openTodoEditor = useCallback((todo: Todo) => {
+    latestWidgetEditorReturnTodoIdRef.current = null;
     const nextFilters = getCopiedTodoFilters(todo);
     createDraftCopiesTodoSettingsRef.current = false;
     createCommandRestoreAfterPickerRef.current = false;
@@ -8390,6 +8416,16 @@ export default function App() {
     };
   }, [mergeNotificationLog]);
 
+  const returnToLatestWidgetModalAfterEditor = useCallback(() => {
+    const returnTodoId = latestWidgetEditorReturnTodoIdRef.current;
+    latestWidgetEditorReturnTodoIdRef.current = null;
+    if (!returnTodoId) {
+      return;
+    }
+
+    requestAnimationFrame(() => setLatestWidgetModalTodoId(returnTodoId));
+  }, []);
+
   const closeCreateDrawer = useCallback(() => {
     createDrawerVisibleRef.current = false;
     createDrawerFocusPendingRef.current = false;
@@ -8406,7 +8442,8 @@ export default function App() {
     setCreateDrawerVisible(false);
     setCreateDrawerPicker(null);
     resetCreateDrawerState();
-  }, [resetCreateDrawerState]);
+    returnToLatestWidgetModalAfterEditor();
+  }, [resetCreateDrawerState, returnToLatestWidgetModalAfterEditor]);
 
   const goBackInMenu = useCallback(() => {
     if (activeTodoDetailId) {
@@ -8886,6 +8923,8 @@ export default function App() {
     }
 
     pendingWidgetNewItemOpenRef.current = false;
+    latestWidgetEditorReturnTodoIdRef.current = null;
+    setLatestWidgetModalTodoId(null);
     const destinationList = resolveWidgetNewItemListLabel(
       listMenuTree,
       widgetNewItemList,
@@ -8896,17 +8935,7 @@ export default function App() {
     });
   }, [listMenuTree, openCreateDrawerWithFilters, widgetNewItemList]);
 
-  const openTodayFromWidget = useCallback(() => {
-    if (!settingsLoadedRef.current) {
-      pendingWidgetTodayOpenRef.current = true;
-      return;
-    }
-
-    pendingWidgetTodayOpenRef.current = false;
-    const nextSelectedFilters = {
-      ...cloneTodoFilters(),
-      date: ['Today'],
-    };
+  const openFilterScopeFromWidget = useCallback((nextSelectedFilters: TodoFilters) => {
     const emptyFilters = cloneTodoFilters();
 
     Keyboard.dismiss();
@@ -8924,6 +8953,8 @@ export default function App() {
     setAvoidedFilters(emptyFilters);
     setActiveTodoDetailId(null);
     setActiveDeletedTodoDetailId(null);
+    latestWidgetEditorReturnTodoIdRef.current = null;
+    setLatestWidgetModalTodoId(null);
     setCreateDrawerPicker(null);
     setCreateDrawerVisible(false);
     setDatePickerVisible(false);
@@ -8947,6 +8978,91 @@ export default function App() {
     resetCreateDrawerState,
   ]);
 
+  const openLatestItemsFromWidget = useCallback((todoId: string) => {
+    if (!loadedRef.current || !settingsLoadedRef.current) {
+      pendingWidgetLatestModalTodoIdRef.current = todoId;
+      return;
+    }
+
+    pendingWidgetLatestModalTodoIdRef.current = null;
+    const availableTodos = todosRef.current
+      .filter((todo) => !todo.done && !pendingDeleteIdsRef.current.has(todo.id))
+      .sort((first, second) => (
+        second.createdAt - first.createdAt
+        || second.updatedAt - first.updatedAt
+      ));
+    // Android can retain an older PendingIntent while a widget refresh is in flight.
+    // The Latest destination must always resolve against the current in-app data.
+    const initialTodo = availableTodos[0] ?? null;
+    if (!initialTodo) {
+      return;
+    }
+
+    Keyboard.dismiss();
+    searchInputRef.current?.blur();
+    closeListMenuState();
+    flushFilterConfigUndoBatch();
+    resetCreateDrawerState();
+    clearNotificationTodoReveal();
+    createDrawerVisibleRef.current = false;
+    todoDetailDraftTodoIdRef.current = null;
+    setActiveTodoDetailId(null);
+    setActiveDeletedTodoDetailId(null);
+    setCreateDrawerPicker(null);
+    setCreateDrawerVisible(false);
+    setDatePickerVisible(false);
+    setFilterConfigModalVisible(false);
+    setSettingsModalVisible(false);
+    setPresetSaveModalVisible(false);
+    setSearchKeywordEditTarget(null);
+    latestWidgetEditorReturnTodoIdRef.current = null;
+    setLatestWidgetModalTodoId(initialTodo.id);
+  }, [
+    clearNotificationTodoReveal,
+    closeListMenuState,
+    flushFilterConfigUndoBatch,
+    resetCreateDrawerState,
+  ]);
+
+  const closeLatestWidgetModal = useCallback(() => {
+    setLatestWidgetModalTodoId(null);
+    triggerSubtleHaptic();
+  }, []);
+
+  const showLatestWidgetTodoAtOffset = useCallback((offset: number) => {
+    const nextTodo = latestWidgetTodos[latestWidgetModalIndex + offset];
+    if (!nextTodo) {
+      return;
+    }
+
+    setLatestWidgetModalTodoId(nextTodo.id);
+    triggerSubtleHaptic();
+  }, [latestWidgetModalIndex, latestWidgetTodos]);
+
+  const openLatestWidgetTodo = useCallback(() => {
+    if (!latestWidgetModalTodo) {
+      return;
+    }
+
+    setLatestWidgetModalTodoId(null);
+    openTodoEditor(latestWidgetModalTodo);
+    latestWidgetEditorReturnTodoIdRef.current = latestWidgetModalTodo.id;
+    triggerSubtleHaptic();
+  }, [latestWidgetModalTodo, openTodoEditor]);
+
+  const openTodayFromWidget = useCallback(() => {
+    if (!settingsLoadedRef.current) {
+      pendingWidgetTodayOpenRef.current = true;
+      return;
+    }
+
+    pendingWidgetTodayOpenRef.current = false;
+    openFilterScopeFromWidget({
+      ...cloneTodoFilters(),
+      date: ['Today'],
+    });
+  }, [openFilterScopeFromWidget]);
+
   const handleAndroidWidgetUrl = useCallback((url: string) => {
     const route = parseAndroidWidgetRoute(url);
     if (!route) {
@@ -8965,13 +9081,23 @@ export default function App() {
       return;
     }
 
+    if (route.kind === 'latest') {
+      openLatestItemsFromWidget(route.todoId);
+      return;
+    }
+
     if (route.todoId) {
       openTodoAlarmDetail(route.todoId);
       return;
     }
 
     openTodayFromWidget();
-  }, [openCreateDrawerFromWidget, openTodayFromWidget, openTodoAlarmDetail]);
+  }, [
+    openCreateDrawerFromWidget,
+    openLatestItemsFromWidget,
+    openTodayFromWidget,
+    openTodoAlarmDetail,
+  ]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -9001,17 +9127,26 @@ export default function App() {
   }, [handleAndroidWidgetUrl]);
 
   useEffect(() => {
-    if (!settingsLoaded) {
+    if (!loaded || !settingsLoaded) {
       return;
     }
 
     if (pendingWidgetNewItemOpenRef.current) {
       openCreateDrawerFromWidget();
     }
+    if (pendingWidgetLatestModalTodoIdRef.current) {
+      openLatestItemsFromWidget(pendingWidgetLatestModalTodoIdRef.current);
+    }
     if (pendingWidgetTodayOpenRef.current) {
       openTodayFromWidget();
     }
-  }, [openCreateDrawerFromWidget, openTodayFromWidget, settingsLoaded]);
+  }, [
+    loaded,
+    openCreateDrawerFromWidget,
+    openLatestItemsFromWidget,
+    openTodayFromWidget,
+    settingsLoaded,
+  ]);
 
   const openCreateDrawerFromTodoSettings = useCallback((sourceTodo: Todo) => {
     if (listMenuOpen) {
@@ -9221,6 +9356,7 @@ export default function App() {
       setCreateDrawerVisible(false);
       setCreateDrawerPicker(null);
       resetCreateDrawerState();
+      returnToLatestWidgetModalAfterEditor();
       triggerSubtleHaptic();
       return;
     }
@@ -9271,6 +9407,7 @@ export default function App() {
     listMenuTree,
     recordUndo,
     resetCreateDrawerState,
+    returnToLatestWidgetModalAfterEditor,
     selectedFilters,
     todoTextMaxLength,
   ]);
@@ -20717,6 +20854,113 @@ export default function App() {
 
         <Modal
           animationType="fade"
+          onRequestClose={closeLatestWidgetModal}
+          statusBarTranslucent={Platform.OS === 'android'}
+          transparent
+          visible={latestWidgetModalTodo !== null}
+        >
+          <View
+            accessibilityViewIsModal
+            style={styles.latestWidgetModalRoot}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close latest added items"
+              onPress={closeLatestWidgetModal}
+              style={styles.todoDetailBackdrop}
+            />
+            {latestWidgetModalTodo ? (
+              <View style={styles.latestWidgetModalCard}>
+                <View style={styles.latestWidgetModalHeader}>
+                  <View style={styles.latestWidgetModalHeadingGroup}>
+                    <Text style={styles.latestWidgetModalEyebrow}>LATEST ADDED</Text>
+                    <Text style={styles.latestWidgetModalCounter}>
+                      {latestWidgetModalIndex + 1} of {latestWidgetTodos.length}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close latest added items"
+                    hitSlop={8}
+                    onPress={closeLatestWidgetModal}
+                    style={({ pressed }) => [
+                      styles.todoDetailCloseButton,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons color="#2A2520" name="close" size={21} />
+                  </Pressable>
+                </View>
+
+                <View style={styles.latestWidgetModalBody}>
+                  <View style={styles.latestWidgetModalListPill}>
+                    <Ionicons color={THEME_ACCENT} name="list-outline" size={15} />
+                    <Text numberOfLines={1} style={styles.latestWidgetModalListText}>
+                      {latestWidgetModalTodo.filters.list[0] ?? 'All items'}
+                    </Text>
+                  </View>
+                  <Text style={styles.latestWidgetModalTitle}>
+                    {latestWidgetModalTodo.text}
+                  </Text>
+                  {latestWidgetModalTodo.content.trim().length > 0 ? (
+                    <Text numberOfLines={5} style={styles.latestWidgetModalContent}>
+                      {formatTodoDetailDraftContentForEditing(latestWidgetModalTodo.content).trim()}
+                    </Text>
+                  ) : null}
+                </View>
+
+                <View style={styles.latestWidgetModalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Show newer added item"
+                    accessibilityState={{ disabled: latestWidgetModalIndex <= 0 }}
+                    disabled={latestWidgetModalIndex <= 0}
+                    onPress={() => showLatestWidgetTodoAtOffset(-1)}
+                    style={({ pressed }) => [
+                      styles.latestWidgetModalNavButton,
+                      latestWidgetModalIndex <= 0 && styles.latestWidgetModalButtonDisabled,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons color="#2A2520" name="chevron-back" size={23} />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${latestWidgetModalTodo.text} item`}
+                    onPress={openLatestWidgetTodo}
+                    style={({ pressed }) => [
+                      styles.latestWidgetModalOpenItemButton,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.latestWidgetModalOpenItemText}>Open item</Text>
+                    <Ionicons color="#FFFFFF" name="arrow-forward" size={18} />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Show older added item"
+                    accessibilityState={{
+                      disabled: latestWidgetModalIndex >= latestWidgetTodos.length - 1,
+                    }}
+                    disabled={latestWidgetModalIndex >= latestWidgetTodos.length - 1}
+                    onPress={() => showLatestWidgetTodoAtOffset(1)}
+                    style={({ pressed }) => [
+                      styles.latestWidgetModalNavButton,
+                      latestWidgetModalIndex >= latestWidgetTodos.length - 1
+                        && styles.latestWidgetModalButtonDisabled,
+                      pressed && styles.todoDetailCloseButtonPressed,
+                    ]}
+                  >
+                    <Ionicons color="#2A2520" name="chevron-forward" size={23} />
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="fade"
           onRequestClose={closeDeletedTodoDetailModal}
           statusBarTranslucent={Platform.OS === 'android'}
           transparent
@@ -23682,6 +23926,132 @@ const styles = StyleSheet.create({
   },
   todoDetailModalRoot: {
     flex: 1,
+  },
+  latestWidgetModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingBottom: 24,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: TOP_SAFE_GAP + 24,
+  },
+  latestWidgetModalCard: {
+    alignSelf: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4DDD4',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 12,
+    maxHeight: '84%',
+    maxWidth: 430,
+    minHeight: '64%',
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    width: '100%',
+  },
+  latestWidgetModalHeader: {
+    alignItems: 'center',
+    borderBottomColor: '#F0E9E1',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 15,
+  },
+  latestWidgetModalHeadingGroup: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  latestWidgetModalEyebrow: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: 0.7,
+  },
+  latestWidgetModalCounter: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+  },
+  latestWidgetModalBody: {
+    flex: 1,
+    minHeight: 154,
+    paddingBottom: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  latestWidgetModalListPill: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#D6E0FF',
+    borderRadius: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 6,
+    maxWidth: '100%',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  latestWidgetModalListText: {
+    color: THEME_ACCENT,
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: FONT_SEMIBOLD,
+  },
+  latestWidgetModalTitle: {
+    color: THEME_TEXT,
+    fontSize: 23,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 30,
+    marginTop: 15,
+  },
+  latestWidgetModalContent: {
+    color: '#665E57',
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 10,
+  },
+  latestWidgetModalActions: {
+    alignItems: 'center',
+    borderTopColor: '#F0E9E1',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 9,
+    paddingBottom: 16,
+    paddingHorizontal: 18,
+    paddingTop: 13,
+  },
+  latestWidgetModalNavButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_BG,
+    borderColor: '#E8E2DA',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 42,
+    justifyContent: 'center',
+    width: 46,
+  },
+  latestWidgetModalButtonDisabled: {
+    opacity: 0.32,
+  },
+  latestWidgetModalOpenItemButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT,
+    borderRadius: 14,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    height: 42,
+    justifyContent: 'center',
+  },
+  latestWidgetModalOpenItemText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: FONT_SEMIBOLD,
   },
   deletedTodoDetailModalRoot: {
     flex: 1,

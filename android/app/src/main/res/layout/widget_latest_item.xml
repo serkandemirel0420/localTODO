@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_latest_item_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/widget_card_background"
+  android:gravity="center_vertical"
+  android:orientation="horizontal"
+  android:paddingLeft="14dp"
+  android:paddingTop="8dp"
+  android:paddingRight="14dp"
+  android:paddingBottom="8dp">
+
+  <ImageView
+    android:layout_width="28dp"
+    android:layout_height="28dp"
+    android:contentDescription="@string/widget_latest_item_name"
+    android:src="@drawable/ic_widget_latest" />
+
+  <LinearLayout
+    android:layout_width="0dp"
+    android:layout_height="wrap_content"
+    android:layout_marginLeft="11dp"
+    android:layout_weight="1"
+    android:orientation="vertical">
+
+    <TextView
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:ellipsize="end"
+      android:fontFamily="sans-serif-medium"
+      android:maxLines="1"
+      android:text="@string/widget_latest_item_title"
+      android:textAllCaps="true"
+      android:textColor="@color/widget_accent"
+      android:textSize="10sp" />
+
+    <TextView
+      android:id="@+id/widget_latest_item_title"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="1dp"
+      android:ellipsize="end"
+      android:fontFamily="sans-serif-medium"
+      android:maxLines="1"
+      android:text="@string/widget_latest_item_empty"
+      android:textColor="@color/widget_text_primary"
+      android:textSize="15sp" />
+  </LinearLayout>
+</LinearLayout>

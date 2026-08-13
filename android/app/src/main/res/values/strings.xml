@@ -5,6 +5,10 @@
   <string name="widget_new_item_name">New item</string>
   <string name="widget_new_item_title">New item</string>
   <string name="widget_new_item_description">Open Local Todo and create a new item</string>
+  <string name="widget_latest_item_name">Latest item</string>
+  <string name="widget_latest_item_title">Latest</string>
+  <string name="widget_latest_item_description">See and open the most recently added open Local Todo item</string>
+  <string name="widget_latest_item_empty">No open items yet</string>
   <string name="widget_today_name">Today items</string>
   <string name="widget_today_title">Today</string>
   <string name="widget_today_description">See today’s open Local Todo items</string>

@@ -62,6 +62,7 @@ export const syncAndroidWidgets = async (items: AndroidWidgetItem[]) => {
 
 export type AndroidWidgetRoute =
   | { kind: 'new-item' }
+  | { kind: 'latest'; todoId: string }
   | { kind: 'today'; todoId: string | null };
 
 export const parseAndroidWidgetRoute = (url: string): AndroidWidgetRoute | null => {
@@ -73,6 +74,18 @@ export const parseAndroidWidgetRoute = (url: string): AndroidWidgetRoute | null 
 
     if (parsedUrl.pathname === '/new-item') {
       return { kind: 'new-item' };
+    }
+
+    if (parsedUrl.pathname === '/latest') {
+      const todoId = parsedUrl.searchParams.get('id');
+      if (!todoId) {
+        return null;
+      }
+
+      return {
+        kind: 'latest',
+        todoId,
+      };
     }
 
     if (parsedUrl.pathname === '/today') {

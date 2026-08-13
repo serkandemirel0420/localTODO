@@ -137,6 +137,11 @@ private object LocalTodoWidgetUpdater {
     )
     NewItemWidgetProvider.updateWidgets(context, manager, newItemIds)
 
+    val latestItemIds = manager.getAppWidgetIds(
+      ComponentName(context, LatestItemWidgetProvider::class.java),
+    )
+    LatestItemWidgetProvider.updateWidgets(context, manager, latestItemIds)
+
     val todayIds = manager.getAppWidgetIds(
       ComponentName(context, TodayWidgetProvider::class.java),
     )
@@ -153,6 +158,39 @@ private object LocalTodoWidgetUpdater {
       R.id.widget_new_item_root,
       createAppPendingIntent(context, appWidgetId, "new-item"),
     )
+    manager.updateAppWidget(appWidgetId, views)
+  }
+
+  fun updateLatestItemWidget(
+    context: Context,
+    manager: AppWidgetManager,
+    appWidgetId: Int,
+  ) {
+    val latestItem = LocalTodoWidgetStore
+      .loadItems(context)
+      .maxWithOrNull(
+        compareBy<WidgetTodoItem> { it.createdAt }
+          .thenBy { it.updatedAt },
+      )
+    val views = RemoteViews(context.packageName, R.layout.widget_latest_item)
+
+    if (latestItem == null) {
+      views.setTextViewText(
+        R.id.widget_latest_item_title,
+        context.getString(R.string.widget_latest_item_empty),
+      )
+      views.setOnClickPendingIntent(
+        R.id.widget_latest_item_root,
+        createAppPendingIntent(context, appWidgetId, "new-item"),
+      )
+    } else {
+      views.setTextViewText(R.id.widget_latest_item_title, latestItem.title)
+      views.setOnClickPendingIntent(
+        R.id.widget_latest_item_root,
+        createAppPendingIntent(context, appWidgetId, "latest", latestItem.id),
+      )
+    }
+
     manager.updateAppWidget(appWidgetId, views)
   }
 
@@ -292,6 +330,28 @@ class NewItemWidgetProvider : AppWidgetProvider() {
     ) {
       appWidgetIds.forEach { appWidgetId ->
         LocalTodoWidgetUpdater.updateNewItemWidget(context, appWidgetManager, appWidgetId)
+      }
+    }
+  }
+}
+
+class LatestItemWidgetProvider : AppWidgetProvider() {
+  override fun onUpdate(
+    context: Context,
+    appWidgetManager: AppWidgetManager,
+    appWidgetIds: IntArray,
+  ) {
+    updateWidgets(context, appWidgetManager, appWidgetIds)
+  }
+
+  companion object {
+    fun updateWidgets(
+      context: Context,
+      appWidgetManager: AppWidgetManager,
+      appWidgetIds: IntArray,
+    ) {
+      appWidgetIds.forEach { appWidgetId ->
+        LocalTodoWidgetUpdater.updateLatestItemWidget(context, appWidgetManager, appWidgetId)
       }
     }
   }

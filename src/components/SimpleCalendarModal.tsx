@@ -31,6 +31,34 @@ const CARD_HORIZONTAL_PADDING = 16;
 const SWIPE_DISTANCE_THRESHOLD = 44;
 const SWIPE_VELOCITY_THRESHOLD = 360;
 const MONTH_SLIDE_MS = 130;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const getCalendarDayOffset = (date: Date, today: Date): number => {
+  const dateUtc = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+
+  return Math.round((dateUtc - todayUtc) / DAY_MS);
+};
+
+const formatCalendarDayOffset = (dayOffset: number): string => {
+  if (dayOffset >= 0) {
+    return `${dayOffset}d`;
+  }
+
+  return `${Math.abs(dayOffset)}d ago`;
+};
+
+const formatCalendarDayOffsetAccessibilityLabel = (dayOffset: number): string => {
+  if (dayOffset === 0) {
+    return 'Today';
+  }
+
+  const dayCount = Math.abs(dayOffset);
+  const unit = dayCount === 1 ? 'day' : 'days';
+  return dayOffset > 0
+    ? `${dayCount} ${unit} later`
+    : `${dayCount} ${unit} ago`;
+};
 
 type SimpleCalendarModalProps = {
   visible: boolean;
@@ -86,10 +114,17 @@ const CalendarMonthPane = React.memo(function CalendarMonthPane({
               const selected = isSameCalendarDay(cell.date, selectedDate);
               const isToday = isSameCalendarDay(cell.date, today);
               const showWeekLabel = dayIndex === 0;
+              const dayOffset = getCalendarDayOffset(cell.date, today);
+              const dayAccessibilityLabel = cell.date.toLocaleDateString(undefined, {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+              });
 
               return (
                 <View key={cell.date.toISOString()} style={styles.dayColumn}>
                   <Pressable
+                    accessibilityLabel={`${dayAccessibilityLabel}, ${formatCalendarDayOffsetAccessibilityLabel(dayOffset)}`}
                     accessibilityRole="button"
                     accessibilityState={{ selected }}
                     onPress={() => onSelectDay(cell.date)}
@@ -110,6 +145,15 @@ const CalendarMonthPane = React.memo(function CalendarMonthPane({
                         ]}
                       >
                         {cell.date.getDate()}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.dayOffsetText,
+                          !cell.inCurrentMonth && styles.dayOffsetTextMuted,
+                          selected && styles.dayOffsetTextSelected,
+                        ]}
+                      >
+                        {formatCalendarDayOffset(dayOffset)}
                       </Text>
                     </View>
                   </Pressable>
@@ -498,6 +542,7 @@ const styles = StyleSheet.create({
     color: '#1F1B17',
     fontSize: 15,
     fontWeight: '500',
+    lineHeight: 17,
   },
   dayTextMuted: {
     color: '#D4CCC4',
@@ -505,6 +550,18 @@ const styles = StyleSheet.create({
   dayTextSelected: {
     color: '#FFFFFF',
     fontWeight: '600',
+  },
+  dayOffsetText: {
+    color: '#9A928A',
+    fontSize: 7,
+    fontWeight: '500',
+    lineHeight: 8,
+  },
+  dayOffsetTextMuted: {
+    color: '#DDD6CF',
+  },
+  dayOffsetTextSelected: {
+    color: '#E8EDFF',
   },
   weekNumber: {
     color: '#C4BCB4',

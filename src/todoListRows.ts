@@ -445,6 +445,15 @@ export const compareTodosBySortMode = (
     );
   }
 
+  if (sortMode === 'newest') {
+    return (
+      second.createdAt - first.createdAt ||
+      second.updatedAt - first.updatedAt ||
+      first.text.localeCompare(second.text) ||
+      first.id.localeCompare(second.id)
+    );
+  }
+
   if (sortMode === 'alphabetical') {
     return first.text.localeCompare(second.text) || compareTodosByFallback(first, second);
   }

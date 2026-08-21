@@ -6,10 +6,13 @@ import {
   getDoc,
   getDocFromServer,
   getDocs,
+  increment,
+  onSnapshot,
   setDoc,
   updateDoc,
   type DocumentData,
   type Firestore,
+  type Unsubscribe,
 } from 'firebase/firestore';
 
 import {
@@ -49,7 +52,9 @@ const FIREBASE_WRITE_RETRY_BASE_DELAY_MS = 1000;
 const FIREBASE_WRITE_RETRY_MAX_DELAY_MS = 30000;
 
 type FirebaseRemoteMeta = {
+  reason: string | null;
   schemaVersion: number;
+  todoRevision: number;
   updatedAt: number;
 };
 
@@ -191,6 +196,10 @@ const notificationLogDocRef = (database: Firestore, userId: string) =>
 const todosSnapshotDocRef = (database: Firestore, userId: string) =>
   metaDocRef(database, userId, 'todosSnapshot');
 
+const firebaseReasonTouchesTodos = (reason: string | null) => (
+  reason !== 'notification-log-save'
+);
+
 const touchRemoteMeta = async (
   database: Firestore,
   userId: string,
@@ -198,12 +207,16 @@ const touchRemoteMeta = async (
   localChangeSyncedAt = 0,
 ) => {
   const updatedAt = Date.now();
+  const touchesTodos = firebaseReasonTouchesTodos(reason);
 
   await setDoc(
     syncMetaDocRef(database, userId),
     {
       reason,
       schemaVersion: FIREBASE_SCHEMA_VERSION,
+      // Only todo mutations advance this counter. Notification-only writes can
+      // update the shared sync document without forcing every device to pull todos.
+      ...(touchesTodos ? { todoRevision: increment(1) } : {}),
       updatedAt,
       updatedAtIso: new Date(updatedAt).toISOString(),
     },
@@ -310,7 +323,11 @@ const normalizeRemoteMeta = (data: DocumentData | undefined): FirebaseRemoteMeta
     : 0;
 
   return {
+    reason: typeof data.reason === 'string' ? data.reason : null,
     schemaVersion: typeof data.schemaVersion === 'number' ? data.schemaVersion : 0,
+    todoRevision: typeof data.todoRevision === 'number' && Number.isFinite(data.todoRevision)
+      ? data.todoRevision
+      : 0,
     updatedAt,
   };
 };
@@ -828,6 +845,140 @@ export const loadFirebaseTodosFromBackend = async (): Promise<FirebaseTodosPullR
     remoteUpdatedAt,
     status: 'loaded-remote',
     todos: remote.todos,
+  };
+};
+
+export const subscribeFirebaseTodoChanges = async (
+  onChange: (result: Extract<FirebaseTodosPullResult, { status: 'loaded-remote' }>) => void,
+  onError: (error: unknown) => void = () => undefined,
+  initialRemoteUpdatedAt = 0,
+): Promise<Unsubscribe> => {
+  if (!isFirebaseConfigured()) {
+    return () => undefined;
+  }
+
+  const userId = await getLocalTodoFirebaseDataUserId();
+  const database = getLocalTodoFirestore();
+  let active = true;
+  let lastObservedKey = '';
+  let pendingRemoteUpdatedAt = 0;
+  let pullInFlight = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  const locallyAuthoredKeys = new Set<string>();
+
+  // Keep the real-time listener on the tiny sync marker. The compact todo
+  // snapshot is read only after another client advances the todo marker.
+  const scheduleRemotePull = () => {
+    if (!active || pullInFlight || pendingRemoteUpdatedAt <= 0) {
+      return;
+    }
+
+    pullInFlight = true;
+    const requestedRemoteUpdatedAt = pendingRemoteUpdatedAt;
+    pendingRemoteUpdatedAt = 0;
+
+    firebaseWriteQueue
+      .then(() => loadFirebaseTodosFromBackend())
+      .then((result) => {
+        if (!active) {
+          return;
+        }
+
+        if (result.status === 'loaded-remote') {
+          onChange(result);
+          return;
+        }
+
+        if (result.reason === 'local-pending') {
+          pendingRemoteUpdatedAt = Math.max(
+            pendingRemoteUpdatedAt,
+            requestedRemoteUpdatedAt,
+          );
+        }
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+
+        pendingRemoteUpdatedAt = Math.max(
+          pendingRemoteUpdatedAt,
+          requestedRemoteUpdatedAt,
+        );
+        onError(error);
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          scheduleRemotePull();
+        }, FIREBASE_WRITE_RETRY_BASE_DELAY_MS * 5);
+      })
+      .finally(() => {
+        pullInFlight = false;
+        if (active && pendingRemoteUpdatedAt > 0 && !retryTimer) {
+          scheduleRemotePull();
+        }
+      });
+  };
+
+  const unsubscribe = onSnapshot(
+    syncMetaDocRef(database, userId),
+    { includeMetadataChanges: true },
+    (syncSnapshot) => {
+      if (!active) {
+        return;
+      }
+
+      const remoteMeta = normalizeRemoteMeta(syncSnapshot.data());
+      if (!remoteMeta) {
+        return;
+      }
+
+      const remoteKey = [
+        remoteMeta.todoRevision,
+        remoteMeta.updatedAt,
+        remoteMeta.reason ?? '',
+      ].join(':');
+
+      if (syncSnapshot.metadata.hasPendingWrites) {
+        locallyAuthoredKeys.add(remoteKey);
+        return;
+      }
+
+      if (syncSnapshot.metadata.fromCache) {
+        return;
+      }
+
+      if (locallyAuthoredKeys.delete(remoteKey)) {
+        lastObservedKey = remoteKey;
+        return;
+      }
+
+      if (remoteKey === lastObservedKey) {
+        return;
+      }
+      lastObservedKey = remoteKey;
+
+      if (
+        remoteMeta.updatedAt === initialRemoteUpdatedAt ||
+        !firebaseReasonTouchesTodos(remoteMeta.reason)
+      ) {
+        return;
+      }
+
+      pendingRemoteUpdatedAt = Math.max(
+        pendingRemoteUpdatedAt,
+        remoteMeta.updatedAt,
+      );
+      scheduleRemotePull();
+    },
+    onError,
+  );
+
+  return () => {
+    active = false;
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+    }
+    unsubscribe();
   };
 };
 

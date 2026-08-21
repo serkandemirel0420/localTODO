@@ -147,6 +147,7 @@ import {
   queueFirebaseNotificationLogSave,
   queueFirebaseSettingsSave,
   setFirebaseRemoteWritesEnabled,
+  subscribeFirebaseTodoChanges,
   syncFirebaseAppDataFromLocalSnapshot,
   type FirebaseAppDataSnapshot,
 } from './src/firebase/firebaseRemoteStore';
@@ -5708,6 +5709,7 @@ export default function App() {
   const [firebaseInitialSyncReady, setFirebaseInitialSyncReady] = useState(
     () => !isFirebaseConfigured(),
   );
+  const [firebaseLiveSyncReady, setFirebaseLiveSyncReady] = useState(false);
   const [firebaseSettingsBackupBusy, setFirebaseSettingsBackupBusy] = useState(false);
   const [firebaseSettingsRestoreBusy, setFirebaseSettingsRestoreBusy] = useState(false);
   const [firebaseSettingsStatus, setFirebaseSettingsStatus] = useState(() => (
@@ -6067,6 +6069,7 @@ export default function App() {
   const didReadInitialWidgetUrlRef = useRef(false);
   const lastHandledWidgetUrlRef = useRef({ timestamp: 0, url: '' });
   const firebaseInitialSyncStartedRef = useRef(false);
+  const firebaseLastAppliedRemoteAtRef = useRef(0);
   const settingsAutoSaveInitializedRef = useRef(false);
   todosRef.current = todos;
   dateLabelDisplayModeRef.current = dateLabelDisplayMode;
@@ -6591,12 +6594,19 @@ export default function App() {
     return appliedSettings;
   }, []);
 
-  const applyFirebaseAppDataSnapshot = useCallback((snapshot: FirebaseAppDataSnapshot) => {
+  const applyFirebaseAppDataSnapshot = useCallback((
+    snapshot: FirebaseAppDataSnapshot,
+    remoteUpdatedAt = 0,
+  ) => {
     const remoteTodos = removeInitialSeedTodos(snapshot.todos);
     const remoteNotificationLogEntries = normalizeNotificationLogEntries(
       snapshot.notificationLogEntries,
     );
 
+    firebaseLastAppliedRemoteAtRef.current = Math.max(
+      firebaseLastAppliedRemoteAtRef.current,
+      remoteUpdatedAt,
+    );
     itemSearchResultsCacheRef.current.clear();
     todosRef.current = remoteTodos;
     pendingDeleteIdsRef.current = new Set();
@@ -6608,6 +6618,27 @@ export default function App() {
     notificationLogStore
       .replaceAll(remoteNotificationLogEntries)
       .catch(() => undefined);
+    reconcileTodoAlarms(remoteTodos).catch(() => undefined);
+  }, []);
+
+  const applyFirebaseTodosSnapshot = useCallback((
+    remoteTodosSnapshot: Todo[],
+    remoteUpdatedAt: number,
+  ) => {
+    const remoteTodos = removeInitialSeedTodos(remoteTodosSnapshot);
+    const remoteTodoIds = new Set(remoteTodos.map((todo) => todo.id));
+
+    firebaseLastAppliedRemoteAtRef.current = Math.max(
+      firebaseLastAppliedRemoteAtRef.current,
+      remoteUpdatedAt,
+    );
+    itemSearchResultsCacheRef.current.clear();
+    todosRef.current = remoteTodos;
+    setSelectedTodoIds((current) => new Set(
+      [...current].filter((id) => remoteTodoIds.has(id)),
+    ));
+    setTodos(remoteTodos);
+    localTodoStore.replaceAllLocal(remoteTodos).catch(() => undefined);
     reconcileTodoAlarms(remoteTodos).catch(() => undefined);
   }, []);
 
@@ -6912,18 +6943,31 @@ export default function App() {
     })
       .then((result) => {
         if (!alive || result.status === 'disabled' || result.status === 'skipped') {
+          if (result.status === 'skipped') {
+            firebaseLastAppliedRemoteAtRef.current = Math.max(
+              firebaseLastAppliedRemoteAtRef.current,
+              result.remoteUpdatedAt,
+            );
+          }
           initialSyncCompleted = true;
           setFirebaseRemoteWritesEnabled(true);
+          if (alive) {
+            setFirebaseLiveSyncReady(true);
+          }
           return;
         }
 
-        applyFirebaseAppDataSnapshot(result.snapshot);
+        applyFirebaseAppDataSnapshot(result.snapshot, result.remoteUpdatedAt);
         initialSyncCompleted = true;
         setFirebaseRemoteWritesEnabled(true);
+        setFirebaseLiveSyncReady(true);
       })
       .catch(() => {
         initialSyncCompleted = true;
         setFirebaseRemoteWritesEnabled(true);
+        if (alive) {
+          setFirebaseLiveSyncReady(true);
+        }
       })
       .finally(() => {
         if (alive && initialSyncCompleted) {
@@ -6942,6 +6986,41 @@ export default function App() {
     notificationLogLoaded,
     settingsLoaded,
   ]);
+
+  useEffect(() => {
+    if (!firebaseLiveSyncReady) {
+      return undefined;
+    }
+
+    let alive = true;
+    let unsubscribe: (() => void) | null = null;
+
+    subscribeFirebaseTodoChanges(
+      (result) => {
+        if (!alive) {
+          return;
+        }
+
+        applyFirebaseTodosSnapshot(result.todos, result.remoteUpdatedAt);
+      },
+      () => undefined,
+      firebaseLastAppliedRemoteAtRef.current,
+    )
+      .then((nextUnsubscribe) => {
+        if (!alive) {
+          nextUnsubscribe();
+          return;
+        }
+
+        unsubscribe = nextUnsubscribe;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      alive = false;
+      unsubscribe?.();
+    };
+  }, [applyFirebaseTodosSnapshot, firebaseLiveSyncReady]);
 
   const persistListMenuTree = useCallback((tree: ListMenuNode[]) => {
     persistAppSettings({ listMenuTree: cloneListMenuTree(tree) });

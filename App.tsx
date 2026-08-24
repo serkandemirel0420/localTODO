@@ -8797,13 +8797,25 @@ export default function App() {
     }
 
     const frame = requestAnimationFrame(() => {
-      const input = createDrawerFocusedField === 'content'
-        ? createContentInputRef.current
-        : createInputRef.current;
-      const selection = createDrawerFocusedField === 'content'
-        ? createDraftContentSelectionRef.current
-        : createDraftSelectionRef.current;
+      if (createDrawerFocusedField === 'content') {
+        const input = createContentInputRef.current;
+        const selection = createDraftContentSelectionRef.current;
 
+        // The editable input mounts only after the initial top-position preview.
+        // Apply its caret before focusing so Android never scrolls the new native
+        // multiline view to the end, then reinforce it after focus settles.
+        input?.setSelection(selection.start, selection.end);
+        input?.setNativeProps({ selection });
+        input?.focus();
+        requestAnimationFrame(() => {
+          input?.setSelection(selection.start, selection.end);
+          input?.setNativeProps({ selection });
+        });
+        return;
+      }
+
+      const input = createInputRef.current;
+      const selection = createDraftSelectionRef.current;
       input?.focus();
       requestAnimationFrame(() => {
         input?.setNativeProps({ selection });
@@ -8823,13 +8835,27 @@ export default function App() {
       return undefined;
     }
 
+    createDraftContentSelectionRef.current = { end: 0, start: 0 };
+    createInitialContentScrollRef.current?.scrollTo({ animated: false, y: 0 });
+    createContentInputRef.current?.setSelection(0, 0);
+    createContentInputRef.current?.setNativeProps({
+      selection: { end: 0, start: 0 },
+    });
+
     const frame = requestAnimationFrame(() => {
       createDraftContentSelectionRef.current = { end: 0, start: 0 };
       createInitialContentScrollRef.current?.scrollTo({ animated: false, y: 0 });
       createContentInputRef.current?.setSelection(0, 0);
+      createContentInputRef.current?.setNativeProps({
+        selection: { end: 0, start: 0 },
+      });
     });
     return () => cancelAnimationFrame(frame);
-  }, [createDrawerEditingTodoId, createDrawerVisible]);
+  }, [
+    createDrawerEditingTodoId,
+    createDrawerVisible,
+    createEditorInitialContentTapTarget,
+  ]);
 
   useEffect(() => () => {
     if (createInputFocusTimerRef.current) {

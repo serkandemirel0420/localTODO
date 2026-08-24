@@ -63,6 +63,10 @@ import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { FilterConfigScreen } from './src/components/FilterConfigScreen';
 import { QuickPresetNav } from './src/components/QuickPresetNav';
 import { SimpleCalendarModal } from './src/components/SimpleCalendarModal';
+import {
+  normalizeTodoContentUrl,
+  TodoContentLinkText,
+} from './src/components/TodoContentLinkText';
 import { TodoMetaTags } from './src/components/TodoMetaTags';
 import { TodoRow } from './src/components/TodoRow';
 
@@ -248,6 +252,7 @@ import {
   estimateTodoListOffsetForId,
   flattenTodoListRows,
   TODO_GROUPED_ROW_ESTIMATE,
+  TODO_GROUPED_ROW_BATCH_SIZE,
   TODO_LIST_CONTENT_TOP_PADDING,
   TODO_LIST_ROW_GAP,
   TODO_ROW_DIVIDER_HEIGHT,
@@ -1954,6 +1959,10 @@ const REPEATING_TODO_COMPLETION_FEEDBACK_MS = 420;
 const UNDO_HISTORY_LIMIT = APP_HISTORY_LIMIT;
 const HEADER_UNDO_VISIBLE_MS = 10000;
 const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
+// A grouped FlashList cell can contain a full batch. Keep the next batch
+// engaged so a fast fling cannot outrun rendering and briefly expose a blank.
+const TODO_LIST_DRAW_DISTANCE =
+  TODO_GROUPED_ROW_ESTIMATE * TODO_GROUPED_ROW_BATCH_SIZE;
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
 const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
 const WIDGET_NEW_ITEM_FOCUS_DELAYS_MS = [120, 480, 1100] as const;
@@ -3244,6 +3253,59 @@ type NotificationLogSwipeRowProps = {
   reminderKind: 'daily' | 'one-time' | 'other';
   onDelete: () => void;
   onPress: () => void;
+};
+
+type NotificationLogSectionKey = 'habits' | 'repeating' | 'normal';
+
+type NotificationLogListRow =
+  | {
+      count: number;
+      id: string;
+      isCollapsed: boolean;
+      label: string;
+      sectionKey: NotificationLogSectionKey;
+      type: 'sectionHeader';
+    }
+  | {
+      entry: NotificationLogEntry;
+      id: string;
+      type: 'entry';
+    };
+
+const NOTIFICATION_LOG_SECTIONS: Array<{
+  key: NotificationLogSectionKey;
+  label: string;
+}> = [
+  { key: 'normal', label: 'Normal' },
+  { key: 'habits', label: 'Habits' },
+  { key: 'repeating', label: 'Repeating' },
+];
+
+const REPEATING_NOTIFICATION_SUBTITLE_PATTERN = /\((Daily|Weekly|Monthly|Yearly)\)$/i;
+
+const getNotificationLogSectionKey = (
+  entry: NotificationLogEntry,
+  linkedTodo: Todo | null,
+): NotificationLogSectionKey => {
+  if (
+    entry.requestIdentifier.includes(':habit:') ||
+    entry.subtitle.toLocaleLowerCase().startsWith('every ')
+  ) {
+    return 'habits';
+  }
+
+  if (REPEATING_NOTIFICATION_SUBTITLE_PATTERN.test(entry.subtitle)) {
+    return 'repeating';
+  }
+
+  const reminder = linkedTodo
+    ? decodeTodoReminder(linkedTodo.filters.reminder)
+    : null;
+  if (reminder?.habitHours) {
+    return 'habits';
+  }
+
+  return reminder && reminder.repeat !== 'none' ? 'repeating' : 'normal';
 };
 
 function NotificationLogSwipeRow({
@@ -5705,6 +5767,8 @@ export default function App() {
     createEmptySearchQuickFilters,
   );
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
+  const [collapsedNotificationSections, setCollapsedNotificationSections] =
+    useState<Set<NotificationLogSectionKey>>(new Set());
   const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
   const [firebaseInitialSyncReady, setFirebaseInitialSyncReady] = useState(
     () => !isFirebaseConfigured(),
@@ -5728,8 +5792,8 @@ export default function App() {
   const [createDrawerExpanded, setCreateDrawerExpanded] = useState(false);
   const [createDrawerFocusedField, setCreateDrawerFocusedField] =
     useState<CreateDrawerFocusedField>('title');
-  const [createEditorRedirectFirstContentTap, setCreateEditorRedirectFirstContentTap] =
-    useState(false);
+  const [createEditorInitialContentTapTarget, setCreateEditorInitialContentTapTarget] =
+    useState<CreateDrawerFocusedField | null>(null);
   const [createEditorSoftInputEnabled, setCreateEditorSoftInputEnabled] = useState(true);
   const [createDraftContent, setCreateDraftContent] = useState('');
   const [createDraftText, setCreateDraftText] = useState('');
@@ -5790,6 +5854,7 @@ export default function App() {
     end: 0,
     start: 0,
   });
+  const [activeTodoContentUrl, setActiveTodoContentUrl] = useState<string | null>(null);
   const [latestWidgetModalTodoId, setLatestWidgetModalTodoId] = useState<string | null>(null);
   const [latestWidgetLocateTodoId, setLatestWidgetLocateTodoId] = useState<string | null>(null);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
@@ -8222,12 +8287,36 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
+  const closeTodoContentLinkOptions = useCallback(() => {
+    setActiveTodoContentUrl(null);
+  }, []);
+
+  const showTodoContentLinkOptions = useCallback((url: string) => {
+    setActiveTodoContentUrl(normalizeTodoContentUrl(url));
+    triggerSubtleHaptic();
+  }, []);
+
+  const openActiveTodoContentLink = useCallback(() => {
+    if (!activeTodoContentUrl) {
+      return;
+    }
+
+    const url = activeTodoContentUrl;
+    setActiveTodoContentUrl(null);
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Could not open link', url);
+    });
+  }, [activeTodoContentUrl]);
+
   const openDeletedTodoDetailModal = useCallback((id: string) => {
     setActiveDeletedTodoDetailId(id);
     triggerSubtleHaptic();
   }, []);
 
-  const openTodoEditor = useCallback((todo: Todo) => {
+  const openTodoEditor = useCallback((
+    todo: Todo,
+    initialField: CreateDrawerFocusedField = 'title',
+  ) => {
     latestWidgetEditorReturnTodoIdRef.current = null;
     const nextFilters = getCopiedTodoFilters(todo);
     createDraftCopiesTodoSettingsRef.current = false;
@@ -8245,8 +8334,8 @@ export default function App() {
     setActiveDeletedTodoDetailId(null);
     setCreateDrawerEditingTodoId(todo.id);
     setCreateDrawerExpanded(false);
-    setCreateDrawerFocusedField('title');
-    setCreateEditorRedirectFirstContentTap(true);
+    setCreateDrawerFocusedField(initialField);
+    setCreateEditorInitialContentTapTarget(initialField);
     setCreateEditorSoftInputEnabled(false);
     createEditorKeyboardOpeningRef.current = false;
     setCreateDrawerPicker(null);
@@ -8270,7 +8359,10 @@ export default function App() {
     setCreateDrawerVisible(true);
   }, []);
 
-  const openTodoDetailModal = useCallback((id: string) => {
+  const openTodoDetailModal = useCallback((
+    id: string,
+    initialField: CreateDrawerFocusedField = 'title',
+  ) => {
     if (pendingDeleteIds.has(id)) {
       return;
     }
@@ -8290,7 +8382,7 @@ export default function App() {
     exitTodoSelectMode();
 
     if (!todo.done) {
-      openTodoEditor(todo);
+      openTodoEditor(todo, initialField);
       triggerSubtleHaptic();
       return;
     }
@@ -8776,7 +8868,7 @@ export default function App() {
       : getRememberedCreateDraftFilters(listMenuTree, filters);
     const nextTags = normalizedFilters.tag;
     setCreateDrawerEditingTodoId(null);
-    setCreateEditorRedirectFirstContentTap(false);
+    setCreateEditorInitialContentTapTarget(null);
     setCreateEditorSoftInputEnabled(true);
     setCreateCommandPaletteVisible(false);
     setCreateCommandQuery('');
@@ -9440,15 +9532,13 @@ export default function App() {
         .map((id) => todosById.get(id))
         .filter((todo): todo is Todo => Boolean(todo))
         .filter((todo) => !pendingDeleteIds.has(todo.id))
+        .filter((todo) => !hideDoneTodosForCurrentView || !todo.done)
         .filter((todo) => (
           !itemSearchUsesPresetScope ||
-          (
-            (!hideDoneTodosForCurrentView || !todo.done) &&
-            todoMatchesPreparedFilters(
-              todo,
-              activePresetBaseFilterMatch,
-              dateStatusNow,
-            )
+          todoMatchesPreparedFilters(
+            todo,
+            activePresetBaseFilterMatch,
+            dateStatusNow,
           )
         ))
         .filter((todo) => todoMatchesSearchQuickFilters(
@@ -10129,26 +10219,26 @@ export default function App() {
       return;
     }
 
-    const shouldRedirectContentToTitle =
-      field === 'content' && createEditorRedirectFirstContentTap;
-    const focusedField = shouldRedirectContentToTitle ? 'title' : field;
+    const focusedField = field === 'content' && createEditorInitialContentTapTarget
+      ? createEditorInitialContentTapTarget
+      : field;
     const input = field === 'content'
       ? createContentInputRef.current
       : createInputRef.current;
     createEditorKeyboardOpeningRef.current = true;
     input?.blur();
     createDrawerFocusPendingRef.current = true;
-    setCreateEditorRedirectFirstContentTap(false);
+    setCreateEditorInitialContentTapTarget(null);
     setCreateDrawerFocusedField(focusedField);
     setCreateEditorSoftInputEnabled(true);
   }, [
     createDrawerEditingTodoId,
-    createEditorRedirectFirstContentTap,
+    createEditorInitialContentTapTarget,
     createEditorSoftInputEnabled,
   ]);
 
   const handleCreateEditorFirstContentTap = useCallback(() => {
-    if (!createDrawerEditingTodoId || !createEditorRedirectFirstContentTap) {
+    if (!createDrawerEditingTodoId || !createEditorInitialContentTapTarget) {
       return;
     }
 
@@ -10156,12 +10246,12 @@ export default function App() {
     createEditorKeyboardOpeningRef.current = true;
     createInputRef.current?.blur();
     createDrawerFocusPendingRef.current = true;
-    setCreateEditorRedirectFirstContentTap(false);
-    setCreateDrawerFocusedField('title');
+    setCreateEditorInitialContentTapTarget(null);
+    setCreateDrawerFocusedField(createEditorInitialContentTapTarget);
     setCreateEditorSoftInputEnabled(true);
   }, [
     createDrawerEditingTodoId,
-    createEditorRedirectFirstContentTap,
+    createEditorInitialContentTapTarget,
   ]);
 
   const cancelCreateEditorTouch = useCallback(() => {
@@ -19153,6 +19243,7 @@ export default function App() {
                 onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
                 onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
                 onEnterSelectMode={enterTodoSelectMode}
+                onOpenContentLink={showTodoContentLinkOptions}
                 onOpenDetail={openTodoDetailModal}
                 onOpenMenu={openMenuForTodoAction}
                 onSetDone={setTodoDone}
@@ -19241,6 +19332,7 @@ export default function App() {
                 onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
                 onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
                 onEnterSelectMode={enterTodoSelectMode}
+                onOpenContentLink={showTodoContentLinkOptions}
                 onOpenDetail={openTodoDetailModal}
                 onOpenMenu={openMenuForTodoAction}
                 onSetDone={setTodoDone}
@@ -19436,6 +19528,7 @@ export default function App() {
                 onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
                 onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
                 onEnterSelectMode={enterTodoSelectMode}
+                onOpenContentLink={showTodoContentLinkOptions}
                 onOpenDetail={openTodoDetailModal}
                 onOpenMenu={openMenuForTodoAction}
                 onSetDone={setTodoDone}
@@ -19612,6 +19705,7 @@ export default function App() {
                     onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
                     onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
                     onEnterSelectMode={enterTodoSelectMode}
+                    onOpenContentLink={showTodoContentLinkOptions}
                     onOpenDetail={openTodoDetailModal}
                     onOpenMenu={openMenuForTodoAction}
                     onSetDone={setTodoDone}
@@ -19671,6 +19765,7 @@ export default function App() {
             onCreateFromSettingsHoldEnd={hideCreateFromSettingsCue}
             onCreateFromSettingsHoldStart={showCreateFromSettingsCue}
             onEnterSelectMode={enterTodoSelectMode}
+            onOpenContentLink={showTodoContentLinkOptions}
             onOpenDetail={openTodoDetailModal}
             onOpenMenu={openMenuForTodoAction}
             onSetDone={setTodoDone}
@@ -19721,6 +19816,7 @@ export default function App() {
       itemSearchHighlightQuery,
       showOverdueMetaTags,
       showCreateFromSettingsCue,
+      showTodoContentLinkOptions,
       toggleTodoGroupCollapsed,
       toggleTodoSelection,
       todoSelectMode,
@@ -19728,9 +19824,91 @@ export default function App() {
     ],
   );
 
+  const toggleNotificationSection = useCallback((sectionKey: NotificationLogSectionKey) => {
+    setCollapsedNotificationSections((current) => {
+      const next = new Set(current);
+      if (next.has(sectionKey)) {
+        next.delete(sectionKey);
+      } else {
+        next.add(sectionKey);
+      }
+      return next;
+    });
+    triggerSubtleHaptic();
+  }, []);
+
+  const notificationLogListRows = useMemo<NotificationLogListRow[]>(() => {
+    if (notificationLogEntries.length === 0) {
+      return [];
+    }
+
+    const entriesBySection: Record<NotificationLogSectionKey, NotificationLogEntry[]> = {
+      habits: [],
+      repeating: [],
+      normal: [],
+    };
+
+    notificationLogEntries.forEach((entry) => {
+      const linkedTodo = entry.todoId ? todosById.get(entry.todoId) ?? null : null;
+      const sectionKey = getNotificationLogSectionKey(entry, linkedTodo);
+
+      entriesBySection[sectionKey].push(entry);
+    });
+
+    return NOTIFICATION_LOG_SECTIONS.flatMap((section) => {
+      const isCollapsed = collapsedNotificationSections.has(section.key);
+      return [
+        {
+          count: entriesBySection[section.key].length,
+          id: `notification-section-${section.key}`,
+          isCollapsed,
+          label: section.label,
+          sectionKey: section.key,
+          type: 'sectionHeader' as const,
+        },
+        ...(!isCollapsed
+          ? entriesBySection[section.key].map((entry) => ({
+              entry,
+              id: `notification-entry-${entry.id}`,
+              type: 'entry' as const,
+            }))
+          : []),
+      ];
+    });
+  }, [collapsedNotificationSections, notificationLogEntries, todosById]);
+
   const renderNotificationLogItem = useCallback(
-    ({ item }: { item: NotificationLogEntry }) => {
-      const linkedTodo = item.todoId ? todosById.get(item.todoId) : null;
+    ({ item }: { item: NotificationLogListRow }) => {
+      if (item.type === 'sectionHeader') {
+        return (
+          <Pressable
+            accessibilityLabel={`${item.label}, ${item.count} ${
+              item.count === 1 ? 'notification' : 'notifications'
+            }`}
+            accessibilityHint="Tap to expand or collapse this notification group"
+            accessibilityRole="button"
+            accessibilityState={{ expanded: !item.isCollapsed }}
+            onPress={() => toggleNotificationSection(item.sectionKey)}
+            style={({ pressed }) => [
+              styles.notificationSectionHeader,
+              pressed && styles.notificationSectionHeaderPressed,
+            ]}
+          >
+            <Text style={styles.notificationSectionTitle}>{item.label}</Text>
+            <View style={styles.notificationSectionMeta}>
+              <Text style={styles.notificationSectionCount}>{item.count}</Text>
+              <Ionicons
+                color={THEME_TEXT_SECONDARY}
+                name={item.isCollapsed ? 'chevron-down' : 'chevron-up'}
+                size={16}
+              />
+            </View>
+          </Pressable>
+        );
+      }
+
+      const entry = item.entry;
+      const linkedTodo = entry.todoId ? todosById.get(entry.todoId) : null;
       const reminder = linkedTodo
         ? decodeTodoReminder(linkedTodo.filters.reminder)
         : null;
@@ -19742,14 +19920,19 @@ export default function App() {
 
       return (
         <MemoizedNotificationLogSwipeRow
-          entry={item}
+          entry={entry}
           reminderKind={reminderKind}
-          onDelete={() => deleteNotificationLogEntry(item.id)}
-          onPress={() => openNotificationLogEntry(item)}
+          onDelete={() => deleteNotificationLogEntry(entry.id)}
+          onPress={() => openNotificationLogEntry(entry)}
         />
       );
     },
-    [deleteNotificationLogEntry, openNotificationLogEntry, todosById],
+    [
+      deleteNotificationLogEntry,
+      openNotificationLogEntry,
+      todosById,
+      toggleNotificationSection,
+    ],
   );
 
   const activePresetIsVisibleSearchScope =
@@ -20305,7 +20488,7 @@ export default function App() {
                   styles.notificationListContent,
                   notificationLogEntries.length === 0 && styles.notificationListContentEmpty,
                 ]}
-                data={notificationLogEntries}
+                data={notificationLogListRows}
                 keyboardShouldPersistTaps="handled"
                 keyExtractor={(item) => item.id}
                 ListEmptyComponent={
@@ -20390,7 +20573,7 @@ export default function App() {
                     styles.emptyListContent,
                 ]}
                 data={appTodoListData}
-                drawDistance={TODO_GROUPED_ROW_ESTIMATE}
+                drawDistance={TODO_LIST_DRAW_DISTANCE}
                 extraData={todoListExtraData}
                 getItemType={getAppTodoListItemType}
                 keyboardDismissMode="on-drag"
@@ -21917,31 +22100,49 @@ export default function App() {
                       <Text style={styles.todoDetailContentPlaceholder}>Content</Text>
                     </View>
                   ) : null}
-                  <TextInput
-                    ref={todoDetailContentInputRef}
-                    autoCapitalize="sentences"
-                    autoCorrect
-                    multiline
-                    onChangeText={handleActiveTodoDetailContentChange}
-                    onSelectionChange={(event) => {
-                      setActiveTodoDetailContentSelection(event.nativeEvent.selection);
-                    }}
-                    editable={activeTodoDetailCanEdit}
-                    placeholder="Content"
-                    placeholderTextColor="#B5ADA5"
-                    numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
-                    selection={activeTodoDetailContentSelection}
-                    selectionColor={TODO_DETAIL_SELECTION_COLOR}
-                    scrollEnabled
-                    style={[
-                      styles.todoDetailContentInput,
-                      activeTodoDetailExpanded
-                        ? styles.todoDetailContentInputExpanded
-                        : { maxHeight: todoDetailContentInputMaxHeight },
-                    ]}
-                    textAlignVertical="top"
-                    value={activeTodoDetailDraftContent}
-                  />
+                  {activeTodoDetailCanEdit ? (
+                    <TextInput
+                      ref={todoDetailContentInputRef}
+                      autoCapitalize="sentences"
+                      autoCorrect
+                      multiline
+                      onChangeText={handleActiveTodoDetailContentChange}
+                      onSelectionChange={(event) => {
+                        setActiveTodoDetailContentSelection(event.nativeEvent.selection);
+                      }}
+                      placeholder="Content"
+                      placeholderTextColor="#B5ADA5"
+                      numberOfLines={TODO_DETAIL_CONTENT_VISIBLE_LINES}
+                      selection={activeTodoDetailContentSelection}
+                      selectionColor={TODO_DETAIL_SELECTION_COLOR}
+                      scrollEnabled
+                      style={[
+                        styles.todoDetailContentInput,
+                        activeTodoDetailExpanded
+                          ? styles.todoDetailContentInputExpanded
+                          : { maxHeight: todoDetailContentInputMaxHeight },
+                      ]}
+                      textAlignVertical="top"
+                      value={activeTodoDetailDraftContent}
+                    />
+                  ) : (
+                    <ScrollView
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={false}
+                      style={[
+                        styles.todoDetailReadonlyContentScroller,
+                        activeTodoDetailExpanded
+                          ? styles.todoDetailContentInputExpanded
+                          : { maxHeight: todoDetailContentInputMaxHeight },
+                      ]}
+                    >
+                      <TodoContentLinkText
+                        onOpenLinkOptions={showTodoContentLinkOptions}
+                        style={styles.todoDetailContentInput}
+                        text={activeTodoDetailDraftContent}
+                      />
+                    </ScrollView>
+                  )}
                 </View>
                 <View style={styles.todoDetailFooterActions}>
                   <Pressable
@@ -22077,9 +22278,14 @@ export default function App() {
                     {latestWidgetModalTodo.text}
                   </Text>
                   {latestWidgetModalTodo.content.trim().length > 0 ? (
-                    <Text numberOfLines={5} style={styles.latestWidgetModalContent}>
-                      {formatTodoDetailDraftContentForEditing(latestWidgetModalTodo.content).trim()}
-                    </Text>
+                    <TodoContentLinkText
+                      numberOfLines={5}
+                      onOpenLinkOptions={showTodoContentLinkOptions}
+                      style={styles.latestWidgetModalContent}
+                      text={formatTodoDetailDraftContentForEditing(
+                        latestWidgetModalTodo.content,
+                      ).trim()}
+                    />
                   ) : null}
                 </View>
 
@@ -22182,9 +22388,11 @@ export default function App() {
                   style={styles.deletedTodoDetailContentScroller}
                   showsVerticalScrollIndicator={false}
                 >
-                  <Text style={styles.deletedTodoDetailContentText}>
-                    {activeDeletedTodoDetail.content.trim() || 'No content'}
-                  </Text>
+                  <TodoContentLinkText
+                    onOpenLinkOptions={showTodoContentLinkOptions}
+                    style={styles.deletedTodoDetailContentText}
+                    text={activeDeletedTodoDetail.content.trim() || 'No content'}
+                  />
                   <Text style={styles.deletedTodoDetailMeta}>
                     Deleted {formatDeletedTodoTime(activeDeletedTodoDetail.deletedAt)}
                   </Text>
@@ -22619,10 +22827,11 @@ export default function App() {
                       />
                     ) : null}
                     {!createCommandPaletteVisible ? (
-                      createDrawerEditingTodoId && createEditorRedirectFirstContentTap ? (
+                      createDrawerEditingTodoId && createEditorInitialContentTapTarget ? (
                         <ScrollView
                           key={createDrawerEditingTodoId}
                           ref={createInitialContentScrollRef}
+                          contentOffset={{ x: 0, y: 0 }}
                           contentContainerStyle={[
                             styles.createDrawerInitialContentScrollContent,
                             !createDrawerExpanded &&
@@ -22640,21 +22849,25 @@ export default function App() {
                           ]}
                         >
                           <Pressable
-                            accessibilityLabel="Focus title and open keyboard"
+                            accessibilityLabel={
+                              createEditorInitialContentTapTarget === 'content'
+                                ? 'Focus content and open keyboard'
+                                : 'Focus title and open keyboard'
+                            }
                             accessibilityRole="button"
                             onPress={handleCreateEditorFirstContentTap}
                             style={styles.createDrawerInitialContentTapTarget}
                           >
-                            <Text
+                            <TodoContentLinkText
+                              onOpenLinkOptions={showTodoContentLinkOptions}
                               style={[
                                 styles.createDrawerInitialContentText,
                                 createDrawerContentTextStyle,
                                 !createDraftContent &&
                                   styles.createDrawerInitialContentPlaceholder,
                               ]}
-                            >
-                              {createDraftContent || 'Content'}
-                            </Text>
+                              text={createDraftContent || 'Content'}
+                            />
                           </Pressable>
                         </ScrollView>
                       ) : (
@@ -25079,6 +25292,57 @@ export default function App() {
             </View>
           </View>
         </Modal>
+        <Modal
+          animationType="fade"
+          onRequestClose={closeTodoContentLinkOptions}
+          presentationStyle="overFullScreen"
+          transparent
+          visible={activeTodoContentUrl !== null}
+        >
+          <View style={styles.todoContentLinkOptionsRoot}>
+            <Pressable
+              accessibilityLabel="Dismiss link options"
+              accessibilityRole="button"
+              onPress={closeTodoContentLinkOptions}
+              style={StyleSheet.absoluteFill}
+            />
+            <View accessibilityViewIsModal style={styles.todoContentLinkOptionsCard}>
+              <View style={styles.todoContentLinkOptionsIcon}>
+                <Ionicons color={THEME_ACCENT} name="link-outline" size={21} />
+              </View>
+              <Text style={styles.todoContentLinkOptionsTitle}>Open link?</Text>
+              <Text numberOfLines={4} selectable style={styles.todoContentLinkOptionsUrl}>
+                {activeTodoContentUrl}
+              </Text>
+              <View style={styles.todoContentLinkOptionsActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={closeTodoContentLinkOptions}
+                  style={({ pressed }) => [
+                    styles.todoContentLinkOptionsButton,
+                    styles.todoContentLinkOptionsCancelButton,
+                    pressed && styles.todoContentLinkOptionsButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.todoContentLinkOptionsCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityHint="Opens this URL in your browser"
+                  accessibilityRole="button"
+                  onPress={openActiveTodoContentLink}
+                  style={({ pressed }) => [
+                    styles.todoContentLinkOptionsButton,
+                    styles.todoContentLinkOptionsOpenButton,
+                    pressed && styles.todoContentLinkOptionsButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.todoContentLinkOptionsOpenText}>Open</Text>
+                  <Ionicons color="#FFFFFF" name="open-outline" size={17} />
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
         </View>
       </SafeAreaView>
     </GestureHandlerRootView>
@@ -25130,6 +25394,87 @@ const styles = StyleSheet.create({
   },
   todoDetailModalRoot: {
     flex: 1,
+  },
+  todoContentLinkOptionsRoot: {
+    backgroundColor: 'rgba(30, 27, 24, 0.42)',
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingBottom: 12,
+    paddingHorizontal: HORIZONTAL_PADDING,
+    paddingTop: TOP_SAFE_GAP + 24,
+  },
+  todoContentLinkOptionsCard: {
+    alignSelf: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4DDD4',
+    borderRadius: CARD_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 12,
+    maxWidth: 430,
+    padding: 18,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    width: '100%',
+  },
+  todoContentLinkOptionsIcon: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: '#D6E0FF',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 38,
+    justifyContent: 'center',
+    marginBottom: 13,
+    width: 38,
+  },
+  todoContentLinkOptionsTitle: {
+    color: THEME_TEXT,
+    fontSize: 20,
+    fontWeight: FONT_SEMIBOLD,
+    lineHeight: 26,
+  },
+  todoContentLinkOptionsUrl: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 7,
+  },
+  todoContentLinkOptionsActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
+  },
+  todoContentLinkOptionsButton: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 7,
+    height: 42,
+    justifyContent: 'center',
+  },
+  todoContentLinkOptionsCancelButton: {
+    backgroundColor: THEME_BG,
+    borderColor: '#E8E2DA',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  todoContentLinkOptionsOpenButton: {
+    backgroundColor: THEME_ACCENT,
+  },
+  todoContentLinkOptionsButtonPressed: {
+    opacity: 0.74,
+  },
+  todoContentLinkOptionsCancelText: {
+    color: THEME_TEXT,
+    fontSize: 15,
+    fontWeight: FONT_SEMIBOLD,
+  },
+  todoContentLinkOptionsOpenText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: FONT_SEMIBOLD,
   },
   latestWidgetModalRoot: {
     flex: 1,
@@ -25423,6 +25768,9 @@ const styles = StyleSheet.create({
   todoDetailContentInputExpanded: {
     flex: 1,
     maxHeight: '100%',
+  },
+  todoDetailReadonlyContentScroller: {
+    minHeight: TODO_DETAIL_CONTENT_INPUT_MIN_HEIGHT,
   },
   deletedTodoDetailHeader: {
     alignItems: 'flex-start',
@@ -27792,6 +28140,38 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 20,
     textAlign: 'center',
+  },
+  notificationSectionHeader: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 42,
+    paddingHorizontal: 4,
+    paddingTop: 4,
+  },
+  notificationSectionHeaderPressed: {
+    backgroundColor: THEME_ACCENT_SOFT,
+  },
+  notificationSectionTitle: {
+    color: THEME_TEXT,
+    fontSize: 17,
+    fontWeight: FONT_SEMIBOLD,
+    letterSpacing: -0.1,
+    lineHeight: 22,
+  },
+  notificationSectionCount: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 18,
+    minWidth: 24,
+    textAlign: 'right',
+  },
+  notificationSectionMeta: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   notificationLogSwipeShell: {
     borderRadius: CARD_BORDER_RADIUS,

@@ -29,7 +29,7 @@ export const TODO_GROUPED_ROW_ESTIMATE = 64;
 export const TODO_SECTION_HEADER_ESTIMATE = 52;
 export const TODO_SECTION_BODY_BOTTOM_PADDING = 12;
 export const TODO_ROW_DIVIDER_HEIGHT = StyleSheet.hairlineWidth;
-const TODO_GROUPED_ROW_BATCH_SIZE = 8;
+export const TODO_GROUPED_ROW_BATCH_SIZE = 8;
 const TODO_CONTENT_ROW_ESTIMATE = 22;
 
 const NOT_SECTIONED_LABEL = 'Not Sectioned';
@@ -529,12 +529,7 @@ const getTodoListGroupLabels = (
   const seenKeys = new Set<string>();
 
   todo.filters.list.forEach((label) => {
-    const node = findListMenuNode(listMenuTree, label);
-    if (!node) {
-      return;
-    }
-
-    const group = getTodoListGroupForLabel(node.label, orderedListLabels, listMenuTree);
+    const group = getTodoListGroupForLabel(label, orderedListLabels, listMenuTree);
     if (seenKeys.has(group.key)) {
       return;
     }

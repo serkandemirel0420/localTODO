@@ -19,6 +19,7 @@ import {
   type LongPressGestureHandlerStateChangeEvent,
 } from 'react-native-gesture-handler';
 
+import { TodoContentLinkText } from './TodoContentLinkText';
 import { TodoMetaTags } from './TodoMetaTags';
 import {
   getDateFilterSortRank,
@@ -513,7 +514,8 @@ export type TodoRowProps = {
   onCreateFromSettingsHoldEnd?: () => void;
   onCreateFromSettingsHoldStart?: () => void;
   onEnterSelectMode?: (id: string) => void;
-  onOpenDetail: (id: string) => void;
+  onOpenContentLink: (url: string) => void;
+  onOpenDetail: (id: string, initialField: 'content' | 'title') => void;
   onOpenMenu: (id: string) => void;
   onSetDone: (id: string, done: boolean) => void;
   onTouchStart?: (event: GestureResponderEvent) => void;
@@ -548,6 +550,7 @@ function TodoRowComponent({
   onCreateFromSettingsHoldEnd,
   onCreateFromSettingsHoldStart,
   onEnterSelectMode,
+  onOpenContentLink,
   onOpenDetail,
   onOpenMenu,
   onSetDone,
@@ -564,6 +567,8 @@ function TodoRowComponent({
   const swipeableRef = useRef<Swipeable | null>(null);
   const groupedSwipeableRef = useRef<TodoSwipeController | null>(null);
   const createFromSettingsLongPressActiveRef = useRef(false);
+  const contentLinkPressActiveRef = useRef(false);
+  const pressedFieldRef = useRef<'content' | 'title'>('title');
   const [isSwipeOpen, setIsSwipeOpen] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const isGroupedLayout = layout === 'grouped';
@@ -594,6 +599,7 @@ function TodoRowComponent({
     : null;
   const content = item.content.replace(ZERO_WIDTH_SPACER_PATTERN, '').trim();
   const contentPreview = getTodoRowTextPreview(content, TODO_ROW_CONTENT_PREVIEW_MAX_LENGTH);
+  const contentPreviewIsTruncated = contentPreview !== content.trim().replace(/\s+/g, ' ');
   const displayTitle = useMemo(
     () => item.text.trim().replace(/\s+/g, ' '),
     [item.text],
@@ -614,13 +620,13 @@ function TodoRowComponent({
     () => renderHighlightedPreview(wrappedDisplayTitle, searchHighlightTerms),
     [searchHighlightTerms, wrappedDisplayTitle],
   );
-  const highlightedContentPreview = useMemo(
-    () => (
+  const renderHighlightedContentSegment = useCallback(
+    (text: string) => (
       searchHighlightContent
-        ? renderHighlightedPreview(contentPreview, searchHighlightTerms)
-        : contentPreview
+        ? renderHighlightedPreview(text, searchHighlightTerms)
+        : text
     ),
-    [contentPreview, searchHighlightContent, searchHighlightTerms],
+    [searchHighlightContent, searchHighlightTerms],
   );
   const isHighlightedForMenu = isMenuTargetHighlighted;
   const suppressChangeFill = isMenuTarget;
@@ -742,29 +748,39 @@ function TodoRowComponent({
   }, [closeSwipeable, isPendingDelete, item.id, onDelete]);
 
   const handleTodoPress = useCallback(() => {
-    if (isPendingDelete) {
-      return;
-    }
+    const initialField = pressedFieldRef.current;
+    pressedFieldRef.current = 'title';
 
-    if (selectMode) {
-      toggleSelection();
-      return;
-    }
+    requestAnimationFrame(() => {
+      if (contentLinkPressActiveRef.current) {
+        contentLinkPressActiveRef.current = false;
+        return;
+      }
 
-    if (swipeDisabled) {
-      return;
-    }
+      if (isPendingDelete) {
+        return;
+      }
 
-    if (isSwipeOpen) {
-      closeSwipeable();
-      return;
-    }
+      if (selectMode) {
+        toggleSelection();
+        return;
+      }
 
-    if (closeOtherOpenSwipeable()) {
-      return;
-    }
+      if (swipeDisabled) {
+        return;
+      }
 
-    onOpenDetail(item.id);
+      if (isSwipeOpen) {
+        closeSwipeable();
+        return;
+      }
+
+      if (closeOtherOpenSwipeable()) {
+        return;
+      }
+
+      onOpenDetail(item.id, initialField);
+    });
   }, [
     closeOtherOpenSwipeable,
     closeSwipeable,
@@ -776,6 +792,24 @@ function TodoRowComponent({
     swipeDisabled,
     toggleSelection,
   ]);
+
+  const resetPressedField = useCallback(() => {
+    pressedFieldRef.current = 'title';
+    return false;
+  }, []);
+
+  const markContentPressed = useCallback(() => {
+    pressedFieldRef.current = 'content';
+    return false;
+  }, []);
+
+  const openContentLinkOptions = useCallback((url: string) => {
+    contentLinkPressActiveRef.current = true;
+    onOpenContentLink(url);
+    requestAnimationFrame(() => {
+      contentLinkPressActiveRef.current = false;
+    });
+  }, [onOpenContentLink]);
 
   const enterSelectMode = useCallback(() => {
     if (isPendingDelete) {
@@ -1133,6 +1167,7 @@ function TodoRowComponent({
       <View
         collapsable={false}
         onLayout={isGroupedLayout ? undefined : handleRowLayout}
+        onStartShouldSetResponderCapture={resetPressedField}
         style={styles.rowLongPressTarget}
       >
         <GestureTouchableOpacity
@@ -1209,17 +1244,24 @@ function TodoRowComponent({
                 </View>
               ) : null}
               {contentPreview ? (
-                <Text
-                  ellipsizeMode="tail"
-                  numberOfLines={1}
-                  style={[
-                    styles.content,
-                    isVisuallyDone && styles.contentDone,
-                    isPendingDelete && styles.contentPendingDelete,
-                  ]}
+                <View
+                  onStartShouldSetResponder={markContentPressed}
+                  style={styles.contentTouchTarget}
                 >
-                  {highlightedContentPreview}
-                </Text>
+                  <TodoContentLinkText
+                    ellipsizeMode="tail"
+                    numberOfLines={1}
+                    onOpenLinkOptions={openContentLinkOptions}
+                    renderTextSegment={renderHighlightedContentSegment}
+                    skipTrailingTruncatedLink={contentPreviewIsTruncated}
+                    style={[
+                      styles.content,
+                      isVisuallyDone && styles.contentDone,
+                      isPendingDelete && styles.contentPendingDelete,
+                    ]}
+                    text={contentPreview}
+                  />
+                </View>
               ) : null}
               {isPendingDelete ? (
                 <Text style={styles.pendingDeleteText}>Deleting...</Text>
@@ -1394,6 +1436,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
   prev.onCreateFromSettings === next.onCreateFromSettings &&
   prev.onCreateFromSettingsHoldEnd === next.onCreateFromSettingsHoldEnd &&
   prev.onCreateFromSettingsHoldStart === next.onCreateFromSettingsHoldStart &&
+  prev.onOpenContentLink === next.onOpenContentLink &&
   prev.onOpenDetail === next.onOpenDetail &&
   prev.onOpenMenu === next.onOpenMenu &&
   prev.onSetDone === next.onSetDone &&
@@ -1716,6 +1759,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: FONT_REGULAR,
     lineHeight: 20,
+    minWidth: 0,
+  },
+  contentTouchTarget: {
+    alignSelf: 'stretch',
     marginTop: 5,
     minWidth: 0,
   },

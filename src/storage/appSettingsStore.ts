@@ -98,7 +98,7 @@ export type StoredMenuPresetSection = {
 
 export const QUICK_PRESET_NAV_SLOT_COUNT = 10;
 export const QUICK_PRESET_NAV_MAX_SLOT_COUNT = 50;
-export const QUICK_PRESET_DEFAULTS_VERSION = 5;
+export const QUICK_PRESET_DEFAULTS_VERSION = 6;
 export const APP_HISTORY_LIMIT = 10;
 export type QuickPresetNavPresetIds = Array<string | null>;
 export type QuickPresetNavIconNames = string[];
@@ -412,7 +412,7 @@ const RECOVERED_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Ideas',
     createdAt: 1782069327663,
     filters: { list: ['Ideas'] },
-    todoGroupMode: 'list',
+    todoGroupMode: 'none',
     todoSortMode: 'newest',
   }),
   createRecoveredPreset({
@@ -420,7 +420,7 @@ const RECOVERED_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
     label: 'Meditation Ideas',
     createdAt: 1782069354727,
     filters: { list: ['Meditation Idea'] },
-    todoGroupMode: 'list',
+    todoGroupMode: 'none',
     todoSortMode: 'newest',
   }),
   createRecoveredPreset({
@@ -525,6 +525,27 @@ const hasUnintendedRecoveryPresetConfiguration = (
     menuPresets[index]?.id === presetId && quickPresetNavPresetIds[index] === presetId
   ))
 );
+
+const LEGACY_REDUNDANT_LIST_GROUP_PRESET_IDS = new Set([
+  'preset-1782069327663-6x0a0oyrfdh',
+  'preset-1782069354727-ahux26w8j6e',
+]);
+const migrateRedundantListGroupPresets = (
+  presets: StoredMenuPreset[],
+): StoredMenuPreset[] => presets.map((preset) => {
+  if (
+    !LEGACY_REDUNDANT_LIST_GROUP_PRESET_IDS.has(preset.id) ||
+    preset.todoGroupMode !== 'list' ||
+    preset.filters.list.length !== 1
+  ) {
+    return preset;
+  }
+
+  return {
+    ...preset,
+    todoGroupMode: 'none',
+  };
+});
 
 export type FilterConfigExpandedSections = {
   lists: boolean;
@@ -829,9 +850,12 @@ export const ensureQuickPresetDefaults = (
     menuPresets.length === 0 && existingAssignments.length === 0;
   const shouldRestoreSavedPresetConfiguration =
     removedUnintendedRecoveryPresets || hasLostEmptyPresetConfiguration;
-  const nextMenuPresets = shouldRestoreSavedPresetConfiguration
+  const recoveredMenuPresets = shouldRestoreSavedPresetConfiguration
     ? cloneMenuPresets(RECOVERED_QUICK_MENU_PRESETS)
     : cloneMenuPresets(menuPresets);
+  const nextMenuPresets = normalizedVersion < 6
+    ? migrateRedundantListGroupPresets(recoveredMenuPresets)
+    : recoveredMenuPresets;
   const nextAssignments = shouldRestoreSavedPresetConfiguration
     ? cloneQuickPresetNavPresetIds(RECOVERED_QUICK_PRESET_NAV_PRESET_IDS)
     : existingAssignments;

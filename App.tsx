@@ -1964,7 +1964,7 @@ const TODO_LIST_MAINTAIN_VISIBLE_CONTENT_POSITION = { disabled: true };
 const TODO_LIST_DRAW_DISTANCE =
   TODO_GROUPED_ROW_ESTIMATE * TODO_GROUPED_ROW_BATCH_SIZE;
 const QUICK_PRESET_NAV_DOUBLE_TAP_MS = 350;
-const QUICK_PRESET_NAV_PRESS_DELAY_MS = 70;
+const QUICK_PRESET_NAV_PRESS_DELAY_MS = 40;
 const WIDGET_NEW_ITEM_FOCUS_DELAYS_MS = [120, 480, 1100] as const;
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 const INITIAL_FIREBASE_SYNC_BAR_MAX_MS = 5000;
@@ -6372,7 +6372,9 @@ export default function App() {
     clearNotificationTodoReveal();
 
     if (navTab === 'search') {
-      searchScrollOffsetsByModeRef.current[searchMode] = actualScrollOffsetY.current;
+      const preservedOffset = actualScrollOffsetY.current;
+      searchScrollOffsetsByModeRef.current[searchMode] = preservedOffset;
+      searchScrollOffsetsByModeRef.current[nextMode] = preservedOffset;
       skipNextTodoListOffsetEffectRef.current = true;
     }
 
@@ -13045,12 +13047,17 @@ export default function App() {
           LIST_MENU_ROW_HEIGHT,
       ) * LIST_MENU_ROW_HEIGHT,
     );
+
+    if (navTab === 'search') {
+      return calculatedOffset;
+    }
+
     const adjustedOffset = appTodoListData.length > 0 && effectiveGroupMode !== 'none'
       ? Math.max(LIST_MENU_ROW_HEIGHT, calculatedOffset - LIST_MENU_ROW_HEIGHT)
       : calculatedOffset;
 
     if (appTodoListData.length === 0) {
-      return navTab === 'search' || currentQuickPresetSwipeItemIndex >= 0
+      return currentQuickPresetSwipeItemIndex >= 0
         ? calculatedOffset
         : 0;
     }
@@ -14477,75 +14484,6 @@ export default function App() {
       return next;
     });
   }, []);
-
-  const toggleAllSearchSections = useCallback(() => {
-    const presetIds = searchPresetItems.map((item) => item.preset.id);
-    const listLabels = searchListMenuItems.map((item) => item.node.label);
-
-    if (presetIds.length === 0 && listLabels.length === 0) {
-      return;
-    }
-
-    pendingSearchPresetScrollOffsetRef.current = actualScrollOffsetY.current;
-    triggerSubtleHaptic();
-
-    const allPresetsCollapsed = presetIds.every((presetId) => (
-      searchPresetIdsCollapsedForRender.has(presetId)
-    ));
-    const allListsCollapsed = listLabels.every((listLabel) => (
-      collapsedSearchListLabels.has(listLabel)
-    ));
-    const shouldExpandAll = allPresetsCollapsed && allListsCollapsed;
-
-    setCollapsedSearchPresetIds((current) => {
-      const next = new Set(current);
-      let changed = false;
-
-      if (shouldExpandAll) {
-        presetIds.forEach((presetId) => {
-          if (next.delete(presetId)) {
-            changed = true;
-          }
-        });
-      } else {
-        presetIds.forEach((presetId) => {
-          if (!next.has(presetId)) {
-            next.add(presetId);
-            changed = true;
-          }
-        });
-      }
-
-      return changed ? next : current;
-    });
-
-    setCollapsedSearchListLabels((current) => {
-      const next = new Set(current);
-      let changed = false;
-
-      if (shouldExpandAll) {
-        listLabels.forEach((listLabel) => {
-          if (next.delete(listLabel)) {
-            changed = true;
-          }
-        });
-      } else {
-        listLabels.forEach((listLabel) => {
-          if (!next.has(listLabel)) {
-            next.add(listLabel);
-            changed = true;
-          }
-        });
-      }
-
-      return changed ? next : current;
-    });
-  }, [
-    collapsedSearchListLabels,
-    searchListMenuItems,
-    searchPresetIdsCollapsedForRender,
-    searchPresetItems,
-  ]);
 
   useLayoutEffect(() => {
     const preservedOffset = pendingSearchPresetScrollOffsetRef.current;
@@ -16505,7 +16443,6 @@ export default function App() {
 
     if (phase === 'pressIn') {
       quickPresetNavPressStartedSwipeArmedRef.current = quickPresetScreenSwipeArmed;
-      quickPresetNavPressInRef.current = preset.id;
       if (
         quickPresetScreenSwipeArmed &&
         focusedQuickPresetNavItem?.slotNumber === slotNumber
@@ -16518,10 +16455,12 @@ export default function App() {
           elapsed < QUICK_PRESET_NAV_DOUBLE_TAP_MS;
 
         if (isQuickSecondTap) {
+          quickPresetNavPressInRef.current = preset.id;
           applyQuickPresetNavPreset(preset, slotNumber, timestamp);
           return;
         }
 
+        quickPresetNavPressInRef.current = preset.id;
         setQuickPresetScreenSwipeArmed(false);
         lastQuickPresetNavTapRef.current = { presetId: '', timestamp: 0 };
         triggerSubtleHaptic();
@@ -17529,7 +17468,6 @@ export default function App() {
   }, [navTab]);
 
   const focusHeaderSearchInput = useCallback(() => {
-    setSearchMode('item');
     searchInputRef.current?.blur();
     scrollFocusedSearchIntoView();
     requestAnimationFrame(() => {
@@ -17546,7 +17484,9 @@ export default function App() {
   }) => {
     rememberSearchReturnScrollOffset();
     clearNotificationTodoReveal();
-    setSearchMode(options?.mode ?? 'item');
+    if (options?.mode) {
+      setSearchMode(options.mode);
+    }
     setNavTab('search');
     closeListMenuState();
     if (options?.focusInput !== false) {
@@ -17711,7 +17651,7 @@ export default function App() {
         setActiveTodoDetailId(null);
         break;
       case 'search':
-        openHeaderSearch({ mode: 'item' });
+        openHeaderSearch();
         return;
       default:
         break;
@@ -17784,33 +17724,21 @@ export default function App() {
 
   const handleSearchNavLongPress = useCallback(() => {
     lastSearchNavTapRef.current = 0;
+    const nextMode: SearchMode = searchMode === 'item' ? 'preset' : 'item';
 
-    if (navTab === 'search' && searchMode === 'preset') {
-      const hasSearchSections =
-        searchPresetItems.length > 0 || searchListMenuItems.length > 0;
-
-      if (hasSearchSections) {
-        toggleAllSearchSections();
-      } else {
-        triggerSubtleHaptic();
-      }
+    if (navTab === 'search') {
+      handleSearchModeChange(nextMode);
       return;
     }
 
-    const hasTodoSections = todoListRows.some((row) => row.type === 'section');
-
-    if (hasTodoSections) {
-      setToggleAllTodoSectionsRequest((current) => current + 1);
-    } else {
-      triggerSubtleHaptic();
-    }
+    exitTodoSelectMode();
+    openHeaderSearch({ focusInput: false, mode: nextMode });
   }, [
+    exitTodoSelectMode,
+    handleSearchModeChange,
     navTab,
+    openHeaderSearch,
     searchMode,
-    searchListMenuItems,
-    searchPresetItems,
-    todoListRows,
-    toggleAllSearchSections,
   ]);
 
   useEffect(() => {
@@ -20795,7 +20723,6 @@ export default function App() {
 
                             rememberSearchReturnScrollOffset();
                             clearNotificationTodoReveal();
-                            setSearchMode('item');
                             setNavTab('search');
                             scrollFocusedSearchIntoView();
                           }}
@@ -20980,7 +20907,7 @@ export default function App() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Focuses Search and opens the keyboard; quick double tap clears search text; press and hold expands or collapses all search sections"
+              accessibilityHint="Focuses Search and opens the keyboard; quick double tap clears search text; press and hold cycles between list and item search"
               accessibilityLabel="Search"
               accessibilityState={{ selected: navTab === 'search' }}
               onLongPress={handleSearchNavLongPress}

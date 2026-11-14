@@ -585,7 +585,11 @@ export const createDevTestTodos = (
       list: [maintenanceList],
       date: [isoDateFromToday(-3)],
       priority: ['High'],
-      reminder: encodeTodoReminder({ repeat: 'daily', time: { hours: 9, minutes: 0 } }),
+      reminder: encodeTodoReminder({
+        habitNotificationsEnabled: true,
+        repeat: 'daily',
+        time: { hours: 9, minutes: 0 },
+      }),
       content: 'Repeating overdue item for the repeating saved-list section.',
     },
     {
@@ -593,7 +597,11 @@ export const createDevTestTodos = (
       list: [maintenanceList],
       date: [isoDateFromToday(1)],
       priority: ['Medium'],
-      reminder: encodeTodoReminder({ repeat: 'weekly', time: { hours: 10, minutes: 30 } }),
+      reminder: encodeTodoReminder({
+        habitNotificationsEnabled: true,
+        repeat: 'weekly',
+        time: { hours: 10, minutes: 30 },
+      }),
       content: 'Repeating tomorrow item for the repeating saved-list section.',
     },
     {
@@ -601,7 +609,11 @@ export const createDevTestTodos = (
       list: [clientList],
       date: [isoDateFromToday(-1)],
       priority: ['Low'],
-      reminder: encodeTodoReminder({ repeat: 'monthly', time: { hours: 14, minutes: 0 } }),
+      reminder: encodeTodoReminder({
+        habitNotificationsEnabled: true,
+        repeat: 'monthly',
+        time: { hours: 14, minutes: 0 },
+      }),
       content: 'Another repeating overdue row with a different priority.',
     },
     {
@@ -609,7 +621,11 @@ export const createDevTestTodos = (
       list: [maintenanceList],
       date: [isoDateFromToday(1)],
       priority: ['High'],
-      reminder: encodeTodoReminder({ repeat: 'yearly', time: null }),
+      reminder: encodeTodoReminder({
+        habitNotificationsEnabled: true,
+        repeat: 'yearly',
+        time: null,
+      }),
       content: 'Another repeating tomorrow row to prove priority sorting inside that section.',
     },
     {
@@ -727,7 +743,11 @@ export const createDevTestTodos = (
     const reminderTime = index % 3 === 0
       ? DEV_TEST_REMINDER_TIMES[index % DEV_TEST_REMINDER_TIMES.length]
       : null;
-    const reminder = encodeTodoReminder({ repeat, time: reminderTime });
+    const reminder = encodeTodoReminder({
+      habitNotificationsEnabled: true,
+      repeat,
+      time: reminderTime,
+    });
     const listFilters = index % 9 === 0 && secondaryList !== list
       ? [list, secondaryList]
       : [list];

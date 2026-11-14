@@ -52,12 +52,13 @@ export function HabitReminderModal({
       <View style={styles.root}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Dismiss habit settings"
+          accessibilityLabel="Dismiss routine settings"
           onPress={onClose}
           style={styles.backdrop}
         />
         <View style={styles.card}>
-          <Text style={styles.title}>Habit</Text>
+          <Text style={styles.title}>Routine interval</Text>
+          <Text style={styles.subtitle}>Choose how often this routine repeats.</Text>
 
           <Pressable
             accessibilityRole="button"
@@ -65,8 +66,12 @@ export function HabitReminderModal({
             onPress={() => setDraft(null)}
             style={({ pressed }) => [styles.noneRow, pressed && styles.pressed]}
           >
-            <Text style={[styles.rowLabel, draft === null && styles.rowLabelSelected]}>
-              None
+            <Text style={[
+              styles.rowLabel,
+              value !== null && styles.removeLabel,
+              draft === null && styles.rowLabelSelected,
+            ]}>
+              {value !== null ? 'Remove routine' : 'No routine'}
             </Text>
             {draft === null ? (
               <Ionicons color={ACCENT} name="checkmark" size={20} />
@@ -80,7 +85,7 @@ export function HabitReminderModal({
               return (
                 <View key={interval} style={styles.intervalCell}>
                   <Pressable
-                    accessibilityLabel={`Habit interval ${interval}`}
+                    accessibilityLabel={`Routine interval ${interval}`}
                     accessibilityRole="button"
                     accessibilityState={{ selected }}
                     onPress={() => setDraft(interval)}
@@ -152,6 +157,12 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     paddingHorizontal: 20,
   },
+  subtitle: {
+    color: '#77716B',
+    fontSize: 14,
+    paddingBottom: 6,
+    paddingHorizontal: 20,
+  },
   noneRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -192,6 +203,9 @@ const styles = StyleSheet.create({
   rowLabelSelected: {
     color: ACCENT,
     fontWeight: '500',
+  },
+  removeLabel: {
+    color: '#C83C36',
   },
   intervalLabel: {
     color: '#1F1B17',

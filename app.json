@@ -27,13 +27,15 @@
       "versionCode": 4,
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "android.permission.SCHEDULE_EXACT_ALARM"
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_BIOMETRIC"
       ],
       "icon": "./assets/icon.png"
     },
     "plugins": [
       "expo-web-browser",
       "expo-secure-store",
+      ["expo-local-authentication", { "faceIDPermission": "Use Face ID to unlock Local Todo." }],
       "expo-notifications",
       "@react-native-google-signin/google-signin",
       "@react-native-community/datetimepicker",

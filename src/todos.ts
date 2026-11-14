@@ -4,6 +4,7 @@ import {
   type DateLabelAnchor,
 } from './dates';
 import { normalizeReminderFilterValues } from './reminders';
+import { normalizeRoutineLogs, type RoutineLog } from './routineLogs';
 
 export type TodoFilters = {
   date: string[];
@@ -14,6 +15,7 @@ export type TodoFilters = {
 };
 
 export type Todo = {
+  routineLogs?: RoutineLog[];
   id: string;
   content: string;
   text: string;
@@ -319,6 +321,7 @@ export const normalizeTodo = (value: unknown): Todo | null => {
     : todo.createdAt;
 
   return {
+    routineLogs: normalizeRoutineLogs(todo.routineLogs),
     id: todo.id,
     content: typeof todo.content === 'string' ? normalizeTodoContent(todo.content) : '',
     text: todo.text,
@@ -338,6 +341,7 @@ export const touchTodo = <T extends Todo>(todo: T, updatedAt = Date.now()): T =>
 
 export const cloneTodo = (todo: Todo): Todo => ({
   ...todo,
+  routineLogs: normalizeRoutineLogs(todo.routineLogs),
   tags: normalizeTodoTags(todo.tags),
   filters: cloneTodoFilters(todo.filters),
 });

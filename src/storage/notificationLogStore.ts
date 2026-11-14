@@ -1,7 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { createAsyncMutationQueue } from '../asyncMutationQueue';
+
 const STORAGE_KEY = 'local-todo.notification-log.v1';
 const NOTIFICATION_LOG_LIMIT = 100;
+const enqueueNotificationLogMutation = createAsyncMutationQueue();
 
 export type NotificationLogEntry = {
   body: string;
@@ -80,39 +83,56 @@ const saveNotificationLogEntries = async (entries: NotificationLogEntry[]) => {
     STORAGE_KEY,
     JSON.stringify(normalized),
   );
+
+  return normalized;
+};
+
+const loadNotificationLogEntries = async () => {
+  const stored = await AsyncStorage.getItem(STORAGE_KEY);
+  if (!stored) {
+    return [];
+  }
+
+  return normalizeNotificationLogEntries(JSON.parse(stored) as unknown);
 };
 
 export const notificationLogStore = {
-  async append(entry: NotificationLogEntry) {
-    const current = await this.load();
-    await saveNotificationLogEntries([entry, ...current]);
-    return this.load();
+  append(entry: NotificationLogEntry) {
+    return enqueueNotificationLogMutation(async () => {
+      const current = await loadNotificationLogEntries();
+      return saveNotificationLogEntries([entry, ...current]);
+    });
   },
 
-  async delete(id: string) {
-    const current = await this.load();
-    const nextEntries = current.filter((entry) => entry.id !== id);
-    await saveNotificationLogEntries(nextEntries);
-    return nextEntries;
+  delete(id: string) {
+    return enqueueNotificationLogMutation(async () => {
+      const current = await loadNotificationLogEntries();
+      return saveNotificationLogEntries(
+        current.filter((entry) => entry.id !== id),
+      );
+    });
   },
 
-  async load() {
-    const stored = await AsyncStorage.getItem(STORAGE_KEY);
-    if (!stored) {
-      return [];
-    }
+  load: loadNotificationLogEntries,
 
-    return normalizeNotificationLogEntries(JSON.parse(stored) as unknown);
+  deleteMany(ids: string[]) {
+    const idsToDelete = new Set(ids);
+    return enqueueNotificationLogMutation(async () => {
+      const current = await loadNotificationLogEntries();
+      return saveNotificationLogEntries(
+        current.filter((entry) => !idsToDelete.has(entry.id)),
+      );
+    });
   },
 
-  async merge(entries: NotificationLogEntry[]) {
-    const current = await this.load();
-    await saveNotificationLogEntries([...entries, ...current]);
-    return this.load();
+  merge(entries: NotificationLogEntry[]) {
+    return enqueueNotificationLogMutation(async () => {
+      const current = await loadNotificationLogEntries();
+      return saveNotificationLogEntries([...entries, ...current]);
+    });
   },
 
-  async replaceAll(entries: NotificationLogEntry[]) {
-    await saveNotificationLogEntries(entries);
-    return this.load();
+  replaceAll(entries: NotificationLogEntry[]) {
+    return enqueueNotificationLogMutation(() => saveNotificationLogEntries(entries));
   },
 };

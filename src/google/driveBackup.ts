@@ -1,3 +1,4 @@
+import { normalizeRoutineNotificationText } from '../routineNotificationText';
 import {
   cloneDeletedTodos,
   cloneTodoFilters,
@@ -26,12 +27,14 @@ import {
   type MetaTagVisibility,
 } from '../metaTags';
 import { normalizeMaterialCommunityIconName } from '../materialCommunityIconNames';
+import { ensureListMenuTreeCoversPresetLists } from '../listPresetIntegrity';
 import {
   cloneFilterMenuShortcuts,
   cloneFilterConfigUiState,
   cloneQuickPresetNavIconNames,
   cloneQuickPresetNavPresetIds,
   ensureQuickPresetDefaults,
+  DEFAULT_LIST_MENU_TREE,
   normalizeEditorContentFontSize,
   normalizeEditorTitleFontSize,
   normalizeFilterMenuShortcuts,
@@ -118,6 +121,7 @@ export type BackupSettings = {
   googleDriveLastRestoreAt: string | null;
   habitNotificationsPaused: boolean;
   habitQuietHoursEnabled: boolean;
+  habitNotificationText: string;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
   listMenuTree: BackupListMenuNode[];
@@ -646,6 +650,7 @@ export const createBackupPayload = (
       googleDriveLastRestoreAt: settings.googleDriveLastRestoreAt,
       habitNotificationsPaused: settings.habitNotificationsPaused,
       habitQuietHoursEnabled: settings.habitQuietHoursEnabled,
+      habitNotificationText: normalizeRoutineNotificationText(settings.habitNotificationText),
       hideDoneTodos: settings.hideDoneTodos,
       lastCreateTodoFilters: cloneTodoFilters(settings.lastCreateTodoFilters),
       listMenuTree: cloneListMenuTree(settings.listMenuTree),
@@ -690,6 +695,14 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
       : 0,
   );
   const selectedFilters = normalizeTodoFilters(settings.selectedFilters);
+  const normalizedListMenuTree = normalizeBackupListMenuTree(settings.listMenuTree);
+  const listMenuTree = ensureListMenuTreeCoversPresetLists(
+    normalizedListMenuTree.length > 0
+      ? normalizedListMenuTree
+      : cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+    quickPresetDefaults.menuPresets,
+    (label) => ({ label }),
+  );
 
   return {
     app: 'localTODO',
@@ -712,9 +725,10 @@ export const normalizeBackupPayload = (value: unknown): LocalTodoBackup | null =
         typeof settings.googleDriveLastRestoreAt === 'string' ? settings.googleDriveLastRestoreAt : null,
       habitNotificationsPaused: settings.habitNotificationsPaused === true,
       habitQuietHoursEnabled: settings.habitQuietHoursEnabled !== false,
+      habitNotificationText: normalizeRoutineNotificationText(settings.habitNotificationText),
       hideDoneTodos: settings.hideDoneTodos === true,
       lastCreateTodoFilters: normalizeTodoFilters(settings.lastCreateTodoFilters),
-      listMenuTree: normalizeBackupListMenuTree(settings.listMenuTree),
+      listMenuTree,
       listOrderMode: settings.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
       menuPresets: quickPresetDefaults.menuPresets,
       metaTagVisibility: normalizeMetaTagVisibility(settings.metaTagVisibility),

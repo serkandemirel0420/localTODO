@@ -34,6 +34,7 @@ import {
   type HiddenMetaTagKind,
   type MetaTagVisibility,
 } from '../metaTags';
+import { hasTodoHabitInterval } from '../reminders';
 import { triggerSubtleHaptic } from '../haptics';
 import {
   getBestOrderedFilterLabel,
@@ -643,7 +644,6 @@ function TodoRowComponent({
     !isPendingDelete &&
     !isCompletionFeedback &&
     Boolean(onCreateFromSettings);
-
   useEffect(() => {
     if (!isMenuTarget) {
       return;
@@ -1289,6 +1289,12 @@ function TodoRowComponent({
               )}
             </View>
           </View>
+          {hasTodoHabitInterval(item.filters.reminder) && !selectMode && !isPendingDelete && !swipeDisabled && (
+            <GestureTouchableOpacity accessibilityRole="button" accessibilityLabel={`Add or view logs: ${item.text}`}
+              onPress={() => onOpenDetail(item.id, 'content')} style={styles.routinePlus}>
+              <Ionicons name="add" size={22} color={THEME_ACCENT} />
+            </GestureTouchableOpacity>
+          )}
         </GestureTouchableOpacity>
       </View>
     </LongPressGestureHandler>
@@ -1451,6 +1457,7 @@ const areTodoRowPropsEqual = (prev: TodoRowProps, next: TodoRowProps) => (
 export const TodoRow = React.memo(TodoRowComponent, areTodoRowPropsEqual);
 
 const styles = StyleSheet.create({
+  routinePlus: { width: 36, height: 36, borderRadius: 18, backgroundColor: THEME_ACCENT_SOFT, alignItems: 'center', justifyContent: 'center', marginLeft: 10 },
   shell: {
     alignSelf: 'stretch',
     backgroundColor: 'transparent',

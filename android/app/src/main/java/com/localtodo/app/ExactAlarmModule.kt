@@ -16,6 +16,14 @@ class ExactAlarmModule(
 ) : ReactContextBaseJavaModule(reactContext) {
   override fun getName(): String = "LocalTodoExactAlarm"
 
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun setRoutineNotificationSettings(paused: Boolean, quiet: Boolean): Boolean =
+    RoutineNotificationSettings.save(reactContext, paused, quiet)
+
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun setRoutineNotificationText(text: String): Boolean =
+    RoutineNotificationSettings.saveText(reactContext, text)
+
   @ReactMethod
   fun canScheduleExactAlarms(promise: Promise) {
     try {

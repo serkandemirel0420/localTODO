@@ -15,6 +15,9 @@
     "desktop:prepare-electron": "electron_config_cache=\"$PWD/.cache/electron\" node node_modules/electron/install.js",
     "desktop:build": "npm run desktop:export && npm run desktop:prepare-electron && ELECTRON_BUILDER_CACHE=\"$PWD/.cache/electron-builder\" electron-builder --mac dir --publish never",
     "desktop:install": "npm run desktop:build && node desktop/install-macos.cjs",
+    "test:list-integrity": "node --no-warnings --test tests/listPresetIntegrity.test.mjs",
+    "test:routine-logs": "node --no-warnings --test tests/routineLogs.test.mjs tests/routineLogPersistence.test.mjs",
+    "test:biometric-lock": "node --no-warnings --test tests/biometricLock.test.mjs tests/desktopBiometricLock.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "build": {
@@ -54,6 +57,7 @@
     "expo-crypto": "~15.0.9",
     "expo-dev-client": "~6.0.21",
     "expo-haptics": "~15.0.8",
+    "expo-local-authentication": "~17.0.8",
     "expo-notifications": "~0.32.17",
     "expo-secure-store": "~15.0.8",
     "expo-sqlite": "~16.0.10",

@@ -1,3 +1,8 @@
+import { RememberedScrollView, RememberedGestureScrollView } from './src/components/RememberedScrollView';
+import { uiMemoryStore } from './src/storage/uiMemoryStore';
+import { createRoutineLogTapGate } from './src/routineLogTapGate';
+import { useRememberedScroll } from './src/useRememberedScroll';
+import { normalizeRoutineNotificationText } from './src/routineNotificationText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { makeRedirectUri, TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
@@ -58,7 +63,11 @@ import {
   type ReminderTimeModalHandle,
   type ReminderTimeModalSource,
 } from './src/components/ReminderTimeModal';
+import { RoutineLogsScreen } from './src/components/RoutineLogsScreen';
+import { BacklogScreen } from './src/components/BacklogScreen';
+import { normalizeRoutineLogs } from './src/routineLogs';
 import { HabitReminderModal } from './src/components/HabitReminderModal';
+import { BiometricLockProvider, BiometricLockScreen, BiometricLockSetting, useBiometricLock } from './src/components/BiometricLock';
 import { RepeatReminderModal } from './src/components/RepeatReminderModal';
 import { FilterConfigScreen } from './src/components/FilterConfigScreen';
 import { QuickPresetNav } from './src/components/QuickPresetNav';
@@ -270,10 +279,12 @@ import {
   reconcileTodoAlarms,
   setTodoAlarmSettings,
   syncTodoAlarm,
+  sendRoutineToggleNotification,
 } from './src/todoAlarms';
 import {
   decodeTodoReminder,
   encodeTodoReminder,
+  formatHabitIntervalLabel,
   getDatePickerMenuDisplayLabel,
   getRepeatPresetForMenuLabel,
   HABIT_INTERVAL_OPTIONS,
@@ -533,6 +544,7 @@ const HISTORY_HANDLED_UNDO_SNAPSHOT_FIELDS: Record<keyof UndoSnapshot, true> = {
   googleDriveBackupEnabled: true,
   habitNotificationsPaused: true,
   habitQuietHoursEnabled: true,
+  habitNotificationText: true,
   hideDoneTodos: true,
   lastCreateTodoFilters: true,
   listMenuTree: true,
@@ -1110,7 +1122,7 @@ const buildUndoSnapshotChangeDetails = (
   );
   compareHistoryScalar(
     details,
-    'Habit notifications',
+    'Routine notifications',
     formatHistoryToggle(before.habitNotificationsPaused, 'Paused', 'Active'),
     formatHistoryToggle(after.habitNotificationsPaused, 'Paused', 'Active'),
   );
@@ -1120,6 +1132,7 @@ const buildUndoSnapshotChangeDetails = (
     formatHistoryToggle(before.habitQuietHoursEnabled, '12 AM-7 AM', 'Off'),
     formatHistoryToggle(after.habitQuietHoursEnabled, '12 AM-7 AM', 'Off'),
   );
+  compareHistoryScalar(details, 'Routine notification text', before.habitNotificationText, after.habitNotificationText);
   compareHistoryScalar(
     details,
     'Sort',
@@ -1600,6 +1613,8 @@ const ANDROID_STATUS_BAR_INSET = Platform.OS === 'android'
   ? Math.max(StatusBar.currentHeight ?? 0, 24)
   : 0;
 const ANDROID_FULLSCREEN_TOP_MARGIN = Platform.OS === 'android' ? 12 : 0;
+// Android's root content is already inset by the system status bar.
+const APP_HEADER_TOP_GAP = Platform.OS === 'android' ? 0 : 8;
 const HORIZONTAL_PADDING = 14;
 const FONT_REGULAR = '400' as const;
 const FONT_MEDIUM = '500' as const;
@@ -2053,6 +2068,17 @@ const getAppTodoListItemType = (item: AppTodoListRow) => {
 
 type TodoListSectionGapRow = Extract<VisibleTodoListRow, { type: 'sectionGap' }>;
 
+const getSearchCollapsedIds = (
+  ids: string[],
+  knownIds: Set<string>,
+  collapsedIds: Set<string>,
+) => {
+  const next = new Set(ids.filter((id) => !knownIds.has(id) || collapsedIds.has(id)));
+  return next.size === collapsedIds.size && [...next].every((id) => collapsedIds.has(id))
+    ? collapsedIds
+    : next;
+};
+
 const buildSearchListRows = (
   searchPresetItems: SearchPresetItem[],
   collapsedSearchPresetIds: Set<string>,
@@ -2459,7 +2485,7 @@ const getSearchTextScore = (
 
 const getPresetSearchScore = (preset: MenuPreset, query: string) =>
   getSearchTextScore(
-    '',
+    preset.label,
     [
       preset.searchKeywords ?? '',
       ...(preset.sections ?? []).map((section) => section.label),
@@ -2468,7 +2494,13 @@ const getPresetSearchScore = (preset: MenuPreset, query: string) =>
   );
 
 const getListMenuSearchScore = (node: ListMenuNode, query: string) =>
-  getSearchTextScore('', node.searchKeywords, query);
+  getSearchTextScore(
+    node.label,
+    [node.searchKeywords ?? '', ...(node.children ?? []).map((child) => (
+      [collectListNodeLabels([child]).join(' '), child.searchKeywords ?? ''].join(' ')
+    ))].join(' '),
+    query,
+  );
 
 const DATE_LABEL_DISPLAY_MODE_SEQUENCE: DateLabelDisplayMode[] = ['exact', 'remaining', 'both'];
 const DATE_LABEL_DISPLAY_MODE_LABELS: Record<DateLabelDisplayMode, string> = {
@@ -2915,18 +2947,28 @@ const getCreatableDateLabel = (label: string): string => {
 
 const getCreatableReminderValues = (values: string[]) => {
   const reminderValues = removeRepeatStatusFilters(values);
+  const currentReminder = decodeTodoReminder(reminderValues);
+
+  if (hasHabitItemsFilter(values) && !currentReminder.habitHours) {
+    return encodeTodoReminder({
+      habitHours: '1d',
+      habitNotificationsEnabled: false,
+      time: null,
+      repeat: 'none',
+    });
+  }
 
   if (!hasRepeatingItemsFilter(values)) {
     return reminderValues;
   }
 
-  const currentReminder = decodeTodoReminder(reminderValues);
   if (currentReminder.repeat !== 'none' || currentReminder.habitHours) {
     return reminderValues;
   }
 
   return encodeTodoReminder({
     habitHours: null,
+    habitNotificationsEnabled: true,
     time: currentReminder.time,
     repeat: CREATE_SECTION_DEFAULT_REPEAT,
   });
@@ -3276,9 +3318,9 @@ const NOTIFICATION_LOG_SECTIONS: Array<{
   key: NotificationLogSectionKey;
   label: string;
 }> = [
-  { key: 'normal', label: 'Normal' },
-  { key: 'habits', label: 'Habits' },
-  { key: 'repeating', label: 'Repeating' },
+  { key: 'normal', label: 'Normal history' },
+  { key: 'habits', label: 'Routine history' },
+  { key: 'repeating', label: 'Repeating history' },
 ];
 
 const REPEATING_NOTIFICATION_SUBTITLE_PATTERN = /\((Daily|Weekly|Monthly|Yearly)\)$/i;
@@ -5715,7 +5757,13 @@ function CreateDrawerHost({
 }
 
 export default function App() {
+  return <BiometricLockProvider><TodoApp /></BiometricLockProvider>;
+}
+
+function TodoApp() {
+  const { state: appLockState } = useBiometricLock();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const detailOneHandedSpace = Math.round(windowHeight * 0.42);
   const todoTextMaxLength = useMemo(
     () => getTodoTextMaxLength(windowWidth),
     [windowWidth],
@@ -5754,6 +5802,18 @@ export default function App() {
     return { cardHeight };
   }, [windowHeight]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [routineLogsTodoId, setRoutineLogsTodoId] = useState<string | null>(null);
+  const routineLogSavingRef = useRef(false);
+  const routineTogglePendingRef = useRef(new Set<string>());
+  const [routineLogsComposing, setRoutineLogsComposing] = useState(false);
+  const routineLogTapGateRef = useRef(createRoutineLogTapGate());
+  const tryOpenRoutineLogs = useCallback((id: string, composing = false) => {
+    if (!routineLogTapGateRef.current.tap(id)) return false;
+    setRoutineLogsComposing(composing);
+    setRoutineLogsTodoId(id);
+    triggerSubtleHaptic();
+    return true;
+  }, []);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [searchMode, setSearchMode] = useState<SearchMode>('item');
@@ -5769,6 +5829,8 @@ export default function App() {
   const [notificationLogEntries, setNotificationLogEntries] = useState<NotificationLogEntry[]>([]);
   const [collapsedNotificationSections, setCollapsedNotificationSections] =
     useState<Set<NotificationLogSectionKey>>(new Set());
+  const [routineNotificationsCollapsed, setRoutineNotificationsCollapsed] = useState(false);
+  const [notificationHistoryCollapsed, setNotificationHistoryCollapsed] = useState(false);
   const [notificationLogLoaded, setNotificationLogLoaded] = useState(false);
   const [firebaseInitialSyncReady, setFirebaseInitialSyncReady] = useState(
     () => !isFirebaseConfigured(),
@@ -5800,6 +5862,7 @@ export default function App() {
   const [createDraftPinned, setCreateDraftPinned] = useState(false);
   const [createDraftTags, setCreateDraftTags] = useState<string[]>([]);
   const createDraftCopiesTodoSettingsRef = useRef(false);
+  const widgetFreshDraftRef = useRef(false);
   const [createCommandPaletteVisible, setCreateCommandPaletteVisible] = useState(false);
   const [createCommandQuery, setCreateCommandQuery] = useState('');
   const [createFromSettingsCueVisible, setCreateFromSettingsCueVisible] = useState(false);
@@ -5821,13 +5884,17 @@ export default function App() {
   const datePickerRepeatRef = useRef<RepeatPreset | null>(null);
   const reminderTimeModalRef = useRef<ReminderTimeModalHandle>(null);
   const [habitReminderModalVisible, setHabitReminderModalVisible] = useState(false);
-  const habitReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
+  const habitReminderApplyRef = useRef<'create' | 'activeTodo' | 'quickTodo'>('create');
+  const quickRoutineTodoIdRef = useRef<string | null>(null);
   const [habitDraft, setHabitDraft] = useState<HabitIntervalHours | null>(null);
   const [repeatReminderModalVisible, setRepeatReminderModalVisible] = useState(false);
   const repeatReminderApplyRef = useRef<'create' | 'activeTodo'>('create');
   const [repeatDraft, setRepeatDraft] = useState<RepeatPreset>('none');
   const [loaded, setLoaded] = useState(false);
   const [navTab, setNavTab] = useState<NavTab | null>(null);
+  const [backlogVisible, setBacklogVisible] = useState(false);
+  const [backlogResumeId, setBacklogResumeId] = useState<string | null>(null);
+  const editorReturnRef = useRef<{ kind: 'routine' | 'backlog'; id: string } | null>(null);
   const [menuMode, setMenuMode] = useState<MenuMode | null>(null);
   const [menuEditOwner, setMenuEditOwner] = useState<MenuEditOwner>('presets');
   const [activeTodoMenuId, setActiveTodoMenuId] = useState<string | null>(null);
@@ -5917,6 +5984,8 @@ export default function App() {
   const [hideDoneTodos, setHideDoneTodos] = useState(false);
   const [habitNotificationsPaused, setHabitNotificationsPaused] = useState(false);
   const [habitQuietHoursEnabled, setHabitQuietHoursEnabled] = useState(true);
+  const [habitNotificationText, setHabitNotificationText] = useState('Routine');
+  const [habitNotificationTextDraft, setHabitNotificationTextDraft] = useState('Routine');
   const [dateLabelDisplayMode, setDateLabelDisplayMode] = useState<DateLabelDisplayMode>('exact');
   const [showOverdueMetaTags, setShowOverdueMetaTags] = useState(true);
   const [showPresetPropertiesAboveSearch, setShowPresetPropertiesAboveSearch] = useState(false);
@@ -6000,6 +6069,7 @@ export default function App() {
   const [collapsedSearchListLabels, setCollapsedSearchListLabels] = useState<Set<string>>(
     () => new Set(),
   );
+  const knownSearchListLabelsRef = useRef<Set<string>>(new Set());
   const [toggleAllTodoSectionsRequest, setToggleAllTodoSectionsRequest] = useState(0);
   const [todoSortMode, setTodoSortMode] = useState<TodoSortMode>('newest');
   const todoSortModeRef = useRef<TodoSortMode>(todoSortMode);
@@ -6118,6 +6188,7 @@ export default function App() {
   const todoAlarmResumeSyncAtRef = useRef(0);
   const habitNotificationsPausedRef = useRef(habitNotificationsPaused);
   const habitQuietHoursEnabledRef = useRef(habitQuietHoursEnabled);
+  const habitNotificationTextRef = useRef(habitNotificationText);
   const repeatingTodoCompletionFeedbackIdsRef = useRef<Set<string>>(new Set());
   const repeatingTodoCompletionTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -6143,6 +6214,7 @@ export default function App() {
   hideDoneTodosRef.current = hideDoneTodos;
   habitNotificationsPausedRef.current = habitNotificationsPaused;
   habitQuietHoursEnabledRef.current = habitQuietHoursEnabled;
+  habitNotificationTextRef.current = habitNotificationText;
   lastCreateTodoFiltersRef.current = lastCreateTodoFilters;
   listMenuTreeRef.current = listMenuTree;
   customTagsRef.current = customTags;
@@ -6477,7 +6549,6 @@ export default function App() {
         }
 
         setTodos(loadedTodos);
-        reconcileTodoAlarms(loadedTodos).catch(() => undefined);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -6522,7 +6593,7 @@ export default function App() {
 
   useEffect(() => {
     const syncAlarmsOnActive = (nextState: AppStateStatus) => {
-      if (nextState !== 'active' || !loadedRef.current) {
+      if (nextState !== 'active' || !loadedRef.current || !settingsLoadedRef.current) {
         return;
       }
 
@@ -6542,9 +6613,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
     setTodoAlarmSettings({
       habitNotificationsPaused,
       habitQuietHoursEnabled,
+      habitNotificationText,
     });
 
     if (loaded && settingsLoaded) {
@@ -6553,6 +6628,7 @@ export default function App() {
   }, [
     habitNotificationsPaused,
     habitQuietHoursEnabled,
+    habitNotificationText,
     loaded,
     settingsLoaded,
   ]);
@@ -6624,12 +6700,16 @@ export default function App() {
     setGoogleDriveLastRestoreAt(appliedSettings.googleDriveLastRestoreAt);
     habitNotificationsPausedRef.current = appliedSettings.habitNotificationsPaused;
     habitQuietHoursEnabledRef.current = appliedSettings.habitQuietHoursEnabled;
+    habitNotificationTextRef.current = appliedSettings.habitNotificationText;
     setTodoAlarmSettings({
       habitNotificationsPaused: appliedSettings.habitNotificationsPaused,
       habitQuietHoursEnabled: appliedSettings.habitQuietHoursEnabled,
+      habitNotificationText: appliedSettings.habitNotificationText,
     });
     setHabitNotificationsPaused(appliedSettings.habitNotificationsPaused);
     setHabitQuietHoursEnabled(appliedSettings.habitQuietHoursEnabled);
+    setHabitNotificationText(appliedSettings.habitNotificationText);
+    setHabitNotificationTextDraft(appliedSettings.habitNotificationText);
     setHideDoneTodos(appliedSettings.hideDoneTodos);
     setDateLabelDisplayMode(appliedSettings.dateLabelDisplayMode);
     setShowOverdueMetaTags(appliedSettings.showOverdueMetaTags);
@@ -6869,6 +6949,7 @@ export default function App() {
     googleDriveLastRestoreAt,
     habitNotificationsPaused,
     habitQuietHoursEnabled,
+    habitNotificationText,
     history: cloneAppHistoryState({
       redo: redoHistory,
       undo: undoHistory,
@@ -6911,6 +6992,7 @@ export default function App() {
     googleDriveLastRestoreAt,
     habitNotificationsPaused,
     habitQuietHoursEnabled,
+    habitNotificationText,
     hideDoneTodos,
     lastCreateTodoFilters,
     listMenuTree,
@@ -7329,6 +7411,7 @@ export default function App() {
     googleDriveBackupEnabled: googleDriveBackupEnabledRef.current,
     habitNotificationsPaused: habitNotificationsPausedRef.current,
     habitQuietHoursEnabled: habitQuietHoursEnabledRef.current,
+    habitNotificationText: habitNotificationTextRef.current,
     hideDoneTodos: hideDoneTodosRef.current,
     lastCreateTodoFilters: cloneTodoFilters(lastCreateTodoFiltersRef.current),
     listMenuTree: cloneListMenuTree(listMenuTreeRef.current),
@@ -7561,6 +7644,7 @@ export default function App() {
       googleDriveBackupEnabled: false,
       habitNotificationsPaused: snapshot.habitNotificationsPaused,
       habitQuietHoursEnabled: snapshot.habitQuietHoursEnabled,
+      habitNotificationText: snapshot.habitNotificationText,
       hideDoneTodos: snapshot.hideDoneTodos,
       lastCreateTodoFilters: restoredLastCreateTodoFilters,
       listMenuTree: restoredListMenuTree,
@@ -7586,9 +7670,11 @@ export default function App() {
     googleDriveBackupEnabledRef.current = false;
     habitNotificationsPausedRef.current = snapshot.habitNotificationsPaused;
     habitQuietHoursEnabledRef.current = snapshot.habitQuietHoursEnabled;
+    habitNotificationTextRef.current = snapshot.habitNotificationText;
     setTodoAlarmSettings({
       habitNotificationsPaused: snapshot.habitNotificationsPaused,
       habitQuietHoursEnabled: snapshot.habitQuietHoursEnabled,
+      habitNotificationText: snapshot.habitNotificationText,
     });
     hideDoneTodosRef.current = snapshot.hideDoneTodos;
     lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
@@ -7617,6 +7703,8 @@ export default function App() {
     setGoogleDriveBackupEnabled(false);
     setHabitNotificationsPaused(snapshot.habitNotificationsPaused);
     setHabitQuietHoursEnabled(snapshot.habitQuietHoursEnabled);
+    setHabitNotificationText(snapshot.habitNotificationText);
+    setHabitNotificationTextDraft(snapshot.habitNotificationText);
     setHideDoneTodos(snapshot.hideDoneTodos);
     setDateLabelDisplayMode(snapshot.dateLabelDisplayMode);
     setShowOverdueMetaTags(snapshot.showOverdueMetaTags);
@@ -8013,6 +8101,16 @@ export default function App() {
         return;
       }
 
+      if (hasTodoHabitInterval(currentTodo.filters.reminder)) {
+        const updatedRoutine = touchTodo({ ...currentTodo, done: false });
+        setTodos((current) => current.map((todo) => (
+          todo.id === id ? updatedRoutine : todo
+        )));
+        localTodoStore.upsert(updatedRoutine).catch(() => undefined);
+        syncTodoAlarm(updatedRoutine).catch(() => undefined);
+        return;
+      }
+
       const nextRepeatingTodo = advanceRepeatingTodoAfterDone(currentTodo);
       if (!nextRepeatingTodo) {
         const completedTodo = touchTodo({ ...currentTodo, done: true });
@@ -8320,6 +8418,7 @@ export default function App() {
     initialField: CreateDrawerFocusedField = 'title',
   ) => {
     latestWidgetEditorReturnTodoIdRef.current = null;
+    editorReturnRef.current = null;
     const nextFilters = getCopiedTodoFilters(todo);
     createDraftCopiesTodoSettingsRef.current = false;
     createCommandRestoreAfterPickerRef.current = false;
@@ -8383,6 +8482,11 @@ export default function App() {
 
     exitTodoSelectMode();
 
+    if (hasTodoHabitInterval(todo.filters.reminder)) {
+      tryOpenRoutineLogs(id, initialField === 'content');
+      return;
+    }
+
     if (!todo.done) {
       openTodoEditor(todo, initialField);
       triggerSubtleHaptic();
@@ -8403,6 +8507,7 @@ export default function App() {
     openTodoEditor,
     pendingDeleteIds,
     todos,
+    tryOpenRoutineLogs,
   ]);
 
   const dampMenuPullDistance = useCallback((translationY: number) => {
@@ -8787,7 +8892,7 @@ export default function App() {
   }, []);
 
   useLayoutEffect(() => {
-    if (!createDrawerVisible || createDrawerPicker) {
+    if (!createDrawerVisible || createDrawerPicker || !appLockState.ready || appLockState.locked || !startupDataReady) {
       return undefined;
     }
 
@@ -8825,12 +8930,25 @@ export default function App() {
     });
     return () => cancelAnimationFrame(frame);
   }, [
+    appLockState.ready,
+    appLockState.locked,
+    startupDataReady,
     createDrawerEditingTodoId,
     createDrawerFocusedField,
     createDrawerPicker,
     createDrawerVisible,
     createEditorSoftInputEnabled,
   ]);
+
+  useEffect(() => {
+    // Widget URLs may arrive while the lock screen or startup screen is still
+    // shown. Retry only after the actual editor has mounted and is accessible.
+    if (Platform.OS !== 'android' || !appLockState.ready || appLockState.locked ||
+        !startupDataReady || !createDrawerVisible || createDrawerEditingTodoId ||
+        createDrawerPicker || !createDrawerFocusPendingRef.current) return;
+    scheduleWidgetNewItemInputFocus();
+  }, [appLockState.ready, appLockState.locked, startupDataReady, createDrawerVisible,
+    createDrawerEditingTodoId, createDrawerPicker, scheduleWidgetNewItemInputFocus]);
 
   useLayoutEffect(() => {
     if (!createDrawerVisible || !createDrawerEditingTodoId) {
@@ -8915,6 +9033,40 @@ export default function App() {
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
   }, [lastCreateTodoFilters, listMenuTree]);
 
+  const rememberNewItemDraft = useCallback(() => {
+    if (createDrawerEditingTodoId !== null || widgetFreshDraftRef.current) return;
+    uiMemoryStore.rememberDraft({ text: createDraftText, content: createDraftContent,
+      pinned: createDraftPinned, tags: createDraftTags, filters: cloneTodoFilters(createDraftFilters) });
+  }, [createDrawerEditingTodoId, createDraftText, createDraftContent, createDraftPinned, createDraftTags, createDraftFilters]);
+
+  useEffect(() => {
+    if (!createDrawerVisible || createDrawerEditingTodoId !== null) return;
+    let cancelled = false;
+    void uiMemoryStore.ready().then(() => { if (!cancelled) rememberNewItemDraft(); });
+    return () => { cancelled = true; };
+  }, [createDrawerVisible, createDrawerEditingTodoId, rememberNewItemDraft]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') void uiMemoryStore.flush().catch(() => undefined);
+    });
+    return () => { subscription.remove(); void uiMemoryStore.flush().catch(() => undefined); };
+  }, []);
+
+  const restoreNewItemDraft = useCallback(() => {
+    const draft = uiMemoryStore.draft();
+    if (!draft) return;
+    const filters = normalizeTodoFilters(draft.filters);
+    setCreateDraftText(draft.text);
+    setCreateDraftContent(draft.content);
+    setCreateDraftPinned(draft.pinned);
+    setCreateDraftTags(draft.tags);
+    setCreateDraftFilters(filters);
+    setCreateDraftPriorityFromPicker(shouldHighlightCreatePriorityPicker(filters));
+    setHabitDraft(decodeTodoReminder(filters.reminder).habitHours ?? null);
+    setRepeatDraft(decodeTodoReminder(filters.reminder).repeat);
+  }, []);
+
   const focusCreateTitleAtCommandCursor = useCallback(() => {
     const selection = createCommandReturnSelectionRef.current;
     createDrawerFocusPendingRef.current = true;
@@ -8985,6 +9137,11 @@ export default function App() {
     }
 
     pendingTodoAlarmOpenIdRef.current = null;
+    const isRoutine = hasTodoHabitInterval(todo.filters.reminder);
+    if (isRoutine) {
+      setRoutineLogsComposing(false);
+      setRoutineLogsTodoId(id);
+    }
     Keyboard.dismiss();
     searchInputRef.current?.blur();
     closeListMenuState();
@@ -9006,6 +9163,12 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setSettingsModalVisible(false);
     setNavTab(null);
+
+    if (isRoutine) {
+      setActiveTodoDetailId(null);
+      setActiveTodoMenuId(null);
+      return;
+    }
 
     if (!todo.done) {
       openTodoEditor(todo);
@@ -9062,18 +9225,6 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
-  const clearNotificationLog = useCallback(() => {
-    setNotificationLogEntries([]);
-    notificationLogStore
-      .replaceAll([])
-      .then((nextEntries) => {
-        setNotificationLogEntries(nextEntries);
-        queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
-      })
-      .catch(() => undefined);
-    triggerSubtleHaptic();
-  }, []);
-
   const openNotificationLogEntry = useCallback((entry: NotificationLogEntry) => {
     if (!entry.todoId) {
       return;
@@ -9094,11 +9245,14 @@ export default function App() {
     }
   }, [loaded, openTodoAlarmDetail, todos]);
 
+  const openTodoAlarmDetailRef = useRef(openTodoAlarmDetail);
+  openTodoAlarmDetailRef.current = openTodoAlarmDetail;
+
   useEffect(() => {
     let alive = true;
     const openTodo = (todoId: string) => {
       if (alive) {
-        openTodoAlarmDetail(todoId);
+        openTodoAlarmDetailRef.current(todoId);
       }
     };
 
@@ -9128,7 +9282,7 @@ export default function App() {
       responseSubscription.remove();
       receivedSubscription.remove();
     };
-  }, [appendNotificationLogEntry, mergeNotificationLog, openTodoAlarmDetail]);
+  }, [appendNotificationLogEntry, mergeNotificationLog]);
 
   useEffect(() => {
     const mergePresentedNotificationsOnActive = (nextState: AppStateStatus) => {
@@ -9149,15 +9303,28 @@ export default function App() {
 
   const returnToLatestWidgetModalAfterEditor = useCallback(() => {
     const returnTodoId = latestWidgetEditorReturnTodoIdRef.current;
+    const destination = editorReturnRef.current;
     latestWidgetEditorReturnTodoIdRef.current = null;
-    if (!returnTodoId) {
-      return;
+    editorReturnRef.current = null;
+    if (destination) {
+      requestAnimationFrame(() => {
+        if (!todosRef.current.some(todo => todo.id === destination.id)) return;
+        if (destination.kind === 'routine') {
+          setRoutineLogsComposing(false);
+          setRoutineLogsTodoId(destination.id);
+        } else {
+          setBacklogResumeId(destination.id);
+          setBacklogVisible(true);
+        }
+      });
+    } else if (returnTodoId) {
+      requestAnimationFrame(() => setLatestWidgetModalTodoId(returnTodoId));
     }
-
-    requestAnimationFrame(() => setLatestWidgetModalTodoId(returnTodoId));
   }, []);
 
   const closeCreateDrawer = useCallback(() => {
+    rememberNewItemDraft();
+    void uiMemoryStore.flush().catch(() => undefined);
     createDrawerVisibleRef.current = false;
     createDrawerFocusPendingRef.current = false;
     createDrawerPickerRef.current = null;
@@ -9176,6 +9343,7 @@ export default function App() {
     resetCreateDrawerState();
     returnToLatestWidgetModalAfterEditor();
   }, [
+    rememberNewItemDraft,
     cancelWidgetNewItemInputFocus,
     resetCreateDrawerState,
     returnToLatestWidgetModalAfterEditor,
@@ -9594,7 +9762,9 @@ export default function App() {
     todosById,
   ]);
 
-  const openCreateDrawer = useCallback((initialText = '') => {
+  const openCreateDrawer = useCallback(async (initialText = '') => {
+    await uiMemoryStore.ready();
+    widgetFreshDraftRef.current = false;
     if (listMenuOpen) {
       closeListMenu();
     }
@@ -9611,6 +9781,7 @@ export default function App() {
       ),
     );
 
+    restoreNewItemDraft();
     createDrawerVisibleRef.current = true;
     createDrawerFocusPendingRef.current = true;
     setCreateDrawerVisible(true);
@@ -9619,6 +9790,7 @@ export default function App() {
     exitTodoSelectMode,
     listMenuOpen,
     resetCreateDrawerState,
+    restoreNewItemDraft,
     todoTextMaxLength,
   ]);
 
@@ -9630,15 +9802,25 @@ export default function App() {
     setCreateFromSettingsCueVisible(false);
   }, []);
 
-  const openCreateDrawerWithFilters = useCallback((
+  const openCreateDrawerWithFilters = useCallback(async (
     sectionFilters: TodoFilters,
     initialText = '',
+    options: { freshWidget?: boolean } = {},
   ) => {
+    await uiMemoryStore.ready();
+    widgetFreshDraftRef.current = options.freshWidget === true;
+    if (options.freshWidget) {
+      // Widget launches should always present the roomy editor, even when an
+      // earlier drawer or keyboard transition is still settling.
+      setCreateDrawerExpanded(true);
+      createDraftSelectionRef.current = { start: 0, end: 0 };
+      createDraftContentSelectionRef.current = { start: 0, end: 0 };
+    }
     if (listMenuOpen) {
       closeListMenu();
     }
 
-    createDraftCopiesTodoSettingsRef.current = false;
+    createDraftCopiesTodoSettingsRef.current = options.freshWidget === true;
     const nextFilters = getCreateTodoFilters(listMenuTree, sectionFilters);
 
     exitTodoSelectMode();
@@ -9666,6 +9848,7 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
+    if (!options.freshWidget) restoreNewItemDraft();
     hideCreateFromSettingsCue();
     createDrawerPickerRef.current = null;
     createDrawerVisibleRef.current = true;
@@ -9675,6 +9858,7 @@ export default function App() {
     closeListMenu,
     exitTodoSelectMode,
     hideCreateFromSettingsCue,
+    restoreNewItemDraft,
     listMenuOpen,
     listMenuTree,
     todoTextMaxLength,
@@ -9693,11 +9877,10 @@ export default function App() {
       listMenuTree,
       widgetNewItemList,
     );
-    openCreateDrawerWithFilters({
+    void openCreateDrawerWithFilters({
       ...cloneTodoFilters(),
       list: [destinationList],
-    });
-    scheduleWidgetNewItemInputFocus();
+    }, '', { freshWidget: true }).then(scheduleWidgetNewItemInputFocus);
   }, [
     listMenuTree,
     openCreateDrawerWithFilters,
@@ -9922,11 +10105,13 @@ export default function App() {
     settingsLoaded,
   ]);
 
-  const openCreateDrawerFromTodoSettings = useCallback((sourceTodo: Todo) => {
+  const openCreateDrawerFromTodoSettings = useCallback(async (sourceTodo: Todo) => {
+    await uiMemoryStore.ready();
     if (listMenuOpen) {
       closeListMenu();
     }
 
+    widgetFreshDraftRef.current = false;
     createDraftCopiesTodoSettingsRef.current = true;
     const nextFilters = getCopiedTodoFilters(sourceTodo);
 
@@ -9950,6 +10135,7 @@ export default function App() {
     setRepeatReminderModalVisible(false);
     setHabitDraft(decodeTodoReminder(nextFilters.reminder).habitHours ?? null);
     setRepeatDraft(decodeTodoReminder(nextFilters.reminder).repeat);
+    restoreNewItemDraft();
     hideCreateFromSettingsCue();
     createDrawerPickerRef.current = null;
     createDrawerVisibleRef.current = true;
@@ -9959,9 +10145,17 @@ export default function App() {
     closeListMenu,
     exitTodoSelectMode,
     hideCreateFromSettingsCue,
+    restoreNewItemDraft,
     listMenuOpen,
     listMenuTree,
   ]);
+
+  const openQuickRoutineDrawer = useCallback(() => {
+    openCreateDrawerWithFilters({
+      ...cloneTodoFilters(),
+      reminder: [HABIT_ITEMS_FILTER_VALUE],
+    });
+  }, [openCreateDrawerWithFilters]);
 
   const handleAddTodoPress = useCallback(() => {
     quickPresetEmptyAreaFlashSuppressedUntilRef.current = Date.now() + 400;
@@ -9972,8 +10166,22 @@ export default function App() {
     setQuickPresetEmptyAreaFlashVisible(false);
     triggerVerySubtleHaptic();
 
+    const currentCreateFilters = mergeCreateSectionFilters(
+      requiredFilters,
+      selectedFilters,
+    );
+    if (hasHabitItemsFilter(currentCreateFilters.reminder)) {
+      openCreateDrawerWithFilters(currentCreateFilters);
+      return;
+    }
+
     openCreateDrawer();
-  }, [openCreateDrawer]);
+  }, [
+    openCreateDrawer,
+    openCreateDrawerWithFilters,
+    requiredFilters,
+    selectedFilters,
+  ]);
 
   useEffect(() => {
     if (!createDrawerVisible) {
@@ -10161,7 +10369,16 @@ export default function App() {
     clearNotificationTodoReveal();
     setTodos((current) => [todo, ...current]);
     highlightNewlyCreatedTodo(todo.id);
-    localTodoStore.upsert(todo).catch(() => undefined);
+    const submittedDraft = { text: createDraftText, content: createDraftContent,
+      pinned: createDraftPinned, tags: createDraftTags, filters: cloneTodoFilters(createDraftFilters) };
+    const isWidgetDraft = widgetFreshDraftRef.current;
+    if (!isWidgetDraft) uiMemoryStore.rememberDraft(submittedDraft);
+    localTodoStore.upsert(todo).then(() => {
+      if (!isWidgetDraft) {
+        uiMemoryStore.clearSubmittedDraft(submittedDraft);
+        void uiMemoryStore.flush().catch(() => undefined);
+      }
+    }).catch(() => undefined);
     syncTodoAlarm(todo).catch(() => undefined);
     Keyboard.dismiss();
     setCreateDrawerVisible(false);
@@ -10697,8 +10914,9 @@ export default function App() {
     const repeatedNextTodo = done && updatedTodo
       ? advanceRepeatingTodoAfterDone(updatedTodo)
       : null;
+    const isRoutineCompletion = done && hasTodoHabitInterval(updatedTodo.filters.reminder);
 
-    if (repeatedNextTodo && updatedTodo) {
+    if ((repeatedNextTodo || isRoutineCompletion) && updatedTodo) {
       if (!options.skipUndo) {
         recordUndo('Complete todo');
       }
@@ -10835,6 +11053,59 @@ export default function App() {
       syncTodoAlarm(todo).catch(() => undefined);
     });
   }, [highlightEditedTodos, pendingDeleteIds, recordFilterConfigUndo]);
+
+  const toggleRoutineNotifications = useCallback((id: string) => {
+    if (routineTogglePendingRef.current.has(id)) return;
+    const todo = todosRef.current.find((item) => item.id === id);
+    if (!todo || pendingDeleteIdsRef.current.has(id)) {
+      return;
+    }
+
+    const reminder = decodeTodoReminder(todo.filters.reminder);
+    if (!reminder.habitHours) {
+      return;
+    }
+
+    routineTogglePendingRef.current.add(id);
+    updateTodoFiltersForIds([id], (filters) => {
+      const current = decodeTodoReminder(filters.reminder);
+      if (!current.habitHours) {
+        return filters;
+      }
+
+      return {
+        ...filters,
+        reminder: encodeTodoReminder({
+          ...current,
+          habitNotificationsEnabled: !current.habitNotificationsEnabled,
+        }),
+      };
+    });
+    sendRoutineToggleNotification(todo, !reminder.habitNotificationsEnabled)
+      .catch(() => Alert.alert('Test notification', 'Could not send the test notification. Check notification permissions and try again.'))
+      .finally(() => routineTogglePendingRef.current.delete(id));
+    triggerSubtleHaptic();
+  }, [updateTodoFiltersForIds]);
+
+  const openQuickRoutineInterval = useCallback((id: string) => {
+    const todo = todosRef.current.find((item) => item.id === id);
+    if (!todo || pendingDeleteIdsRef.current.has(id)) {
+      return;
+    }
+
+    const reminder = decodeTodoReminder(todo.filters.reminder);
+    if (!reminder.habitHours) {
+      return;
+    }
+
+    quickRoutineTodoIdRef.current = id;
+    habitReminderApplyRef.current = 'quickTodo';
+    reminderTimeModalRef.current?.close();
+    setRepeatReminderModalVisible(false);
+    setHabitDraft(reminder.habitHours);
+    setHabitReminderModalVisible(true);
+    triggerSubtleHaptic();
+  }, []);
 
   const updateTodoPinnedForIds = useCallback((ids: string[], pinned: boolean) => {
     const targetIds = new Set(ids.filter((id) => !pendingDeleteIds.has(id)));
@@ -10979,6 +11250,7 @@ export default function App() {
         const currentReminder = decodeTodoReminder(current.reminder);
         nextFilters.reminder = encodeTodoReminder({
           habitHours: null,
+          habitNotificationsEnabled: true,
           time: currentReminder.time,
           repeat,
         });
@@ -11009,6 +11281,7 @@ export default function App() {
         const currentReminder = decodeTodoReminder(current.reminder);
         nextFilters.reminder = encodeTodoReminder({
           habitHours: currentReminder.habitHours,
+          habitNotificationsEnabled: currentReminder.habitNotificationsEnabled,
           time: currentReminder.time,
           repeat: 'none',
         });
@@ -11039,7 +11312,12 @@ export default function App() {
     setCreateDraftFilters((current) => ({
       ...current,
       date: [],
-      reminder: encodeTodoReminder({ habitHours: null, time: null, repeat: 'none' }),
+      reminder: encodeTodoReminder({
+        habitHours: null,
+        habitNotificationsEnabled: true,
+        time: null,
+        repeat: 'none',
+      }),
     }));
     setDatePickerVisible(false);
     reminderTimeModalRef.current?.close();
@@ -11218,7 +11496,12 @@ export default function App() {
 
         return {
           ...draft,
-          reminder: encodeTodoReminder({ habitHours: null, time, repeat: current.repeat }),
+          reminder: encodeTodoReminder({
+            habitHours: null,
+            habitNotificationsEnabled: true,
+            time,
+            repeat: current.repeat,
+          }),
         };
       });
     } else {
@@ -11230,7 +11513,12 @@ export default function App() {
 
           return {
             ...filters,
-            reminder: encodeTodoReminder({ habitHours: null, time, repeat: current.repeat }),
+            reminder: encodeTodoReminder({
+              habitHours: null,
+              habitNotificationsEnabled: true,
+              time,
+              repeat: current.repeat,
+            }),
           };
         });
       }
@@ -11263,6 +11551,7 @@ export default function App() {
 
   const closeCreateHabitModal = useCallback(() => {
     setHabitReminderModalVisible(false);
+    quickRoutineTodoIdRef.current = null;
     restoreCreateCommandFocusAfterPicker();
   }, [restoreCreateCommandFocusAfterPicker]);
 
@@ -11274,16 +11563,26 @@ export default function App() {
         return {
           ...draft,
           reminder: habitHours
-            ? encodeTodoReminder({ habitHours, time: null, repeat: 'none' })
+            ? encodeTodoReminder({
+                habitHours,
+                habitNotificationsEnabled: current.habitHours
+                  ? current.habitNotificationsEnabled
+                  : true,
+                time: null,
+                repeat: 'none',
+              })
             : encodeTodoReminder({
                 habitHours: null,
+                habitNotificationsEnabled: true,
                 time: current.time,
                 repeat: current.repeat,
               }),
         };
       });
     } else {
-      const targetIds = getCurrentTodoEditTargetIds();
+      const targetIds = habitReminderApplyRef.current === 'quickTodo'
+        ? [quickRoutineTodoIdRef.current].filter((id): id is string => Boolean(id))
+        : getCurrentTodoEditTargetIds();
 
       if (targetIds.length > 0) {
         updateTodoFiltersForIds(targetIds, (filters) => {
@@ -11292,9 +11591,17 @@ export default function App() {
           return {
             ...filters,
             reminder: habitHours
-              ? encodeTodoReminder({ habitHours, time: null, repeat: 'none' })
+              ? encodeTodoReminder({
+                  habitHours,
+                  habitNotificationsEnabled: current.habitHours
+                    ? current.habitNotificationsEnabled
+                    : true,
+                  time: null,
+                  repeat: 'none',
+                })
               : encodeTodoReminder({
                   habitHours: null,
+                  habitNotificationsEnabled: true,
                   time: current.time,
                   repeat: current.repeat,
                 }),
@@ -11305,6 +11612,7 @@ export default function App() {
 
     setHabitDraft(habitHours);
     setHabitReminderModalVisible(false);
+    quickRoutineTodoIdRef.current = null;
     triggerSubtleHaptic();
     restoreCreateCommandFocusAfterPicker();
   }, [
@@ -11334,7 +11642,12 @@ export default function App() {
 
         return {
           ...draft,
-          reminder: encodeTodoReminder({ habitHours: null, time: current.time, repeat }),
+          reminder: encodeTodoReminder({
+            habitHours: null,
+            habitNotificationsEnabled: true,
+            time: current.time,
+            repeat,
+          }),
         };
       });
     } else {
@@ -11346,7 +11659,12 @@ export default function App() {
 
           return {
             ...filters,
-            reminder: encodeTodoReminder({ habitHours: null, time: current.time, repeat }),
+            reminder: encodeTodoReminder({
+              habitHours: null,
+              habitNotificationsEnabled: true,
+              time: current.time,
+              repeat,
+            }),
           };
         });
       }
@@ -11369,6 +11687,7 @@ export default function App() {
         ...draft,
         reminder: encodeTodoReminder({
           habitHours: current.habitHours,
+          habitNotificationsEnabled: current.habitNotificationsEnabled,
           time: null,
           repeat: current.repeat,
         }),
@@ -11386,6 +11705,7 @@ export default function App() {
         ...draft,
         reminder: encodeTodoReminder({
           habitHours: current.habitHours,
+          habitNotificationsEnabled: current.habitNotificationsEnabled,
           time: current.time,
           repeat: 'none',
         }),
@@ -11402,6 +11722,7 @@ export default function App() {
         ...draft,
         reminder: encodeTodoReminder({
           habitHours: null,
+          habitNotificationsEnabled: true,
           time: current.time,
           repeat: current.repeat,
         }),
@@ -11477,6 +11798,7 @@ export default function App() {
         ...filters,
         reminder: encodeTodoReminder({
           habitHours: current.habitHours,
+          habitNotificationsEnabled: current.habitNotificationsEnabled,
           time: null,
           repeat: current.repeat,
         }),
@@ -11500,6 +11822,7 @@ export default function App() {
         ...filters,
         reminder: encodeTodoReminder({
           habitHours: null,
+          habitNotificationsEnabled: true,
           time: current.time,
           repeat: current.repeat,
         }),
@@ -11522,6 +11845,7 @@ export default function App() {
         ...filters,
         reminder: encodeTodoReminder({
           habitHours: current.habitHours,
+          habitNotificationsEnabled: current.habitNotificationsEnabled,
           time: current.time,
           repeat: 'none',
         }),
@@ -12384,6 +12708,74 @@ export default function App() {
       todo,
     };
   }, [activeTodoMenuId, currentTodoEditTargets, dateStatusNow]);
+  const routineLogsTodo = todos.find(todo => todo.id === routineLogsTodoId) ?? null;
+  const addRoutineLog = useCallback(async (text: string) => {
+    if (routineLogSavingRef.current) throw new Error('Already saving');
+    const todo = todosRef.current.find(item => item.id === routineLogsTodoId);
+    if (!todo || !text.trim()) throw new Error('Routine unavailable');
+    routineLogSavingRef.current = true;
+    try {
+      const createdAt = Date.now();
+      const updatedTodo: Todo = {
+        ...todo,
+        updatedAt: Math.max(createdAt, todo.updatedAt + 1),
+        routineLogs: normalizeRoutineLogs([
+          { id: `${createdAt}-${Math.random().toString(36).slice(2)}`, text, createdAt },
+          ...(todo.routineLogs ?? []),
+        ]),
+      };
+      await localTodoStore.upsert(updatedTodo);
+      recordUndo('Add routine log');
+      const next = todosRef.current.map(item => item.id === todo.id ? updatedTodo : item);
+      todosRef.current = next;
+      setTodos(next);
+      triggerSubtleHaptic();
+    } finally { routineLogSavingRef.current = false; }
+  }, [recordUndo, routineLogsTodoId]);
+
+  const deleteRoutineLog = useCallback(async (logId: string) => {
+    if (routineLogSavingRef.current) throw new Error('Already saving');
+    const todo = todosRef.current.find(item => item.id === routineLogsTodoId);
+    if (!todo) throw new Error('Routine unavailable');
+    const updatedTodo = touchTodo({
+      ...todo,
+      routineLogs: normalizeRoutineLogs(todo.routineLogs).filter(entry => entry.id !== logId),
+    });
+    routineLogSavingRef.current = true;
+    try {
+      await localTodoStore.upsert(updatedTodo);
+      recordUndo('Delete routine log');
+      const next = todosRef.current.map(item => item.id === todo.id ? updatedTodo : item);
+      todosRef.current = next;
+      setTodos(next);
+      triggerSubtleHaptic();
+    } finally { routineLogSavingRef.current = false; }
+  }, [recordUndo, routineLogsTodoId]);
+
+  const editRoutineLog = useCallback(async (logId: string, text: string) => {
+    if (routineLogSavingRef.current) throw new Error('Already saving');
+    const todo = todosRef.current.find(item => item.id === routineLogsTodoId);
+    const logs = normalizeRoutineLogs(todo?.routineLogs);
+    const log = logs.find(entry => entry.id === logId);
+    const trimmedText = text.trim();
+    if (!todo || !log || !trimmedText) throw new Error('Routine log unavailable');
+    if (log.text === trimmedText) return;
+
+    const updatedTodo = touchTodo({
+      ...todo,
+      routineLogs: logs.map(entry => entry.id === logId ? { ...entry, text: trimmedText } : entry),
+    });
+    routineLogSavingRef.current = true;
+    try {
+      await localTodoStore.upsert(updatedTodo);
+      recordUndo('Edit routine log');
+      const next = todosRef.current.map(item => item.id === todo.id ? updatedTodo : item);
+      todosRef.current = next;
+      setTodos(next);
+      triggerSubtleHaptic();
+    } finally { routineLogSavingRef.current = false; }
+  }, [recordUndo, routineLogsTodoId]);
+
   const activeTodoDetail = useMemo(
     () => todos.find((todo) => todo.id === activeTodoDetailId) ?? null,
     [activeTodoDetailId, todos],
@@ -12552,13 +12944,20 @@ export default function App() {
     countFilters(menuFilters, includeActiveTodoReminderRows) + countFilters(menuAvoidedFilters);
   const showSearchPresetSections = navTab === 'search' && searchMode === 'preset';
   const searchPresetQuery = query.trim();
+  const searchListTodos = useMemo(() => (
+    showSearchPresetSections
+      ? todos.filter((todo) => (
+        !pendingDeleteIds.has(todo.id) && (!hideDoneTodos || !todo.done)
+      )).sort(todoSortComparator)
+      : []
+  ), [hideDoneTodos, pendingDeleteIds, showSearchPresetSections, todoSortComparator, todos]);
   const searchPropertyPresets = useMemo<SearchPropertyPreset[]>(() => {
     if (!showSearchPresetSections) {
       return EMPTY_SEARCH_PROPERTY_PRESETS;
     }
 
-    // This is a local, derived index over the already-filtered view. Creating,
-    // editing, or deleting a todo updates `sortedTodos`, so the buckets refresh
+    // Search spans all lists, independently of the active navbar preset.
+    // Creating, editing, or deleting a todo refreshes these derived buckets
     // without another database query or a separately persisted summary that can drift.
     type PropertyBucket = {
       canCreate: boolean;
@@ -12572,7 +12971,7 @@ export default function App() {
     };
     const buckets = new Map<string, PropertyBucket>();
 
-    sortedTodos.forEach((todo) => {
+    searchListTodos.forEach((todo) => {
       const todoPropertyIds = new Set<string>();
       const addProperty = (property: Omit<PropertyBucket, 'matchedTodos'>) => {
         if (todoPropertyIds.has(property.id)) {
@@ -12731,7 +13130,7 @@ export default function App() {
     dateStatusNow,
     showOverdueMetaTags,
     showSearchPresetSections,
-    sortedTodos,
+    searchListTodos,
   ]);
   const searchPresetSources = useMemo<SearchPresetSource[]>(() => {
     if (!showSearchPresetSections) {
@@ -12811,6 +13210,7 @@ export default function App() {
           score,
         };
       })
+      .filter((item) => !searchPresetQuery || item.matchesQuery)
       .sort((first, second) => {
         if (searchPresetQuery) {
           if (first.matchesQuery !== second.matchesQuery) {
@@ -12831,11 +13231,8 @@ export default function App() {
     }
 
     return listMenuTree.map((node, index) => {
-      const matchingListValues = new Set([
-        node.label,
-        ...(node.children?.map((child) => child.label) ?? []),
-      ]);
-      const matchedTodos = sortedTodos.filter((todo) => (
+      const matchingListValues = new Set(collectListNodeLabels([node]));
+      const matchedTodos = searchListTodos.filter((todo) => (
         todo.filters.list.some((value) => matchingListValues.has(value))
       ));
 
@@ -12846,8 +13243,8 @@ export default function App() {
         matchedTodos,
         node,
       };
-    }).filter((item) => item.count > 0);
-  }, [listMenuTree, showSearchPresetSections, sortedTodos]);
+    });
+  }, [listMenuTree, showSearchPresetSections, searchListTodos]);
   const searchListMenuItems = useMemo<SearchListMenuItem[]>(() => {
     if (!showSearchPresetSections) {
       return EMPTY_SEARCH_LIST_MENU_ITEMS;
@@ -12860,7 +13257,7 @@ export default function App() {
         matchesQuery: Boolean(searchPresetQuery) && Number.isFinite(score),
         score,
       };
-    }).sort((first, second) => {
+    }).filter((item) => !searchPresetQuery || item.matchesQuery).sort((first, second) => {
       if (searchPresetQuery) {
         if (first.matchesQuery !== second.matchesQuery) {
           return first.matchesQuery ? -1 : 1;
@@ -12905,29 +13302,25 @@ export default function App() {
       return collapsedSearchPresetIds;
     }
 
-    const knownPresetIds = knownSearchPresetIdsRef.current;
-    let nextCollapsedPresetIds = collapsedSearchPresetIds;
-
-    searchPresetItems.forEach((item) => {
-      if (
-        knownPresetIds.has(item.preset.id) ||
-        nextCollapsedPresetIds.has(item.preset.id)
-      ) {
-        return;
-      }
-
-      if (nextCollapsedPresetIds === collapsedSearchPresetIds) {
-        nextCollapsedPresetIds = new Set(collapsedSearchPresetIds);
-      }
-      nextCollapsedPresetIds.add(item.preset.id);
-    });
-
-    return nextCollapsedPresetIds;
+    return getSearchCollapsedIds(
+      searchPresetItems.map((item) => item.preset.id),
+      knownSearchPresetIdsRef.current,
+      collapsedSearchPresetIds,
+    );
   }, [
     collapsedSearchPresetIds,
     searchPresetItems,
     showSearchPresetSections,
   ]);
+  const searchListLabelsCollapsedForRender = useMemo(() => (
+    showSearchPresetSections
+      ? getSearchCollapsedIds(
+        searchListMenuItems.map((item) => item.node.label),
+        knownSearchListLabelsRef.current,
+        collapsedSearchListLabels,
+      )
+      : collapsedSearchListLabels
+  ), [collapsedSearchListLabels, searchListMenuItems, showSearchPresetSections]);
   const searchListRows = useMemo(
     () => {
       if (!showSearchPresetSections) {
@@ -12936,7 +13329,7 @@ export default function App() {
 
       const listRows = buildSearchListMenuRows(
         searchListMenuItems,
-        collapsedSearchListLabels,
+        searchListLabelsCollapsedForRender,
         searchListMenuTodosByLabel,
       );
       const presetRows = buildSearchListRows(
@@ -12946,17 +13339,17 @@ export default function App() {
       );
 
       if (listRows.length === 0 || presetRows.length === 0) {
-        return [...presetRows, ...listRows];
+        return [...listRows, ...presetRows];
       }
 
       return [
-        ...presetRows,
-        { id: 'before:search-lists', type: 'sectionGap' as const },
         ...listRows,
+        { id: 'before:search-presets', type: 'sectionGap' as const },
+        ...presetRows,
       ];
     },
     [
-      collapsedSearchListLabels,
+      searchListLabelsCollapsedForRender,
       searchListMenuItems,
       searchListMenuTodosByLabel,
       searchPresetIdsCollapsedForRender,
@@ -13630,6 +14023,26 @@ export default function App() {
       requestAnimationFrame(scrollToTarget);
     });
   }, [todoListSearchOffset]);
+
+  const notificationListRef = useRef<FlatList<NotificationLogListRow>>(null);
+  const settingsScrollRef = useRef<GestureScrollView>(null);
+  const todoScreenKey = navTab === 'search' ? `search:${searchMode}`
+    : openQuickPresetNavSlotNumber ? `navbar:${openQuickPresetNavSlotNumber}`
+    : openMenuPresetId ? `preset:${openMenuPresetId}` : `screen:${navTab ?? 'todos'}`;
+  const todoScrollMemory = useRememberedScroll(todoScreenKey, todoListRef, {
+    active: navTab !== 'notifications' && !settingsModalVisible && !filterConfigModalVisible &&
+      !routineLogsTodoId && !createDrawerVisible && !listMenuOpen,
+    fallback: todoListRestingOffset,
+    onRestore: offset => { scrollOffsetY.current = offset; actualScrollOffsetY.current = offset; },
+  });
+  const drivePickerScrollMemory = useRememberedScroll(`drive-picker:${googleDriveBackupPicker?.mode ?? 'closed'}`, googleDriveBackupPickerScrollRef, { active: googleDriveBackupPicker !== null });
+  const notificationScrollMemory = useRememberedScroll('notifications', notificationListRef, {
+    active: navTab === 'notifications' && !routineLogsTodoId && !createDrawerVisible && !settingsModalVisible,
+  });
+  const settingsScrollMemory = useRememberedScroll('settings', settingsScrollRef, { active: settingsModalVisible });
+  const menuScrollMemory = useRememberedScroll(`menu:${menuEditOwner}:${activeTodoMenuId ?? openMenuPresetId ?? 'main'}:${menuMode ?? 'main'}`, listMenuRef, {
+    active: listMenuOpen, fallback: listMenuOneHandedOffset,
+  });
 
   const toggleFilterValue = useCallback((filterKey: FilterKey, value: string) => {
     const toggleValue = (current: SelectedFilters) => {
@@ -14422,36 +14835,43 @@ export default function App() {
 
   useEffect(() => {
     if (!showSearchPresetSections) {
+      knownSearchPresetIdsRef.current = new Set();
+      knownSearchListLabelsRef.current = new Set();
       return;
     }
 
-    const previousPresetIds = knownSearchPresetIdsRef.current;
-    const availablePresetIds = new Set(
+    setCollapsedSearchPresetIds(searchPresetIdsCollapsedForRender);
+    setCollapsedSearchListLabels(searchListLabelsCollapsedForRender);
+    knownSearchPresetIdsRef.current = new Set(
       searchPresetItems.map((item) => item.preset.id),
     );
+    knownSearchListLabelsRef.current = new Set(
+      searchListMenuItems.map((item) => item.node.label),
+    );
+  }, [
+    searchListLabelsCollapsedForRender,
+    searchListMenuItems,
+    searchPresetIdsCollapsedForRender,
+    searchPresetItems,
+    showSearchPresetSections,
+  ]);
 
-    setCollapsedSearchPresetIds((current) => {
-      const next = new Set(current);
-      let changed = false;
+  const toggleAllSearchResultsCollapsed = useCallback(() => {
+    const presetIds = searchPresetItems.map((item) => item.preset.id);
+    const listLabels = searchListMenuItems.map((item) => item.node.label);
+    const shouldExpand = presetIds.every((id) => searchPresetIdsCollapsedForRender.has(id)) &&
+      listLabels.every((label) => searchListLabelsCollapsedForRender.has(label));
 
-      availablePresetIds.forEach((presetId) => {
-        if (!previousPresetIds.has(presetId) && !next.has(presetId)) {
-          next.add(presetId);
-          changed = true;
-        }
-      });
-
-      for (const presetId of next) {
-        if (!availablePresetIds.has(presetId)) {
-          next.delete(presetId);
-          changed = true;
-        }
-      }
-
-      return changed ? next : current;
-    });
-    knownSearchPresetIdsRef.current = availablePresetIds;
-  }, [searchPresetItems, showSearchPresetSections]);
+    pendingSearchPresetScrollOffsetRef.current = actualScrollOffsetY.current;
+    todoListRef.current?.clearLayoutCacheOnUpdate();
+    setCollapsedSearchPresetIds(new Set(shouldExpand ? [] : presetIds));
+    setCollapsedSearchListLabels(new Set(shouldExpand ? [] : listLabels));
+  }, [
+    searchListLabelsCollapsedForRender,
+    searchListMenuItems,
+    searchPresetIdsCollapsedForRender,
+    searchPresetItems,
+  ]);
 
   const toggleSearchPresetCollapsed = useCallback((presetId: string) => {
     triggerSubtleHaptic();
@@ -14526,9 +14946,14 @@ export default function App() {
   }, [clearNotificationTodoReveal, recordUndo]);
 
   const toggleHabitNotificationsPaused = useCallback(() => {
-    recordUndo('Change habit notifications');
+    recordUndo('Change routine notifications');
     const nextPaused = !habitNotificationsPausedRef.current;
     habitNotificationsPausedRef.current = nextPaused;
+    setTodoAlarmSettings({
+      habitNotificationsPaused: nextPaused,
+      habitQuietHoursEnabled: habitQuietHoursEnabledRef.current,
+      habitNotificationText: habitNotificationTextRef.current,
+    });
     setHabitNotificationsPaused(nextPaused);
     void persistAppSettings({ habitNotificationsPaused: nextPaused });
     triggerSubtleHaptic();
@@ -14538,10 +14963,31 @@ export default function App() {
     recordUndo('Change habit quiet hours');
     const nextEnabled = !habitQuietHoursEnabledRef.current;
     habitQuietHoursEnabledRef.current = nextEnabled;
+    setTodoAlarmSettings({
+      habitNotificationsPaused: habitNotificationsPausedRef.current,
+      habitQuietHoursEnabled: nextEnabled,
+      habitNotificationText: habitNotificationTextRef.current,
+    });
     setHabitQuietHoursEnabled(nextEnabled);
     void persistAppSettings({ habitQuietHoursEnabled: nextEnabled });
     triggerSubtleHaptic();
   }, [persistAppSettings, recordUndo]);
+
+  const saveRoutineNotificationText = useCallback(() => {
+    const text = normalizeRoutineNotificationText(habitNotificationTextDraft);
+    setHabitNotificationTextDraft(text);
+    if (text === habitNotificationTextRef.current) return;
+    recordUndo('Change routine notification text');
+    habitNotificationTextRef.current = text;
+    setHabitNotificationText(text);
+    setTodoAlarmSettings({
+      habitNotificationsPaused: habitNotificationsPausedRef.current,
+      habitQuietHoursEnabled: habitQuietHoursEnabledRef.current,
+      habitNotificationText: text,
+    });
+    void persistAppSettings({ habitNotificationText: text });
+    triggerSubtleHaptic();
+  }, [habitNotificationTextDraft, persistAppSettings, recordUndo]);
 
   const selectWidgetNewItemList = useCallback((label: string) => {
     setWidgetNewItemList(label);
@@ -15029,7 +15475,7 @@ export default function App() {
         group: 'Schedule' as const,
         icon: 'notifications-outline' as const,
         id: `create-command-habit-${option.hours ?? 'none'}`,
-        label: option.hours ? `Habit · ${option.label}` : 'No habit reminder',
+        label: option.hours ? `Routine · ${option.label}` : 'No routine schedule',
         searchText: `${option.label} habit reminder notification interval schedule`,
       })),
       ...REPEAT_PRESETS.map((preset) => ({
@@ -17455,6 +17901,17 @@ export default function App() {
       || activeMenuPreset?.label,
     );
 
+  useEffect(() => {
+    routineLogTapGateRef.current.reset();
+  }, [navTab, openMenuPresetId, openQuickPresetNavSlotNumber, settingsModalVisible, createDrawerVisible, routineLogsTodoId]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') routineLogTapGateRef.current.reset();
+    });
+    return () => subscription.remove();
+  }, []);
+
   const scrollFocusedSearchIntoView = useCallback(() => {
     savedSearchScrollOffsetRef.current = todoListSearchOffset;
     searchScrollOffsetsByModeRef.current.item = todoListSearchOffset;
@@ -17693,20 +18150,28 @@ export default function App() {
     handleNavTabPress('calendar');
   }, [handleNavTabPress]);
 
+  const handleSearchDoubleTap = useCallback(() => {
+    if (!searchQueryValueRef.current.trim() && showSearchPresetSections) {
+      toggleAllSearchResultsCollapsed();
+    } else {
+      handleSearchQueryChange('');
+    }
+    triggerSubtleHaptic();
+  }, [handleSearchQueryChange, showSearchPresetSections, toggleAllSearchResultsCollapsed]);
+
   const handleSearchNavPress = useCallback(() => {
     const timestamp = Date.now();
     const sinceLastTap = timestamp - lastSearchNavTapRef.current;
 
     if (!todoSelectMode && sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
       lastSearchNavTapRef.current = 0;
-      handleSearchQueryChange('');
-      triggerSubtleHaptic();
+      handleSearchDoubleTap();
       return;
     }
 
     lastSearchNavTapRef.current = timestamp;
     handleNavTabPress('search');
-  }, [handleNavTabPress, handleSearchQueryChange, todoSelectMode]);
+  }, [handleNavTabPress, handleSearchDoubleTap, todoSelectMode]);
 
   const handleSearchInputPressIn = useCallback(() => {
     const timestamp = Date.now();
@@ -17714,13 +18179,12 @@ export default function App() {
 
     if (sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_DELAY) {
       lastSearchInputTapRef.current = 0;
-      handleSearchQueryChange('');
-      triggerSubtleHaptic();
+      handleSearchDoubleTap();
       return;
     }
 
     lastSearchInputTapRef.current = timestamp;
-  }, [handleSearchQueryChange]);
+  }, [handleSearchDoubleTap]);
 
   const handleSearchNavLongPress = useCallback(() => {
     lastSearchNavTapRef.current = 0;
@@ -18112,6 +18576,7 @@ export default function App() {
       googleDriveLastRestoreAt,
       habitNotificationsPaused,
       habitQuietHoursEnabled,
+      habitNotificationText,
       hideDoneTodos,
       lastCreateTodoFilters,
       listMenuTree,
@@ -18150,6 +18615,7 @@ export default function App() {
     googleDriveLastRestoreAt,
     habitNotificationsPaused,
     habitQuietHoursEnabled,
+    habitNotificationText,
     hideDoneTodos,
     lastCreateTodoFilters,
     listMenuTree,
@@ -18262,6 +18728,7 @@ export default function App() {
       googleDriveLastRestoreAt: restoredAt,
       habitNotificationsPaused: payload.settings.habitNotificationsPaused,
       habitQuietHoursEnabled: payload.settings.habitQuietHoursEnabled,
+      habitNotificationText: payload.settings.habitNotificationText,
       hideDoneTodos: payload.settings.hideDoneTodos,
       lastCreateTodoFilters: restoredLastCreateTodoFilters,
       listMenuTree: restoredListMenuTree,
@@ -18289,9 +18756,11 @@ export default function App() {
     googleDriveBackupEnabledRef.current = false;
     habitNotificationsPausedRef.current = payload.settings.habitNotificationsPaused;
     habitQuietHoursEnabledRef.current = payload.settings.habitQuietHoursEnabled;
+    habitNotificationTextRef.current = payload.settings.habitNotificationText;
     setTodoAlarmSettings({
       habitNotificationsPaused: payload.settings.habitNotificationsPaused,
       habitQuietHoursEnabled: payload.settings.habitQuietHoursEnabled,
+      habitNotificationText: payload.settings.habitNotificationText,
     });
     hideDoneTodosRef.current = payload.settings.hideDoneTodos;
     lastCreateTodoFiltersRef.current = restoredLastCreateTodoFilters;
@@ -18331,6 +18800,8 @@ export default function App() {
     setGoogleDriveLastRestoreAt(restoredAt);
     setHabitNotificationsPaused(payload.settings.habitNotificationsPaused);
     setHabitQuietHoursEnabled(payload.settings.habitQuietHoursEnabled);
+    setHabitNotificationText(payload.settings.habitNotificationText);
+    setHabitNotificationTextDraft(payload.settings.habitNotificationText);
     setHideDoneTodos(payload.settings.hideDoneTodos);
     setShowOverdueMetaTags(payload.settings.showOverdueMetaTags);
     setShowPresetPropertiesAboveSearch(payload.settings.showPresetPropertiesAboveSearch);
@@ -19778,6 +20249,18 @@ export default function App() {
     ],
   );
 
+  const activeRoutineTodos = useMemo(() => (
+    todos
+      .filter((todo) => (
+        !todo.done &&
+        !pendingDeleteIds.has(todo.id) &&
+        hasTodoHabitInterval(todo.filters.reminder)
+      ))
+      .sort((first, second) => (
+        second.createdAt - first.createdAt || first.text.localeCompare(second.text)
+      ))
+  ), [pendingDeleteIds, todos]);
+
   const toggleNotificationSection = useCallback((sectionKey: NotificationLogSectionKey) => {
     setCollapsedNotificationSections((current) => {
       const next = new Set(current);
@@ -19791,11 +20274,38 @@ export default function App() {
     triggerSubtleHaptic();
   }, []);
 
-  const notificationLogListRows = useMemo<NotificationLogListRow[]>(() => {
-    if (notificationLogEntries.length === 0) {
-      return [];
-    }
+  const toggleRoutineNotificationsCollapsed = useCallback(() => {
+    setRoutineNotificationsCollapsed((current) => !current);
+    triggerSubtleHaptic();
+  }, []);
 
+  const toggleNotificationHistoryCollapsed = useCallback(() => {
+    setNotificationHistoryCollapsed((current) => !current);
+    triggerSubtleHaptic();
+  }, []);
+
+  const clearNotificationSection = useCallback((sectionKey: NotificationLogSectionKey) => {
+    const ids = notificationLogEntries
+      .filter((entry) => getNotificationLogSectionKey(
+        entry,
+        entry.todoId ? todosById.get(entry.todoId) ?? null : null,
+      ) === sectionKey)
+      .map((entry) => entry.id);
+    if (ids.length === 0) return;
+
+    const idsToDelete = new Set(ids);
+    setNotificationLogEntries((current) => current.filter((entry) => !idsToDelete.has(entry.id)));
+    notificationLogStore
+      .deleteMany(ids)
+      .then((nextEntries) => {
+        setNotificationLogEntries(nextEntries);
+        queueFirebaseNotificationLogSave(nextEntries).catch(() => undefined);
+      })
+      .catch(() => undefined);
+    triggerSubtleHaptic();
+  }, [notificationLogEntries, todosById]);
+
+  const notificationLogListRows = useMemo<NotificationLogListRow[]>(() => {
     const entriesBySection: Record<NotificationLogSectionKey, NotificationLogEntry[]> = {
       habits: [],
       repeating: [],
@@ -19835,29 +20345,46 @@ export default function App() {
     ({ item }: { item: NotificationLogListRow }) => {
       if (item.type === 'sectionHeader') {
         return (
-          <Pressable
-            accessibilityLabel={`${item.label}, ${item.count} ${
-              item.count === 1 ? 'notification' : 'notifications'
-            }`}
-            accessibilityHint="Tap to expand or collapse this notification group"
-            accessibilityRole="button"
-            accessibilityState={{ expanded: !item.isCollapsed }}
-            onPress={() => toggleNotificationSection(item.sectionKey)}
-            style={({ pressed }) => [
-              styles.notificationSectionHeader,
-              pressed && styles.notificationSectionHeaderPressed,
-            ]}
-          >
-            <Text style={styles.notificationSectionTitle}>{item.label}</Text>
-            <View style={styles.notificationSectionMeta}>
-              <Text style={styles.notificationSectionCount}>{item.count}</Text>
-              <Ionicons
-                color={THEME_TEXT_SECONDARY}
-                name={item.isCollapsed ? 'chevron-down' : 'chevron-up'}
-                size={16}
-              />
-            </View>
-          </Pressable>
+          <View style={styles.notificationSectionHeader}>
+            <Pressable
+              accessibilityLabel={`${item.label}, ${item.count} ${
+                item.count === 1 ? 'notification' : 'notifications'
+              }`}
+              accessibilityHint="Tap to expand or collapse this notification group"
+              accessibilityRole="button"
+              accessibilityState={{ expanded: !item.isCollapsed }}
+              onPress={() => toggleNotificationSection(item.sectionKey)}
+              style={({ pressed }) => [
+                styles.notificationSectionToggle,
+                pressed && styles.notificationSectionHeaderPressed,
+              ]}
+            >
+              <Text style={styles.notificationSubsectionTitle}>{item.label}</Text>
+              <View style={styles.notificationSectionMeta}>
+                <Text style={styles.notificationSectionCount}>{item.count}</Text>
+                <Ionicons
+                  color={THEME_TEXT_SECONDARY}
+                  name={item.isCollapsed ? 'chevron-down' : 'chevron-up'}
+                  size={16}
+                />
+              </View>
+            </Pressable>
+            <Pressable
+              accessibilityLabel={`Clear ${item.label.toLowerCase()}`}
+              accessibilityHint="Deletes notifications from this section"
+              accessibilityRole="button"
+              disabled={item.count === 0}
+              onPress={() => clearNotificationSection(item.sectionKey)}
+              style={({ pressed }) => [
+                styles.notificationClearButton,
+                item.count === 0 && styles.notificationClearButtonDisabled,
+                pressed && item.count > 0 && styles.notificationClearButtonPressed,
+              ]}
+            >
+              <Ionicons color={THEME_DANGER} name="trash-outline" size={17} />
+              <Text style={styles.notificationClearButtonText}>Clear</Text>
+            </Pressable>
+          </View>
         );
       }
 
@@ -19882,6 +20409,7 @@ export default function App() {
       );
     },
     [
+      clearNotificationSection,
       deleteNotificationLogEntry,
       openNotificationLogEntry,
       todosById,
@@ -20293,6 +20821,11 @@ export default function App() {
     </View>
   ) : null;
 
+  // Remove every content surface, including native modals, while retaining app state.
+  if (!appLockState.ready || appLockState.locked) {
+    return <BiometricLockScreen />;
+  }
+
   // Avoid painting transient list/preset state before local settings settle.
   // Firebase startup sync continues in the background after the local copy is visible.
   if (!startupDataReady) {
@@ -20343,7 +20876,7 @@ export default function App() {
               createFromSettingsCueVisible && headerUndoEntry
                 ? styles.appHeaderTitleThreeActions
                 : null,
-              appHeaderTitleLeftAligned && styles.appHeaderTitleLeftAligned,
+              (appHeaderTitleLeftAligned || navTab === 'notifications') && styles.appHeaderTitleLeftAligned,
               appHeaderTitleLeftAligned && createFromSettingsCueVisible && headerUndoEntry
                 ? styles.appHeaderTitleLeftAlignedThreeActions
                 : null,
@@ -20436,16 +20969,18 @@ export default function App() {
           {navTab === 'notifications' ? (
             <View style={styles.notificationPage}>
               <FlatList
+                ref={notificationListRef}
+                {...notificationScrollMemory}
+                scrollEventThrottle={16}
                 alwaysBounceVertical={false}
                 bounces={false}
                 contentContainerStyle={[
                   styles.notificationListContent,
-                  notificationLogEntries.length === 0 && styles.notificationListContentEmpty,
                 ]}
-                data={notificationLogListRows}
+                data={notificationHistoryCollapsed ? [] : notificationLogListRows}
                 keyboardShouldPersistTaps="handled"
                 keyExtractor={(item) => item.id}
-                ListEmptyComponent={
+                ListEmptyComponent={notificationHistoryCollapsed ? null : (
                   <View style={styles.notificationEmptyState}>
                     <Ionicons
                       color={THEME_TEXT_TERTIARY}
@@ -20453,10 +20988,10 @@ export default function App() {
                       size={30}
                     />
                     <Text style={styles.notificationEmptyTitle}>
-                      No notifications yet
+                      No notification history yet
                     </Text>
                   </View>
-                }
+                )}
                 ListFooterComponent={
                   todoListOneHandedOffset > 0 ? (
                     <View
@@ -20467,26 +21002,197 @@ export default function App() {
                 }
                 ListHeaderComponent={
                   <View style={styles.notificationListHeader}>
-                    {todoListOneHandedOffset > 0 ? (
-                      <View
-                        pointerEvents="none"
-                        style={{ height: todoListOneHandedOffset }}
-                      />
-                    ) : null}
-                    <Pressable
-                      accessibilityLabel="Clear notifications"
-                      accessibilityRole="button"
-                      disabled={notificationLogEntries.length === 0}
-                      onPress={clearNotificationLog}
-                      style={({ pressed }) => [
-                        styles.notificationClearButton,
-                        notificationLogEntries.length === 0 && styles.notificationClearButtonDisabled,
-                        pressed && notificationLogEntries.length > 0 && styles.notificationClearButtonPressed,
-                      ]}
-                    >
-                      <Ionicons color={THEME_DANGER} name="trash-outline" size={17} />
-                      <Text style={styles.notificationClearButtonText}>Clear notifications</Text>
-                    </Pressable>
+                    <View pointerEvents="none" style={{ height: detailOneHandedSpace }} />
+                    <View style={styles.routineNotificationSection}>
+                      <View style={styles.routineNotificationSectionHeader}>
+                        <Pressable
+                          accessibilityHint="Tap to expand or collapse routines"
+                          accessibilityLabel={`Routines, ${activeRoutineTodos.length}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: !routineNotificationsCollapsed }}
+                          onPress={toggleRoutineNotificationsCollapsed}
+                          style={({ pressed }) => [
+                            styles.routineNotificationSectionToggle,
+                            pressed && styles.notificationSectionHeaderPressed,
+                          ]}
+                        >
+                          <View style={styles.routineNotificationSectionTitleWrap}>
+                            <Text style={styles.notificationSectionTitle}>Routines</Text>
+                            <Text style={styles.notificationSectionCount}>
+                              {activeRoutineTodos.length}
+                            </Text>
+                          </View>
+                          <Ionicons
+                            color={THEME_TEXT_SECONDARY}
+                            name={routineNotificationsCollapsed ? 'chevron-down' : 'chevron-up'}
+                            size={16}
+                          />
+                        </Pressable>
+                        {headerUndoEntry ? (
+                          <Pressable
+                            accessibilityLabel={`Undo ${headerUndoEntry.label}`}
+                            accessibilityHint="Reverses the latest recorded change"
+                            accessibilityRole="button"
+                            hitSlop={6}
+                            onPress={() => applyUndoHistoryEntry(headerUndoEntry)}
+                            style={({ pressed }) => [
+                              styles.routineNotificationUndoButton,
+                              pressed && styles.routineNotificationButtonPressed,
+                            ]}
+                          >
+                            <Ionicons color={THEME_ACCENT} name="arrow-undo" size={21} />
+                          </Pressable>
+                        ) : null}
+                        <Pressable
+                          accessibilityLabel="Add routine"
+                          accessibilityRole="button"
+                          hitSlop={6}
+                          onPress={openQuickRoutineDrawer}
+                          style={({ pressed }) => [
+                            styles.routineNotificationAddButton,
+                            pressed && styles.routineNotificationButtonPressed,
+                          ]}
+                        >
+                          <Ionicons color={THEME_ACCENT} name="add" size={21} />
+                        </Pressable>
+                      </View>
+                      {routineNotificationsCollapsed ? null : activeRoutineTodos.length === 0 ? (
+                        <View style={styles.routineNotificationEmptyRow}>
+                          <Text style={styles.routineNotificationEmptyText}>
+                            Tap + to add a routine.
+                          </Text>
+                        </View>
+                      ) : activeRoutineTodos.map((todo) => {
+                        const reminder = decodeTodoReminder(todo.filters.reminder);
+                        if (!reminder.habitHours) {
+                          return null;
+                        }
+
+                        return (
+                          <Swipeable
+                            key={todo.id}
+                            childrenContainerStyle={styles.notificationLogSwipeChildren}
+                            containerStyle={styles.routineNotificationSwipeShell}
+                            dragOffsetFromLeftEdge={12}
+                            dragOffsetFromRightEdge={12}
+                            friction={1.1}
+                            overshootRight={false}
+                            rightThreshold={NOTIFICATION_LOG_SWIPE_DELETE_WIDTH}
+                            renderRightActions={() => (
+                              <View style={styles.routineNotificationSwipeActions}>
+                                <GHTouchableOpacity
+                                  accessibilityLabel={`Delete routine ${todo.text}`}
+                                  accessibilityRole="button"
+                                  activeOpacity={0.82}
+                                  containerStyle={styles.routineNotificationSwipeDeleteContainer}
+                                  onPress={() => deleteTodo(todo.id)}
+                                  style={styles.routineNotificationSwipeDelete}
+                                >
+                                  <Ionicons color="#FFFFFF" name="trash-outline" size={22} />
+                                  <Text style={styles.routineNotificationSwipeDeleteText}>Delete</Text>
+                                </GHTouchableOpacity>
+                              </View>
+                            )}
+                          >
+                            <View style={styles.routineNotificationRow}>
+                              <Pressable
+                                accessibilityHint="Swipe left to reveal Delete."
+                                accessibilityLabel={`${todo.text}. ${formatHabitIntervalLabel(
+                                  reminder.habitHours,
+                                )}. Notifications ${
+                                  reminder.habitNotificationsEnabled ? 'on' : 'off'
+                                }`}
+                                accessibilityRole="button"
+                                onPress={() => openTodoDetailModal(todo.id)}
+                                style={({ pressed }) => [
+                                  styles.routineNotificationRowMain,
+                                  pressed && styles.notificationLogRowPressed,
+                                ]}
+                              >
+                                <View style={styles.notificationLogTextStack}>
+                                  <Text numberOfLines={1} style={styles.notificationLogTitle}>
+                                    {todo.text}
+                                  </Text>
+                                  <Text numberOfLines={1} style={styles.notificationLogSubtitle}>
+                                    {reminder.habitNotificationsEnabled ? 'Alerts on' : 'Alerts off'}
+                                  </Text>
+                                </View>
+                              </Pressable>
+                              <Pressable
+                                accessibilityLabel={`Change routine interval for ${todo.text}. Current ${reminder.habitHours}`}
+                                accessibilityRole="button"
+                                hitSlop={4}
+                                onPress={() => openQuickRoutineInterval(todo.id)}
+                                style={({ pressed }) => [
+                                  styles.routineNotificationIntervalButton,
+                                  pressed && styles.routineNotificationButtonPressed,
+                                ]}
+                              >
+                                <Text style={styles.routineNotificationIntervalText}>
+                                  {reminder.habitHours}
+                                </Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityLabel={`${
+                                  reminder.habitNotificationsEnabled ? 'Turn off' : 'Turn on'
+                                } routine notifications for ${todo.text}`}
+                                accessibilityRole="switch"
+                                accessibilityState={{
+                                  checked: reminder.habitNotificationsEnabled,
+                                }}
+                                hitSlop={4}
+                                onPress={() => toggleRoutineNotifications(todo.id)}
+                                style={({ pressed }) => [
+                                  styles.routineNotificationBellButton,
+                                  reminder.habitNotificationsEnabled &&
+                                    styles.routineNotificationBellButtonEnabled,
+                                  pressed && styles.routineNotificationButtonPressed,
+                                ]}
+                              >
+                                <Ionicons
+                                  color={
+                                    reminder.habitNotificationsEnabled
+                                      ? THEME_ACCENT
+                                      : THEME_TEXT_SECONDARY
+                                  }
+                                  name={
+                                    reminder.habitNotificationsEnabled
+                                      ? 'notifications-outline'
+                                      : 'notifications-off-outline'
+                                  }
+                                  size={20}
+                                />
+                              </Pressable>
+                            </View>
+                          </Swipeable>
+                        );
+                      })}
+                    </View>
+                    <View style={styles.notificationHistoryHeader}>
+                      <Pressable
+                        accessibilityHint="Tap to expand or collapse notification history"
+                        accessibilityLabel={`History, ${notificationLogEntries.length}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: !notificationHistoryCollapsed }}
+                        onPress={toggleNotificationHistoryCollapsed}
+                        style={({ pressed }) => [
+                          styles.notificationHistoryToggle,
+                          pressed && styles.notificationSectionHeaderPressed,
+                        ]}
+                      >
+                        <Text style={styles.notificationSectionTitle}>History</Text>
+                        <View style={styles.notificationSectionMeta}>
+                          <Text style={styles.notificationSectionCount}>
+                            {notificationLogEntries.length}
+                          </Text>
+                          <Ionicons
+                            color={THEME_TEXT_SECONDARY}
+                            name={notificationHistoryCollapsed ? 'chevron-down' : 'chevron-up'}
+                            size={16}
+                          />
+                        </View>
+                      </Pressable>
+                    </View>
                   </View>
                 }
                 renderItem={renderNotificationLogItem}
@@ -20513,6 +21219,9 @@ export default function App() {
                 style={styles.todoListFrame}
               >
               <FlashList
+                onLayout={todoScrollMemory.onLayout}
+                onContentSizeChange={todoScrollMemory.onContentSizeChange}
+                onScrollBeginDrag={todoScrollMemory.onScrollBeginDrag}
                 ref={todoListRef}
                 alwaysBounceVertical={false}
                 bounces={false}
@@ -20539,9 +21248,13 @@ export default function App() {
                     searchPresetItems.length === 0 &&
                     searchListMenuItems.length === 0 ? (
                     <View style={styles.searchFiltersEmpty}>
-                      <Text style={styles.searchFiltersEmptyTitle}>No saved lists</Text>
+                      <Text style={styles.searchFiltersEmptyTitle}>
+                        {searchPresetQuery ? 'No matching lists' : 'No saved lists'}
+                      </Text>
                       <Text style={styles.searchFiltersEmptyText}>
-                        Save lists from the filter menu to search them here.
+                        {searchPresetQuery
+                          ? 'Try another list name or search keyword.'
+                          : 'Save lists from the filter menu to search them here.'}
                       </Text>
                     </View>
                   ) : (
@@ -20700,6 +21413,7 @@ export default function App() {
                         />
                         <TextInput
                           ref={searchInputRef}
+                          accessibilityHint="Double tap to clear text, or expand or collapse all results when List Search is empty."
                           autoCapitalize="sentences"
                           autoCorrect
                           clearButtonMode="while-editing"
@@ -20789,7 +21503,7 @@ export default function App() {
                   </View>
                 }
                 ListHeaderComponentStyle={styles.todoListHeaderChrome}
-                onScroll={handleListScroll}
+                onScroll={event => { handleListScroll(event); todoScrollMemory.onScroll(event); }}
                 renderItem={renderTodoItem}
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
@@ -20855,20 +21569,13 @@ export default function App() {
           <View style={styles.bottomNavPrimary}>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Opens filters"
-              accessibilityLabel="Filters"
-              accessibilityState={{ selected: filterConfigModalVisible }}
-              onPress={handleFilterNavPress}
-              style={({ pressed }) => [
-                styles.bottomNavItem,
-                pressed && styles.bottomNavItemPressed,
-              ]}
+              accessibilityHint="Review open items one at a time"
+              accessibilityLabel="Backlog"
+              accessibilityState={{ selected: backlogVisible }}
+              onPress={() => { Keyboard.dismiss(); setBacklogResumeId(null); setBacklogVisible(true); }}
+              style={({ pressed }) => [styles.bottomNavItem, pressed && styles.bottomNavItemPressed]}
             >
-              <Ionicons
-                color={filterConfigModalVisible ? NAV_ACCENT : NAV_ICON_INACTIVE}
-                name="funnel-outline"
-                size={23}
-              />
+              <Ionicons color={backlogVisible ? NAV_ACCENT : NAV_ICON_INACTIVE} name="albums-outline" size={23} />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -20907,7 +21614,7 @@ export default function App() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityHint="Focuses Search and opens the keyboard; quick double tap clears search text; press and hold cycles between list and item search"
+              accessibilityHint="Focuses Search and opens the keyboard; double tap clears text, or expands or collapses all results when List Search is empty; press and hold cycles between list and item search"
               accessibilityLabel="Search"
               accessibilityState={{ selected: navTab === 'search' }}
               onLongPress={handleSearchNavLongPress}
@@ -21069,6 +21776,9 @@ export default function App() {
                         <View collapsable={false} style={styles.listMenuBody}>
                           <GestureFlatList
                             ref={listMenuRef}
+                            onLayout={menuScrollMemory.onLayout}
+                            onContentSizeChange={menuScrollMemory.onContentSizeChange}
+                            onScrollBeginDrag={menuScrollMemory.onScrollBeginDrag}
                             key={menuMode ?? 'closed'}
                             alwaysBounceVertical={false}
                             bounces={false}
@@ -21225,7 +21935,7 @@ export default function App() {
                               />
                             }
                             nestedScrollEnabled
-                            onScroll={handleListMenuScroll}
+                            onScroll={event => { handleListMenuScroll(event); menuScrollMemory.onScroll(event); }}
                             overScrollMode="never"
                             scrollEventThrottle={16}
                             style={styles.listMenuList}
@@ -21695,7 +22405,7 @@ export default function App() {
                             const clearAccessibilityLabel = item.label === REMINDER_PICKER_LABEL
                               ? 'Clear reminder time'
                               : item.label === HABIT_PICKER_LABEL
-                                ? 'Clear habit'
+                                ? 'Clear routine'
                                 : item.label === REPEAT_PICKER_LABEL || isRepeatShortcutValue
                                   ? 'Clear repeating'
                                   : isRepeatStatusValue
@@ -22079,7 +22789,7 @@ export default function App() {
                       value={activeTodoDetailDraftContent}
                     />
                   ) : (
-                    <ScrollView
+                    <RememberedScrollView memoryKey={`todo-detail:${activeTodoDetailId}`}
                       nestedScrollEnabled
                       showsVerticalScrollIndicator={false}
                       style={[
@@ -22094,7 +22804,7 @@ export default function App() {
                         style={styles.todoDetailContentInput}
                         text={activeTodoDetailDraftContent}
                       />
-                    </ScrollView>
+                    </RememberedScrollView>
                   )}
                 </View>
                 <View style={styles.todoDetailFooterActions}>
@@ -22336,7 +23046,7 @@ export default function App() {
                     <Ionicons color="#2A2520" name="close" size={21} />
                   </Pressable>
                 </View>
-                <ScrollView
+                <RememberedScrollView memoryKey={`deleted-detail:${activeDeletedTodoDetailId}`}
                   contentContainerStyle={styles.deletedTodoDetailContentContainer}
                   style={styles.deletedTodoDetailContentScroller}
                   showsVerticalScrollIndicator={false}
@@ -22349,7 +23059,7 @@ export default function App() {
                   <Text style={styles.deletedTodoDetailMeta}>
                     Deleted {formatDeletedTodoTime(activeDeletedTodoDetail.deletedAt)}
                   </Text>
-                </ScrollView>
+                </RememberedScrollView>
                 <View style={styles.deletedTodoDetailActions}>
                   <Pressable
                     accessibilityRole="button"
@@ -22616,7 +23326,7 @@ export default function App() {
                                     : label === REMINDER_PICKER_LABEL
                                       ? 'Clear reminder time'
                                       : label === HABIT_PICKER_LABEL
-                                        ? 'Clear habit'
+                                        ? 'Clear routine'
                                         : 'Clear repeating'
                                 }
                                 hitSlop={8}
@@ -23092,6 +23802,29 @@ export default function App() {
           onConfirm={confirmReminderTime}
         />
 
+        {backlogVisible && <BacklogScreen
+          todos={todos}
+          initialTodoId={backlogResumeId}
+          onClose={() => { setBacklogVisible(false); setBacklogResumeId(null); }}
+          onDelete={id => deleteTodo(id)}
+          onEdit={(todo, field) => { setBacklogVisible(false); openTodoEditor(todo, field); editorReturnRef.current = { kind: 'backlog', id: todo.id }; }}
+          onUndoDelete={headerUndoEntry?.label === 'Delete todo' ? () => applyUndoHistoryEntry(headerUndoEntry) : undefined}
+        />}
+
+        {routineLogsTodo && <RoutineLogsScreen
+          key={routineLogsTodo.id}
+          todo={routineLogsTodo}
+          initiallyComposing={routineLogsComposing}
+          reachSpace={detailOneHandedSpace}
+          onAdd={addRoutineLog}
+          onDelete={deleteRoutineLog}
+          onEditLog={editRoutineLog}
+          undoLabel={headerUndoEntry?.label ?? null}
+          onUndo={() => { if (headerUndoEntry) applyUndoHistoryEntry(headerUndoEntry); }}
+          onClose={() => setRoutineLogsTodoId(null)}
+          onEdit={() => { setRoutineLogsTodoId(null); openTodoEditor(routineLogsTodo, 'title'); editorReturnRef.current = { kind: 'routine', id: routineLogsTodo.id }; }}
+        />}
+
         <HabitReminderModal
           onClose={closeCreateHabitModal}
           onConfirm={confirmCreateHabit}
@@ -23164,12 +23897,16 @@ export default function App() {
             </View>
 
             <GestureScrollView
+              ref={settingsScrollRef}
+              {...settingsScrollMemory}
+              scrollEventThrottle={16}
               contentContainerStyle={styles.settingsBodyContent}
               keyboardShouldPersistTaps="handled"
               scrollEnabled
               showsVerticalScrollIndicator={false}
               style={styles.settingsBody}
             >
+              <BiometricLockSetting />
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <SettingsSectionTitleButton
@@ -23660,10 +24397,10 @@ export default function App() {
                       {habitQuietHoursEnabled ? 'Quiet 00:00-07:00' : 'Quiet hours off'}
                       </>
                     }
-                    title="Habit notifications"
+                    title="Routine notifications"
                   />
                   <Pressable
-                    accessibilityLabel={`${settingsHabitsExpanded ? 'Collapse' : 'Expand'} Habit notifications section`}
+                    accessibilityLabel={`${settingsHabitsExpanded ? 'Collapse' : 'Expand'} Routine notifications section`}
                     accessibilityRole="button"
                     accessibilityState={{ expanded: settingsHabitsExpanded }}
                     hitSlop={SETTINGS_SECTION_TOGGLE_HIT_SLOP}
@@ -23696,9 +24433,9 @@ export default function App() {
                       ]}
                     >
                       <View style={styles.settingsRowTextWrap}>
-                        <Text style={styles.settingsRowTitle}>Pause all habits</Text>
+                        <Text style={styles.settingsRowTitle}>Pause all routines</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          Existing habits stay saved until you resume them.
+                          Existing routines stay saved until you resume them.
                         </Text>
                       </View>
                       <View
@@ -23729,13 +24466,37 @@ export default function App() {
                       <View style={styles.settingsRowTextWrap}>
                         <Text style={styles.settingsRowTitle}>Night quiet hours</Text>
                         <Text style={styles.settingsRowSubtitle}>
-                          No habit alerts from 00:00 until 07:00.
+                          No routine alerts from 00:00 until 07:00.
                         </Text>
                       </View>
                       <Text style={styles.settingsOptionValue}>
                         {habitQuietHoursEnabled ? 'On' : 'Off'}
                       </Text>
                     </Pressable>
+                    <View style={styles.settingsOptionRow}>
+                      <View style={styles.settingsRowTextWrap}>
+                        <Text style={styles.settingsRowTitle}>Notification text</Text>
+                        <Text style={styles.settingsRowSubtitle}>Shown instead of routine names and notes. Leave blank for “Routine”.</Text>
+                        <TextInput
+                          accessibilityLabel="Routine notification text"
+                          maxLength={120}
+                          onChangeText={setHabitNotificationTextDraft}
+                          onSubmitEditing={saveRoutineNotificationText}
+                          placeholder="Routine"
+                          returnKeyType="done"
+                          style={styles.settingsAddListInput}
+                          value={habitNotificationTextDraft}
+                        />
+                      </View>
+                      <Pressable
+                        accessibilityLabel="Save routine notification text"
+                        accessibilityRole="button"
+                        onPress={saveRoutineNotificationText}
+                        style={styles.routineNotificationAddButton}
+                      >
+                        <Ionicons color={THEME_ACCENT} name="checkmark" size={21} />
+                      </Pressable>
+                    </View>
                   </View>
                 ) : null}
               </View>
@@ -24665,7 +25426,7 @@ export default function App() {
                       </Pressable>
                     </View>
 
-                    <GestureScrollView
+                    <RememberedGestureScrollView memoryKey={`history-preview:${settingsHistoryPreviewTarget?.entryId}`}
                       contentContainerStyle={styles.settingsHistoryPreviewScrollContent}
                       showsVerticalScrollIndicator={false}
                       style={styles.settingsHistoryPreviewScroll}
@@ -24778,7 +25539,7 @@ export default function App() {
                           </>
                         )}
                       </View>
-                    </GestureScrollView>
+                    </RememberedGestureScrollView>
 
                     <View style={styles.settingsHistoryPreviewActions}>
                       <Pressable
@@ -24856,6 +25617,8 @@ export default function App() {
 
                     <GestureScrollView
                       ref={googleDriveBackupPickerScrollRef}
+                      {...drivePickerScrollMemory}
+                      scrollEventThrottle={16}
                       contentContainerStyle={styles.googleDrivePickerListContent}
                       directionalLockEnabled
                       nestedScrollEnabled
@@ -27576,7 +28339,7 @@ const styles = StyleSheet.create({
     minHeight: 50,
     paddingBottom: 8,
     paddingHorizontal: HORIZONTAL_PADDING,
-    paddingTop: Platform.OS === 'android' ? TOP_SAFE_GAP : 8,
+    paddingTop: APP_HEADER_TOP_GAP,
     position: 'relative',
   },
   appHeaderTitle: {
@@ -27606,7 +28369,7 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
     position: 'absolute',
-    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+    top: Platform.OS === 'android' ? 0 : 4,
     width: 36,
     zIndex: 2,
   },
@@ -27622,7 +28385,7 @@ const styles = StyleSheet.create({
     gap: 4,
     position: 'absolute',
     right: HORIZONTAL_PADDING,
-    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+    top: Platform.OS === 'android' ? 0 : 4,
   },
   appHeaderActionButton: {
     alignItems: 'center',
@@ -27660,7 +28423,7 @@ const styles = StyleSheet.create({
     gap: 4,
     position: 'absolute',
     right: HORIZONTAL_PADDING - 4,
-    top: Platform.OS === 'android' ? TOP_SAFE_GAP - 4 : 4,
+    top: Platform.OS === 'android' ? 0 : 4,
   },
   appHeaderSettingsButtonActive: {
     backgroundColor: THEME_ACCENT_SOFT,
@@ -28044,9 +28807,175 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   notificationListHeader: {
-    alignItems: 'center',
-    gap: 8,
+    gap: 24,
     width: '100%',
+  },
+  routineNotificationSection: {
+    gap: 12,
+    width: '100%',
+  },
+  routineNotificationSectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 42,
+    paddingHorizontal: 4,
+  },
+  routineNotificationSectionToggle: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 38,
+    paddingHorizontal: 4,
+  },
+  routineNotificationSectionTitleWrap: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  routineNotificationUndoButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 17,
+    height: 34,
+    justifyContent: 'center',
+    marginHorizontal: 8,
+    width: 34,
+  },
+  routineNotificationAddButton: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: 'rgba(76, 120, 255, 0.22)',
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  routineNotificationSwipeShell: {
+    borderRadius: 4,
+    marginLeft: 20,
+    overflow: 'hidden',
+  },
+  routineNotificationSwipeActions: {
+    backgroundColor: '#CF413A',
+    width: NOTIFICATION_LOG_SWIPE_DELETE_WIDTH,
+  },
+  routineNotificationSwipeDeleteContainer: {
+    flex: 1,
+  },
+  routineNotificationSwipeDelete: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 4,
+    justifyContent: 'center',
+    minHeight: 64,
+    width: NOTIFICATION_LOG_SWIPE_DELETE_WIDTH,
+  },
+  routineNotificationSwipeDeleteText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: FONT_MEDIUM,
+  },
+  routineNotificationRow: {
+    alignItems: 'stretch',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    minHeight: 64,
+    overflow: 'hidden',
+  },
+  routineNotificationRowMain: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 11,
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+  },
+  routineNotificationIconWrap: {
+    alignItems: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderRadius: 16,
+    flexShrink: 0,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  routineNotificationBellButton: {
+    alignItems: 'center',
+    borderLeftColor: THEME_BORDER,
+    borderLeftWidth: 0,
+    justifyContent: 'center',
+    width: 50,
+  },
+  routineNotificationIntervalButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: THEME_ACCENT_SOFT,
+    borderColor: 'rgba(76, 120, 255, 0.36)',
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 34,
+    justifyContent: 'center',
+    marginRight: 6,
+    minWidth: 42,
+    paddingHorizontal: 8,
+  },
+  routineNotificationIntervalText: {
+    color: THEME_ACCENT,
+    fontSize: 13,
+    fontWeight: '700',
+    includeFontPadding: false,
+    lineHeight: 16,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+  },
+  routineNotificationBellButtonEnabled: {
+    backgroundColor: '#F5F8FF',
+  },
+  routineNotificationButtonPressed: {
+    opacity: 0.64,
+  },
+  routineNotificationEmptyRow: {
+    alignItems: 'center',
+    backgroundColor: THEME_CARD,
+    borderColor: THEME_BORDER,
+    borderRadius: CARD_BORDER_RADIUS,
+    borderStyle: 'dashed',
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: 64,
+    marginLeft: 20,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  routineNotificationEmptyText: {
+    color: THEME_TEXT_SECONDARY,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  notificationHistoryHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    marginTop: 12,
+    paddingHorizontal: 4,
+  },
+  notificationHistoryToggle: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 38,
+    paddingHorizontal: 4,
   },
   notificationClearButton: {
     alignItems: 'center',
@@ -28071,7 +29000,7 @@ const styles = StyleSheet.create({
     fontWeight: FONT_MEDIUM,
   },
   notificationListContent: {
-    gap: 8,
+    gap: 12,
     paddingBottom: BOTTOM_NAV_RESERVED_HEIGHT + 16,
     paddingHorizontal: HORIZONTAL_PADDING,
     paddingTop: 12,
@@ -28083,6 +29012,7 @@ const styles = StyleSheet.create({
   notificationEmptyState: {
     alignItems: 'center',
     gap: 10,
+    paddingVertical: 32,
     justifyContent: 'center',
     paddingHorizontal: 24,
   },
@@ -28096,12 +29026,23 @@ const styles = StyleSheet.create({
   },
   notificationSectionHeader: {
     alignItems: 'center',
-    borderRadius: CONTROL_BORDER_RADIUS,
     flexDirection: 'row',
+    gap: 8,
     justifyContent: 'space-between',
-    minHeight: 42,
+    minHeight: 48,
+    marginLeft: 20,
+    marginTop: 8,
     paddingHorizontal: 4,
     paddingTop: 4,
+  },
+  notificationSectionToggle: {
+    alignItems: 'center',
+    borderRadius: CONTROL_BORDER_RADIUS,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'space-between',
+    minHeight: 48,
   },
   notificationSectionHeaderPressed: {
     backgroundColor: THEME_ACCENT_SOFT,
@@ -28112,6 +29053,13 @@ const styles = StyleSheet.create({
     fontWeight: FONT_SEMIBOLD,
     letterSpacing: -0.1,
     lineHeight: 22,
+  },
+  notificationSubsectionTitle: {
+    color: THEME_TEXT_SECONDARY,
+    flexShrink: 1,
+    fontSize: 14,
+    fontWeight: FONT_MEDIUM,
+    lineHeight: 20,
   },
   notificationSectionCount: {
     color: THEME_TEXT_SECONDARY,
@@ -28127,11 +29075,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   notificationLogSwipeShell: {
-    borderRadius: CARD_BORDER_RADIUS,
+    borderRadius: 4,
+    marginLeft: 40,
     overflow: 'hidden',
   },
   notificationLogSwipeContainer: {
-    borderRadius: CARD_BORDER_RADIUS,
+    borderRadius: 4,
     overflow: 'hidden',
   },
   notificationLogSwipeChildren: {
@@ -28156,7 +29105,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: THEME_CARD,
     borderColor: THEME_BORDER,
-    borderRadius: CARD_BORDER_RADIUS,
+    borderRadius: 4,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 12,

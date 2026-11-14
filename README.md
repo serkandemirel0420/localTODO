@@ -175,8 +175,36 @@ credentials for this project.
 Search uses normalized substring matching over todo titles and notes, with
 `AND` term combination.
 
+## App lock
+
+Open Settings and enable **Fingerprint / Face lock**. Enabling or disabling it
+requires authentication. Once enabled, the app locks on launch and when it
+returns from the background, with an Unlock button to retry after cancellation.
+The phone uses enrolled system biometrics (including face authentication when
+the device exposes it to apps), with the device PIN/passcode as a fallback.
+The Mac desktop app uses Touch ID; ordinary browser builds cannot enable it.
+
+The preference stays on this device and is excluded from app-data backups.
+Rebuild the native app after adding the authentication module; iOS also requires
+updating CocoaPods. Run `npm run test:biometric-lock` for the authentication and
+lifecycle tests.
+
 ## Storage
 
 Todos are stored locally through SQLite. App settings are stored through
 AsyncStorage. Google OAuth tokens are stored through SecureStore. Google Drive
 backup stores todos and app settings, but not OAuth tokens.
+
+## Routine logs
+
+After unlocking the app, open **Routines** and tap a routine to view its logs,
+newest first. Tap the circular **+** beside a routine to write a log immediately,
+or use **+** inside its history. The history opens as a full-page view with
+blank reach space above the routine and lightly indented log entries. Each saved note includes its date and time.
+**Edit routine** opens the existing routine editor. Swipe a log left to reveal
+Delete; the app undo history can restore it. Switching a routine bell on or off
+sends one immediate test notification, including during routine quiet hours. Logging keeps the routine's
+interval and reminder schedule intact. Logs are saved with the routine in SQLite
+and included in Google Drive backups and existing Firebase sync.
+
+Run `npm run test:routine-logs` for ordering, migration, persistence, and restore checks.

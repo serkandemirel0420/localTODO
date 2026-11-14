@@ -1,3 +1,4 @@
+import { normalizeRoutineNotificationText } from '../routineNotificationText';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
@@ -18,6 +19,7 @@ import {
   normalizeMaterialCommunityIconName,
   resolveMaterialCommunityIconName,
 } from '../materialCommunityIconNames';
+import { ensureListMenuTreeCoversPresetLists } from '../listPresetIntegrity';
 import {
   cloneDeletedTodos,
   cloneTodo,
@@ -98,7 +100,7 @@ export type StoredMenuPresetSection = {
 
 export const QUICK_PRESET_NAV_SLOT_COUNT = 10;
 export const QUICK_PRESET_NAV_MAX_SLOT_COUNT = 50;
-export const QUICK_PRESET_DEFAULTS_VERSION = 6;
+export const QUICK_PRESET_DEFAULTS_VERSION = 7;
 export const APP_HISTORY_LIMIT = 10;
 export type QuickPresetNavPresetIds = Array<string | null>;
 export type QuickPresetNavIconNames = string[];
@@ -462,10 +464,9 @@ const RECOVERED_QUICK_MENU_PRESETS: StoredMenuPreset[] = [
   }),
   createRecoveredPreset({
     id: 'preset-1783679944893-0ljisb78lyae',
-    label: 'Habbit',
+    label: 'Routines',
     createdAt: 1783679944893,
     filters: {
-      list: ['Habbit'],
       reminder: ['filter:habit-items'],
     },
     priorityMetaTag: true,
@@ -526,6 +527,32 @@ const hasUnintendedRecoveryPresetConfiguration = (
   ))
 );
 
+const LEGACY_HABIT_PRESET_ID = 'preset-1783679944893-0ljisb78lyae';
+const migrateLegacyRoutinePreset = (presets: StoredMenuPreset[]): StoredMenuPreset[] => (
+  presets.map((preset) => {
+    const label = preset.label.trim().toLocaleLowerCase();
+    if (
+      preset.id !== LEGACY_HABIT_PRESET_ID ||
+      (label !== 'habbit' && label !== 'habit') ||
+      !preset.filters.reminder.includes('filter:habit-items')
+    ) {
+      return preset;
+    }
+
+    return {
+      ...preset,
+      label: 'Routines',
+      searchKeywords: [preset.searchKeywords, 'routine routines habit habits practice']
+        .filter(Boolean)
+        .join(' '),
+      filters: {
+        ...cloneTodoFilters(preset.filters),
+        list: [],
+      },
+    };
+  })
+);
+
 const LEGACY_REDUNDANT_LIST_GROUP_PRESET_IDS = new Set([
   'preset-1782069327663-6x0a0oyrfdh',
   'preset-1782069354727-ahux26w8j6e',
@@ -571,6 +598,7 @@ export type AppHistorySnapshot = {
   googleDriveBackupEnabled: boolean;
   habitNotificationsPaused: boolean;
   habitQuietHoursEnabled: boolean;
+  habitNotificationText: string;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
   listMenuTree: StoredListMenuNode[];
@@ -687,6 +715,7 @@ export type AppSettings = {
   googleDriveLastRestoreAt: string | null;
   habitNotificationsPaused: boolean;
   habitQuietHoursEnabled: boolean;
+  habitNotificationText: string;
   history: AppHistoryState;
   hideDoneTodos: boolean;
   lastCreateTodoFilters: TodoFilters;
@@ -853,9 +882,12 @@ export const ensureQuickPresetDefaults = (
   const recoveredMenuPresets = shouldRestoreSavedPresetConfiguration
     ? cloneMenuPresets(RECOVERED_QUICK_MENU_PRESETS)
     : cloneMenuPresets(menuPresets);
-  const nextMenuPresets = normalizedVersion < 6
+  const redundantGroupMigratedMenuPresets = normalizedVersion < 6
     ? migrateRedundantListGroupPresets(recoveredMenuPresets)
     : recoveredMenuPresets;
+  const nextMenuPresets = normalizedVersion < 7
+    ? migrateLegacyRoutinePreset(redundantGroupMigratedMenuPresets)
+    : redundantGroupMigratedMenuPresets;
   const nextAssignments = shouldRestoreSavedPresetConfiguration
     ? cloneQuickPresetNavPresetIds(RECOVERED_QUICK_PRESET_NAV_PRESET_IDS)
     : existingAssignments;
@@ -893,13 +925,18 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   googleDriveLastRestoreAt: null,
   habitNotificationsPaused: false,
   habitQuietHoursEnabled: true,
+  habitNotificationText: 'Routine',
   history: {
     redo: [],
     undo: [],
   },
   hideDoneTodos: false,
   lastCreateTodoFilters: cloneTodoFilters(),
-  listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+  listMenuTree: ensureListMenuTreeCoversPresetLists(
+    cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+    DEFAULT_QUICK_MENU_PRESETS,
+    (label) => ({ label }),
+  ),
   listOrderMode: 'alphabetical',
   menuPresets: cloneMenuPresets(DEFAULT_QUICK_MENU_PRESETS),
   metaTagVisibility: cloneMetaTagVisibility(),
@@ -1428,6 +1465,12 @@ const normalizeAppHistorySnapshotRecord = (
   const quickPresetNavPresetIds = normalizeQuickPresetNavPresetIds(
     value.quickPresetNavPresetIds,
   );
+  const menuPresets = normalizeMenuPresets(value.menuPresets);
+  const listMenuTree = ensureListMenuTreeCoversPresetLists(
+    normalizeListMenuTree(value.listMenuTree),
+    menuPresets,
+    (label) => ({ label }),
+  );
 
   return {
     customTags: normalizeCustomTags(value.customTags),
@@ -1438,11 +1481,12 @@ const normalizeAppHistorySnapshotRecord = (
     googleDriveBackupEnabled: value.googleDriveBackupEnabled === true,
     habitNotificationsPaused: value.habitNotificationsPaused === true,
     habitQuietHoursEnabled: value.habitQuietHoursEnabled !== false,
+    habitNotificationText: normalizeRoutineNotificationText(value.habitNotificationText),
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),
-    listMenuTree: normalizeListMenuTree(value.listMenuTree),
+    listMenuTree,
     listOrderMode: value.listOrderMode === 'manual' ? 'manual' : 'alphabetical',
-    menuPresets: normalizeMenuPresets(value.menuPresets),
+    menuPresets,
     metaTagVisibility: normalizeMetaTagVisibility(value.metaTagVisibility),
     presetLabelTagsSeeded: value.presetLabelTagsSeeded === true,
     quickPresetNavIconNames: normalizeQuickPresetNavIconNames(
@@ -1547,7 +1591,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
         undo: [],
       },
       hideDoneTodos: false,
-      listMenuTree: cloneListMenuTree(DEFAULT_LIST_MENU_TREE),
+      listMenuTree: cloneListMenuTree(DEFAULT_APP_SETTINGS.listMenuTree),
       menuPresets: cloneMenuPresets(DEFAULT_APP_SETTINGS.menuPresets),
       presetLabelTagsSeeded: false,
       quickPresetNavIconNames: cloneQuickPresetNavIconNames(
@@ -1601,12 +1645,17 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       ? formatListLabel(value.widgetNewItemList)
       : DEFAULT_WIDGET_NEW_ITEM_LIST;
   const normalizedListMenuTree = normalizeListMenuTree(value.listMenuTree);
-  const hasWidgetDestinationList = collectListNodeLabels(normalizedListMenuTree).some(
+  const presetBackedListMenuTree = ensureListMenuTreeCoversPresetLists(
+    normalizedListMenuTree,
+    quickPresetDefaults.menuPresets,
+    (label) => ({ label }),
+  );
+  const hasWidgetDestinationList = collectListNodeLabels(presetBackedListMenuTree).some(
     (label) => label.toLocaleLowerCase() === widgetNewItemList.toLocaleLowerCase(),
   );
   const listMenuTree = hasWidgetDestinationList
-    ? normalizedListMenuTree
-    : [{ label: widgetNewItemList }, ...normalizedListMenuTree];
+    ? presetBackedListMenuTree
+    : [{ label: widgetNewItemList }, ...presetBackedListMenuTree];
 
   return {
     collapsedTodoGroupIds: normalizeCollapsedTodoGroupIds(value.collapsedTodoGroupIds),
@@ -1625,6 +1674,7 @@ export const normalizeAppSettings = (value: unknown): AppSettings => {
       typeof value.googleDriveLastRestoreAt === 'string' ? value.googleDriveLastRestoreAt : null,
     habitNotificationsPaused: value.habitNotificationsPaused === true,
     habitQuietHoursEnabled: value.habitQuietHoursEnabled !== false,
+    habitNotificationText: normalizeRoutineNotificationText(value.habitNotificationText),
     history,
     hideDoneTodos: value.hideDoneTodos === true,
     lastCreateTodoFilters: normalizeTodoFilters(value.lastCreateTodoFilters),

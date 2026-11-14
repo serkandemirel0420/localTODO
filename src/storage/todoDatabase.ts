@@ -81,6 +81,10 @@ const ensureTodoSearchColumns = async (database: SQLite.SQLiteDatabase) => {
   const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(todos)');
   const columnNames = new Set(columns.map((column) => column.name));
 
+  if (!columnNames.has('routine_logs_json')) {
+    await database.execAsync("ALTER TABLE todos ADD COLUMN routine_logs_json TEXT NOT NULL DEFAULT '[]';");
+  }
+
   if (!columnNames.has('content')) {
     await database.execAsync("ALTER TABLE todos ADD COLUMN content TEXT NOT NULL DEFAULT '';");
   }
@@ -167,6 +171,7 @@ const rowToTodo = (row: {
   created_at: number;
   updated_at: number;
   filters_json: string;
+  routine_logs_json: string;
 }): Todo | null => {
   let filters: unknown = {};
 
@@ -177,6 +182,7 @@ const rowToTodo = (row: {
   }
 
   return normalizeTodo({
+    routineLogs: (() => { try { return JSON.parse(row.routine_logs_json); } catch { return []; } })(),
     id: row.id,
     content: row.content,
     text: row.text,
@@ -309,8 +315,9 @@ export const loadTodosFromDatabase = async (): Promise<Todo[]> => {
     created_at: number;
     updated_at: number;
     filters_json: string;
+    routine_logs_json: string;
   }>(
-    `SELECT id, content, tags_json, text, pinned, done, created_at, updated_at, filters_json
+    `SELECT id, content, tags_json, text, pinned, done, created_at, updated_at, filters_json, routine_logs_json
      FROM todos
      ORDER BY pinned DESC, updated_at DESC, created_at DESC`,
   );
@@ -351,8 +358,9 @@ export const searchTodosInDatabase = async (query: string): Promise<Todo[]> => {
     created_at: number;
     updated_at: number;
     filters_json: string;
+    routine_logs_json: string;
   }>(
-    `SELECT todos.id, todos.content, todos.tags_json, todos.text, todos.pinned, todos.done, todos.created_at, todos.updated_at, todos.filters_json
+    `SELECT todos.id, todos.content, todos.tags_json, todos.text, todos.pinned, todos.done, todos.created_at, todos.updated_at, todos.filters_json, todos.routine_logs_json
      FROM todos
      WHERE ${whereClause}
      ORDER BY todos.pinned DESC, todos.updated_at DESC, todos.created_at DESC`,
@@ -382,8 +390,8 @@ const replaceAllTodos = async (
       const textSearch = normalizeSearchText(todo.text);
 
       await database.runAsync(
-        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json, routine_logs_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           todo.id,
           todo.content,
@@ -397,6 +405,7 @@ const replaceAllTodos = async (
           todo.createdAt,
           todo.updatedAt,
           JSON.stringify(todo.filters),
+        JSON.stringify(todo.routineLogs ?? []),
         ],
       );
       if (todoSearchTableAvailable) {
@@ -426,8 +435,8 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
 
   await database.withTransactionAsync(async () => {
     await database.runAsync(
-      `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json, routine_logs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          content = excluded.content,
          content_search = excluded.content_search,
@@ -439,7 +448,8 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
          pinned = excluded.pinned,
          created_at = excluded.created_at,
          updated_at = excluded.updated_at,
-         filters_json = excluded.filters_json`,
+         filters_json = excluded.filters_json,
+         routine_logs_json = excluded.routine_logs_json`,
       [
         todo.id,
         todo.content,
@@ -453,6 +463,7 @@ export const upsertTodoInDatabase = async (todo: Todo) => {
         todo.createdAt,
         todo.updatedAt,
         JSON.stringify(todo.filters),
+        JSON.stringify(todo.routineLogs ?? []),
       ],
     );
     if (todoSearchTableAvailable) {
@@ -472,8 +483,8 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
       const textSearch = normalizeSearchText(todo.text);
 
       await database.runAsync(
-        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO todos (id, content, content_search, tags_json, tags_search, text, text_search, done, pinned, created_at, updated_at, filters_json, routine_logs_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            content = excluded.content,
            content_search = excluded.content_search,
@@ -485,7 +496,8 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
            pinned = excluded.pinned,
            created_at = excluded.created_at,
            updated_at = excluded.updated_at,
-           filters_json = excluded.filters_json`,
+           filters_json = excluded.filters_json,
+           routine_logs_json = excluded.routine_logs_json`,
         [
           todo.id,
           todo.content,
@@ -499,6 +511,7 @@ export const upsertTodosInDatabase = async (todos: Todo[]) => {
           todo.createdAt,
           todo.updatedAt,
           JSON.stringify(todo.filters),
+        JSON.stringify(todo.routineLogs ?? []),
         ],
       );
       if (todoSearchTableAvailable) {

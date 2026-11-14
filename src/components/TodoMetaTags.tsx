@@ -287,7 +287,7 @@ function buildStatusIcons(
 
   if (habitHours) {
     icons.push({
-      accessibilityLabel: `Habit ${formatHabitIntervalLabel(habitHours)}`,
+      accessibilityLabel: `Routine ${formatHabitIntervalLabel(habitHours)}`,
       color: REMINDER_STATUS_COLOR,
       iconName: 'notifications-outline',
       id: 'reminder',

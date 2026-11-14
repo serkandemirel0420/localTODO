@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, systemPreferences, powerMonitor } = require('electron');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -8,6 +8,67 @@ const DEFAULT_PORT = Number(process.env.LOCAL_TODO_DESKTOP_PORT || 17873);
 let server;
 let serverUrl;
 let mainWindow;
+let authenticating = false;
+let authenticationGrant = false;
+let lockGeneration = 0;
+
+const lockSettingsPath = () => path.join(app.getPath('userData'), 'biometric-lock.json');
+const assertLockSender = (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame
+      || new URL(event.senderFrame.url).origin !== new URL(serverUrl).origin) {
+    throw new Error('Untrusted biometric request');
+  }
+};
+const sendLockActivity = (state) => {
+  if (state === 'background') {
+    lockGeneration += 1;
+    authenticationGrant = false;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('biometric-lock:activity', state);
+};
+
+ipcMain.handle('biometric-lock:load', (event) => {
+  assertLockSender(event);
+  try {
+    const settings = JSON.parse(fs.readFileSync(lockSettingsPath(), 'utf8'));
+    if (typeof settings.enabled !== 'boolean') throw new Error('Invalid app lock settings');
+    return settings.enabled;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+});
+ipcMain.handle('biometric-lock:available', (event) => {
+  assertLockSender(event);
+  return process.platform === 'darwin' && systemPreferences.canPromptTouchID();
+});
+ipcMain.handle('biometric-lock:authenticate', async (event) => {
+  assertLockSender(event);
+  if (authenticating) return { success: false, error: 'busy' };
+  authenticating = true;
+  authenticationGrant = false;
+  const generation = lockGeneration;
+  try {
+    if (process.platform !== 'darwin' || !systemPreferences.canPromptTouchID()) {
+      return { success: false, error: 'not_available' };
+    }
+    await systemPreferences.promptTouchID('unlock Local Todo');
+    authenticationGrant = generation === lockGeneration;
+    return { success: authenticationGrant };
+  } catch {
+    return { success: false, error: 'user_cancel' };
+  } finally {
+    authenticating = false;
+  }
+});
+ipcMain.handle('biometric-lock:save', (event, enabled) => {
+  assertLockSender(event);
+  if (typeof enabled !== 'boolean' || !authenticationGrant) throw new Error('Authenticate before changing app lock');
+  authenticationGrant = false;
+  const destination = lockSettingsPath();
+  fs.writeFileSync(`${destination}.tmp`, JSON.stringify({ enabled }), { mode: 0o600 });
+  fs.renameSync(`${destination}.tmp`, destination);
+});
 
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -208,6 +269,7 @@ const createWindow = async () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
@@ -217,7 +279,18 @@ const createWindow = async () => {
   });
 
   mainWindow.on('closed', () => {
+    sendLockActivity('background');
     mainWindow = null;
+  });
+
+  mainWindow.on('blur', () => { if (!authenticating) sendLockActivity('background'); });
+  mainWindow.on('hide', () => sendLockActivity('background'));
+  mainWindow.on('minimize', () => sendLockActivity('background'));
+  mainWindow.on('focus', () => sendLockActivity('active'));
+  mainWindow.on('show', () => sendLockActivity('active'));
+  mainWindow.on('restore', () => sendLockActivity('active'));
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (new URL(targetUrl).origin !== new URL(url).origin) event.preventDefault();
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -260,7 +333,13 @@ const createWindow = async () => {
 
 app.setName('Local Todo');
 
-app.whenReady().then(createWindow).catch((error) => {
+app.whenReady().then(() => {
+  powerMonitor.on('lock-screen', () => sendLockActivity('background'));
+  powerMonitor.on('suspend', () => sendLockActivity('background'));
+  powerMonitor.on('unlock-screen', () => sendLockActivity('active'));
+  powerMonitor.on('resume', () => sendLockActivity('active'));
+  return createWindow();
+}).catch((error) => {
   console.error(error);
   app.quit();
 });

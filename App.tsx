@@ -3,10 +3,12 @@ import { uiMemoryStore } from './src/storage/uiMemoryStore';
 import { createRoutineLogTapGate } from './src/routineLogTapGate';
 import { useRememberedScroll } from './src/useRememberedScroll';
 import { normalizeRoutineNotificationText } from './src/routineNotificationText';
+import { reuseVisibleRows } from './src/reuseVisibleRows';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { makeRedirectUri, TokenResponse } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
+import * as SecureStore from 'expo-secure-store';
 import React, {
   useCallback,
   useDeferredValue,
@@ -278,6 +280,7 @@ import {
   getPresentedTodoAlarmNotificationLogEntries,
   reconcileTodoAlarms,
   setTodoAlarmSettings,
+  setNotificationContentVisibility,
   syncTodoAlarm,
   sendRoutineToggleNotification,
 } from './src/todoAlarms';
@@ -5762,6 +5765,8 @@ export default function App() {
 
 function TodoApp() {
   const { state: appLockState } = useBiometricLock();
+  const [notificationContent, setNotificationContent] = useState({ routine: false, item: false });
+  const [notificationContentReady, setNotificationContentReady] = useState(false);
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const detailOneHandedSpace = Math.round(windowHeight * 0.42);
   const todoTextMaxLength = useMemo(
@@ -6633,6 +6638,43 @@ function TodoApp() {
     settingsLoaded,
   ]);
 
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const raw = Platform.OS === 'web' ? localStorage.getItem('local-todo.notification-content.v1') : await SecureStore.getItemAsync('local-todo.notification-content.v1');
+        const parsed = raw ? JSON.parse(raw) : {};
+        const next = { routine: parsed.routine === true, item: parsed.item === true };
+        if (!alive) return;
+        setNotificationContentVisibility(next.routine, next.item);
+        setNotificationContent(next);
+        if (loadedRef.current) void reconcileTodoAlarms(todosRef.current);
+        setNotificationContentReady(true);
+      } catch {
+        if (alive) Alert.alert('Notification settings', 'Could not load notification privacy settings.');
+      }
+    };
+    void load();
+    return () => { alive = false; };
+  }, []);
+
+  const changeNotificationContent = async (kind: 'routine' | 'item') => {
+    const next = { ...notificationContent, [kind]: !notificationContent[kind] };
+    setNotificationContentReady(false);
+    try {
+      // Apply masking first when turning visibility off, including native delivery.
+      if (!next[kind]) setNotificationContentVisibility(next.routine, next.item);
+      const value = JSON.stringify(next);
+      if (Platform.OS === 'web') localStorage.setItem('local-todo.notification-content.v1', value);
+      else await SecureStore.setItemAsync('local-todo.notification-content.v1', value);
+      setNotificationContentVisibility(next.routine, next.item);
+      setNotificationContent(next);
+      await reconcileTodoAlarms(todosRef.current);
+    } catch {
+      Alert.alert('Notification settings', 'Could not save notification privacy settings. Please try again.');
+    } finally { setNotificationContentReady(true); }
+  };
+
   const applyLoadedSettings = useCallback((
     settings: AppSettings,
     options: { preserveVisibleView?: boolean } = {},
@@ -7018,15 +7060,19 @@ function TodoApp() {
     await appSettingsStore.save(settings);
   }, []);
 
+  const createSettingsSnapshotRef = useRef(createSettingsSnapshot);
+  createSettingsSnapshotRef.current = createSettingsSnapshot;
+  const persistSettingsLoadedRef = useRef(settingsLoaded);
+  persistSettingsLoadedRef.current = settingsLoaded;
   const persistAppSettings = useCallback((
     overrides: Partial<AppSettings> = {},
   ) => {
-    if (!settingsLoaded) {
+    if (!persistSettingsLoadedRef.current) {
       return Promise.resolve();
     }
 
-    return saveAppSettingsSnapshot(createSettingsSnapshot(overrides)).catch(() => undefined);
-  }, [createSettingsSnapshot, saveAppSettingsSnapshot, settingsLoaded]);
+    return saveAppSettingsSnapshot(createSettingsSnapshotRef.current(overrides)).catch(() => undefined);
+  }, [saveAppSettingsSnapshot]);
 
   const backupSettingsToFirebase = useCallback(async () => {
     if (firebaseSettingsBackupBusy) {
@@ -11967,11 +12013,25 @@ function TodoApp() {
     [registerListTap],
   );
 
-  const markTodoRowTouchStart = useCallback((id: string) => (event: GestureResponderEvent) => {
-    const { pageX, pageY, timestamp } = event.nativeEvent;
-    todoListContentTouchStartRef.current = timestamp;
-    todoRowTouchStartRef.current = { pageX, pageY, timestamp, id };
+  const todoRowTouchHandlersRef = useRef(new Map<string, (event: GestureResponderEvent) => void>());
+  const markTodoRowTouchStart = useCallback((id: string) => {
+    let handler = todoRowTouchHandlersRef.current.get(id);
+    if (!handler) {
+      handler = (event: GestureResponderEvent) => {
+        const { pageX, pageY, timestamp } = event.nativeEvent;
+        todoListContentTouchStartRef.current = timestamp;
+        todoRowTouchStartRef.current = { pageX, pageY, timestamp, id };
+      };
+      todoRowTouchHandlersRef.current.set(id, handler);
+    }
+    return handler;
   }, []);
+  useEffect(() => {
+    const currentIds = new Set(todos.map((todo) => todo.id));
+    todoRowTouchHandlersRef.current.forEach((_handler, id) => {
+      if (!currentIds.has(id)) todoRowTouchHandlersRef.current.delete(id);
+    });
+  }, [todos]);
 
   const markTodoListContentTouchStart = useCallback((event: GestureResponderEvent) => {
     todoListContentTouchStartRef.current = event.nativeEvent.timestamp;
@@ -12538,10 +12598,12 @@ function TodoApp() {
       todoListUseSubsectionLayout,
     ],
   );
-  const visibleTodoListRows = useMemo(
-    () => flattenTodoListRows(todoListRows, collapsedTodoGroupIds),
-    [collapsedTodoGroupIds, todoListRows],
-  );
+  const previousVisibleTodoListRows = useRef<VisibleTodoListRow[]>([]);
+  const visibleTodoListRows = useMemo(() => {
+    const rows = reuseVisibleRows(previousVisibleTodoListRows.current, flattenTodoListRows(todoListRows, collapsedTodoGroupIds));
+    previousVisibleTodoListRows.current = rows;
+    return rows;
+  }, [collapsedTodoGroupIds, todoListRows]);
   useEffect(() => {
     if (
       toggleAllTodoSectionsRequest === 0 ||
@@ -23907,6 +23969,22 @@ function TodoApp() {
               style={styles.settingsBody}
             >
               <BiometricLockSetting />
+              <View style={styles.settingsCard}>
+                {(['routine', 'item'] as const).map((kind) => (
+                  <Pressable key={kind} accessibilityRole="switch"
+                    accessibilityLabel={`Show ${kind === 'routine' ? 'routine' : 'item'} notification content`}
+                    accessibilityState={{ checked: notificationContent[kind], disabled: !notificationContentReady }}
+                    disabled={!notificationContentReady}
+                    onPress={() => { void changeNotificationContent(kind); }}
+                    style={styles.settingsOptionRow}>
+                    <View style={styles.settingsRowTextWrap}>
+                      <Text style={styles.settingsRowTitle}>Show {kind === 'routine' ? 'routine' : 'item'} notification content</Text>
+                      <Text style={styles.settingsRowSubtitle}>When off, notifications use a generic label.</Text>
+                    </View>
+                    <Text style={styles.settingsOptionValue}>{notificationContent[kind] ? 'On' : 'Off'}</Text>
+                  </Pressable>
+                ))}
+              </View>
               <View style={styles.settingsSection}>
                 <View style={styles.settingsSectionHeader}>
                   <SettingsSectionTitleButton

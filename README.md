@@ -178,10 +178,13 @@ Search uses normalized substring matching over todo titles and notes, with
 ## App lock
 
 Open Settings and enable **Fingerprint / Face lock**. Enabling or disabling it
-requires authentication. Once enabled, the app locks on launch and when it
-returns from the background, with an Unlock button to retry after cancellation.
+requires authentication. Once enabled, the app locks on a fresh launch. After
+leaving the app, it asks again after the configurable lock delay (five minutes
+by default; zero locks immediately). Use Unlock to retry after cancellation.
 The phone uses enrolled system biometrics (including face authentication when
 the device exposes it to apps), with the device PIN/passcode as a fallback.
+The system chooses the biometric modality; the app cannot independently turn
+off fingerprint while retaining face authentication.
 The Mac desktop app uses Touch ID; ordinary browser builds cannot enable it.
 
 The preference stays on this device and is excluded from app-data backups.

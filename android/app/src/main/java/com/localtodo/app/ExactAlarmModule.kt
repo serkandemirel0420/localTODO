@@ -24,6 +24,10 @@ class ExactAlarmModule(
   fun setRoutineNotificationText(text: String): Boolean =
     RoutineNotificationSettings.saveText(reactContext, text)
 
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun setNotificationContentVisibility(routine: Boolean, item: Boolean): Boolean =
+    RoutineNotificationSettings.saveContentVisibility(reactContext, routine, item)
+
   @ReactMethod
   fun canScheduleExactAlarms(promise: Promise) {
     try {

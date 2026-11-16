@@ -8,6 +8,10 @@ object RoutineNotificationSettings {
 
   fun paused(context: Context): Boolean = preferences(context).getBoolean("paused", false)
   fun quiet(context: Context): Boolean = preferences(context).getBoolean("quiet", true)
+  fun showContent(context: Context, routine: Boolean): Boolean =
+    preferences(context).getBoolean(if (routine) "show-routine-content" else "show-item-content", false)
+  fun saveContentVisibility(context: Context, routine: Boolean, item: Boolean): Boolean = preferences(context).edit()
+    .putBoolean("show-routine-content", routine).putBoolean("show-item-content", item).commit()
   fun text(context: Context): String = preferences(context).getString("text", "Routine")
     ?.trim()?.takeIf { it.isNotEmpty() } ?: "Routine"
 

@@ -4,6 +4,7 @@ export type LockState = {
   locked: boolean;
   busy: boolean;
   message: string;
+  graceMinutes: number;
 };
 
 export type LockServices = {
@@ -12,15 +13,19 @@ export type LockServices = {
   available: () => Promise<boolean>;
   unavailableMessage?: () => string;
   authenticate: () => Promise<{ success: boolean; error?: string }>;
+  loadGrace?: () => Promise<number>;
+  saveGrace?: (minutes: number) => Promise<void>;
+  now?: () => number;
 };
 
 // Keep authentication and lifecycle races testable without a native UI.
 export class BiometricLockController {
-  state: LockState = { ready: false, enabled: false, locked: true, busy: false, message: '' };
+  state: LockState = { ready: false, enabled: false, locked: true, busy: false, message: '', graceMinutes: 5 };
   private listeners = new Set<(state: LockState) => void>();
   private active = true;
   private generation = 0;
   private authenticating = false;
+  private backgroundedAt: number | null = null;
 
   constructor(private services: LockServices) {}
 
@@ -40,7 +45,8 @@ export class BiometricLockController {
     this.update({ busy: true, message: '' });
     try {
       const enabled = await this.services.load();
-      this.update({ ready: true, enabled, locked: enabled, busy: false });
+      const graceMinutes = await this.services.loadGrace?.() ?? 5;
+      this.update({ ready: true, enabled, locked: enabled, busy: false, graceMinutes });
       if (enabled && this.active) await this.unlock();
     } catch {
       // A read failure must never silently disable a previously enabled lock.
@@ -52,6 +58,12 @@ export class BiometricLockController {
     if (next === 'active') {
       const returning = !this.active;
       this.active = true;
+      if (returning && this.backgroundedAt !== null && this.state.enabled && this.state.locked &&
+          !this.authenticating && this.servicesNow() - this.backgroundedAt < this.state.graceMinutes * 60000 &&
+          this.servicesNow() >= this.backgroundedAt) {
+        this.update({ locked: false });
+      }
+      this.backgroundedAt = null;
       if (returning && this.state.ready && this.state.locked && !this.state.busy) {
         void this.unlock();
       }
@@ -62,8 +74,25 @@ export class BiometricLockController {
     this.active = false;
     // Android's device-credential fallback is a system activity. Keep its
     // authentication valid, but never grant access while we are backgrounded.
-    if (!this.authenticating) this.generation += 1;
+    if (!this.authenticating) {
+      this.generation += 1;
+      if (this.backgroundedAt === null && this.state.enabled && !this.state.locked) this.backgroundedAt = this.servicesNow();
+    }
     if (this.state.enabled) this.update({ locked: true });
+  }
+
+  private servicesNow() { return this.services.now?.() ?? Date.now(); }
+
+  async setGraceMinutes(minutes: number) {
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440 || this.state.busy || this.state.locked) return false;
+    try {
+      await this.services.saveGrace?.(minutes);
+      this.update({ graceMinutes: minutes, message: '' });
+      return true;
+    } catch {
+      this.update({ message: 'Could not save the lock delay. Please try again.' });
+      return false;
+    }
   }
 
   async unlock() {

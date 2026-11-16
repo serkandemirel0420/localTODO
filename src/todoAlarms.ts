@@ -49,6 +49,13 @@ type ExactAlarmNativeModule = {
   openExactAlarmSettings?: () => Promise<void>;
   setRoutineNotificationSettings?: (paused: boolean, quiet: boolean) => boolean;
   setRoutineNotificationText?: (text: string) => boolean;
+  setNotificationContentVisibility?: (routine: boolean, item: boolean) => boolean;
+};
+
+let notificationContentVisibility = { routine: false, item: false };
+export const setNotificationContentVisibility = (routine: boolean, item: boolean) => {
+  if (exactAlarmModule?.setNotificationContentVisibility?.(routine, item) === false) throw new Error('Could not save notification privacy');
+  notificationContentVisibility = { routine, item };
 };
 
 let channelPromise: Promise<void> | null = null;
@@ -200,7 +207,7 @@ export const sendRoutineToggleNotification = (todo: Todo, enabled: boolean): Pro
     await Notifications.scheduleNotificationAsync({
       identifier: previewIdentifier,
       content: {
-        title: normalizeRoutineNotificationText(todoAlarmSettings.habitNotificationText),
+        title: notificationContentVisibility.routine ? todo.text : normalizeRoutineNotificationText(todoAlarmSettings.habitNotificationText),
         subtitle: formatHabitIntervalLabel(reminder.habitHours),
         body: `Routine alerts ${enabled ? 'on' : 'off'} · Test notification`,
         data: { type: 'todo-reminder', todoId: todo.id },
@@ -276,14 +283,16 @@ const getTodoAlarmNotificationLogEntry = (
   const requestIdentifier = request.identifier || getTodoAlarmIdentifier(todoId);
   const isRoutine = requestIdentifier.includes(HABIT_ALARM_IDENTIFIER_PART) ||
     requestIdentifier.startsWith('local-todo:routine-preview:');
+  const showContent = isRoutine ? notificationContentVisibility.routine : notificationContentVisibility.item;
 
   return {
-    body: '',
+    body: showContent ? (request.content.body?.trim() ?? '') : '',
     id: `${requestIdentifier}:${receivedAt}`,
     receivedAt,
     requestIdentifier,
     subtitle: request.content.subtitle?.trim() ?? '',
-    title: isRoutine ? normalizeRoutineNotificationText(todoAlarmSettings.habitNotificationText) : 'Reminder',
+    title: showContent ? (request.content.title?.trim() || (isRoutine ? 'Routine' : 'Reminder'))
+      : isRoutine ? normalizeRoutineNotificationText(todoAlarmSettings.habitNotificationText) : 'Reminder',
     todoId,
   };
 };
@@ -684,10 +693,10 @@ const createTodoAlarmRequests = (
     : reminder.time || dated || reminder.repeat === 'daily'
       ? `${formatReminderClockLabel(reminder.time ?? { hours: 7, minutes: 0 })}${repeatLabel}`
       : '';
-  const title = reminder.habitHours
-    ? normalizeRoutineNotificationText(todoAlarmSettings.habitNotificationText)
-    : 'Reminder';
-  const body = null;
+  const showContent = reminder.habitHours ? notificationContentVisibility.routine : notificationContentVisibility.item;
+  const title = showContent ? todo.text : reminder.habitHours
+    ? normalizeRoutineNotificationText(todoAlarmSettings.habitNotificationText) : 'Reminder';
+  const body = showContent ? (todo.content?.trim() || null) : null;
   const content: Notifications.NotificationContentInput = {
     body,
     data: {

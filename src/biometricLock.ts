@@ -16,11 +16,22 @@ declare global {
 }
 
 const KEY = 'local-todo.biometric-lock.v1';
+const GRACE_KEY = 'local-todo.biometric-grace-minutes.v1';
 export const desktopBiometrics = () => (
   Platform.OS === 'web' && typeof window !== 'undefined' ? window.localTodoBiometrics : undefined
 );
 
 export const biometricLockServices: LockServices = {
+  async loadGrace() {
+    const value = Platform.OS === 'web' ? localStorage.getItem(GRACE_KEY) : await SecureStore.getItemAsync(GRACE_KEY);
+    if (value === null) return 5;
+    const minutes = Number(value);
+    return Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440 ? minutes : 5;
+  },
+  async saveGrace(minutes) {
+    if (Platform.OS === 'web') localStorage.setItem(GRACE_KEY, String(minutes));
+    else await SecureStore.setItemAsync(GRACE_KEY, String(minutes), { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  },
   unavailableMessage: () => Platform.OS === 'web'
     ? desktopBiometrics()
       ? 'Touch ID is unavailable. Set up Touch ID on a supported Mac first.'

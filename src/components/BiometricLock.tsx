@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, BackHandler, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BiometricLockController, type LockState } from '../biometricLockController';
 import { biometricLockServices, desktopBiometrics } from '../biometricLock';
@@ -61,6 +61,8 @@ export function BiometricLockScreen() {
 
 export function BiometricLockSetting() {
   const { state, controller } = useBiometricLock();
+  const [minutes, setMinutes] = useState(String(state.graceMinutes));
+  useEffect(() => setMinutes(String(state.graceMinutes)), [state.graceMinutes]);
   return (
     <View style={styles.setting}>
       <View style={styles.row}>
@@ -78,8 +80,20 @@ export function BiometricLockSetting() {
       <Text style={styles.settingSubtitle}>
         {Platform.OS === 'web'
           ? desktopBiometrics() ? 'Uses Touch ID on supported Macs.' : 'Available in the phone app and on Macs with Touch ID.'
-          : 'Uses the biometrics set up on this device, with device passcode as a fallback.'}
+          : 'Your device chooses which enrolled biometric to use. To use face without fingerprint, change the biometric settings on your device. Device passcode is also available.'}
       </Text>
+      {state.enabled ? <View style={styles.row}>
+        <View style={styles.settingText}>
+          <Text style={styles.settingTitle}>Lock delay</Text>
+          <Text style={styles.settingSubtitle}>Minutes away before unlocking is required (0–1440). A fresh app launch always requires unlocking.</Text>
+        </View>
+        <TextInput accessibilityLabel="Lock delay in minutes" keyboardType="number-pad" value={minutes}
+          onChangeText={setMinutes} onBlur={() => {
+            const value = minutes.trim();
+            if (!/^\d+$/.test(value) || Number(value) > 1440) setMinutes(String(state.graceMinutes));
+            else void controller.setGraceMinutes(Number(value)).then((saved) => { if (!saved) setMinutes(String(state.graceMinutes)); });
+          }} style={styles.minutesInput} />
+      </View> : null}
       {state.message ? <Text accessibilityLiveRegion="polite" style={styles.message}>{state.message}</Text> : null}
     </View>
   );
@@ -101,4 +115,5 @@ const styles = StyleSheet.create({
   settingSubtitle: { fontSize: 13, color: '#71685E', lineHeight: 18 },
   toggle: { borderRadius: 18, minWidth: 58, minHeight: 40, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0EBE4' },
   toggleEnabled: { backgroundColor: '#FFC400' },
+  minutesInput: { borderWidth: 1, borderColor: '#D6CEC3', borderRadius: 10, minWidth: 64, padding: 8, color: '#302820', textAlign: 'center' },
 });

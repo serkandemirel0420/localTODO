@@ -16,7 +16,8 @@ class LocalTodoPresentationDelegate(context: Context) : ExpoPresentationDelegate
     val built = super.createNotification(notification, notificationBehavior)
     val identifier = notification.notificationRequest.identifier
     val routine = RoutineNotificationPolicy.isRoutine(identifier) || identifier.startsWith("local-todo:routine-preview:")
-    val presented = if (routine || identifier.startsWith("local-todo:todo-alarm:")) {
+    val presented = if ((routine || identifier.startsWith("local-todo:todo-alarm:")) &&
+      !RoutineNotificationSettings.showContent(appContext, routine)) {
       val text = if (routine) RoutineNotificationSettings.text(appContext) else "Reminder"
       listOf(
         android.app.Notification.EXTRA_BIG_TEXT,

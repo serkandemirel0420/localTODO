@@ -29,6 +29,7 @@ class RoutineNotificationInstrumentation : Instrumentation() {
   private fun verifyNotificationText(ids: MutableList<String>, manager: NotificationManager) {
     val context = targetContext
     RoutineNotificationSettings.save(context, false, false)
+    RoutineNotificationSettings.saveContentVisibility(context, false, false)
     fun checkText(name: String, identifier: String, label: String, expected: String, hiddenBody: Boolean) {
       RoutineNotificationSettings.saveText(context, label)
       ids.add(identifier)
@@ -49,7 +50,14 @@ class RoutineNotificationInstrumentation : Instrumentation() {
     checkText("default", "local-todo:todo-alarm:qa-text-default:habit:1d", "", "Routine", true)
     checkText("custom", "local-todo:todo-alarm:qa-text-custom:habit:1d", "Check in", "Check in", true)
     checkText("preview", "local-todo:routine-preview:qa-text-preview", "Check in", "Check in", true)
-    checkText("normal", "local-todo:todo-alarm:qa-text-normal", "Check in", "Private title", false)
+    checkText("normal", "local-todo:todo-alarm:qa-text-normal", "Check in", "Reminder", true)
+    RoutineNotificationSettings.saveContentVisibility(context, true, false)
+    checkText("visible routine", "local-todo:todo-alarm:qa-visible:habit:1d", "Check in", "Private title", false)
+    checkText("still hidden item", "local-todo:todo-alarm:qa-hidden", "Check in", "Reminder", true)
+    RoutineNotificationSettings.saveContentVisibility(context, false, true)
+    checkText("visible item", "local-todo:todo-alarm:qa-visible-item", "Check in", "Private title", false)
+    checkText("still hidden routine", "local-todo:todo-alarm:qa-hidden-routine:habit:1d", "Check in", "Check in", true)
+    RoutineNotificationSettings.saveContentVisibility(context, false, false)
   }
 
   private fun verifyReliableScheduling(ids: MutableList<String>, manager: NotificationManager) {

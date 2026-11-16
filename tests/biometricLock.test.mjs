@@ -73,8 +73,8 @@ test('cancellation retains the lock, retry succeeds, and only one prompt runs', 
   assert.equal(calls, 2);
 });
 
-test('backgrounding relocks and returning prompts again', async () => {
-  const f = fixture({ load: async () => true });
+test('zero delay prompts again after backgrounding', async () => {
+  const f = fixture({ load: async () => true, loadGrace: async () => 0 });
   await f.controller.load();
   f.controller.setActivity('background');
   assert.equal(f.controller.state.locked, true);
@@ -82,6 +82,33 @@ test('backgrounding relocks and returning prompts again', async () => {
   await flush();
   assert.equal(f.authCount(), 2);
   assert.equal(f.controller.state.locked, false);
+});
+
+test('grace period skips authentication only before the configured delay', async () => {
+  let now = 1000;
+  const f = fixture({ load: async () => true, now: () => now });
+  await f.controller.load();
+  f.controller.setActivity('background');
+  now += 4 * 60000;
+  f.controller.setActivity('active');
+  await flush();
+  assert.equal(f.controller.state.locked, false);
+  assert.equal(f.authCount(), 1);
+  f.controller.setActivity('background');
+  now += 5 * 60000;
+  f.controller.setActivity('active');
+  await flush();
+  assert.equal(f.authCount(), 2);
+});
+
+test('custom delay is saved and invalid values are rejected', async () => {
+  const saved = [];
+  const f = fixture({ saveGrace: async (minutes) => saved.push(minutes) });
+  await f.controller.load();
+  assert.equal(await f.controller.setGraceMinutes(12), true);
+  assert.equal(await f.controller.setGraceMinutes(1441), false);
+  assert.equal(f.controller.state.graceMinutes, 12);
+  assert.deepEqual(saved, [12]);
 });
 
 test('system prompt inactivity does not cause an authentication loop', async () => {
